@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import hmac
 import subprocess
 import threading
 import time
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .db import connect, get_settings, init_db, rows_to_dicts, save_settings
 from .jobs import ALLOWED_COMMANDS, create_job
 from .media_stats import summary
-from .metadata import media_detail, media_query, mime_for, rebuild_metadata_index, rebuild_similarity_index, similarity_groups
+from .metadata import media_detail, media_query, mime_for, rebuild_metadata_index, rebuild_similarity_index, risk_queue, similarity_groups
 
 
 app = FastAPI(title="TG Media Manager")
@@ -65,10 +68,65 @@ class SettingsRequest(BaseModel):
     monitor_interval_minutes: int = 10
 
 
+class AuthRequest(BaseModel):
+    password: str
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
     start_monitor_thread()
+
+
+def auth_password() -> str:
+    return os.environ.get("APP_PASSWORD", "")
+
+
+def auth_token() -> str:
+    password = auth_password()
+    if not password:
+        return ""
+    secret = os.environ.get("APP_SECRET", "tg-media-manager-local")
+    return hashlib.sha256(f"{secret}:{password}".encode()).hexdigest()
+
+
+@app.middleware("http")
+async def optional_password_gate(request: Request, call_next):
+    password = auth_password()
+    if not password:
+        return await call_next(request)
+    path = request.url.path
+    if path.startswith("/api/auth") or path.startswith("/assets") or path == "/api/health":
+        return await call_next(request)
+    cookie = request.cookies.get("tgmm_auth", "")
+    if hmac.compare_digest(cookie, auth_token()):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "Authentication required"}, status_code=401)
+    return await call_next(request)
+
+
+@app.get("/api/auth/status")
+def api_auth_status(request: Request) -> dict:
+    enabled = bool(auth_password())
+    authenticated = not enabled or hmac.compare_digest(request.cookies.get("tgmm_auth", ""), auth_token())
+    return {"enabled": enabled, "authenticated": authenticated, "local_only": True}
+
+
+@app.post("/api/auth/login")
+def api_auth_login(req: AuthRequest, response: Response) -> dict:
+    if not auth_password():
+        return {"ok": True, "enabled": False}
+    if not hmac.compare_digest(req.password, auth_password()):
+        raise HTTPException(status_code=401, detail="Invalid password")
+    response.set_cookie("tgmm_auth", auth_token(), httponly=True, samesite="strict")
+    return {"ok": True, "enabled": True}
+
+
+@app.post("/api/auth/logout")
+def api_auth_logout(response: Response) -> dict:
+    response.delete_cookie("tgmm_auth")
+    return {"ok": True}
 
 
 @app.get("/api/health")
@@ -404,10 +462,16 @@ def api_media(
     media_type: str = Query("all"),
     tag: str = Query("", max_length=120),
     author: str = Query("", max_length=120),
+    include_risk: bool = Query(False),
     limit: int = Query(80, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict:
-    return media_query(q=q.strip(), media_type=media_type, tag=tag.strip(), author=author.strip(), limit=limit, offset=offset)
+    return media_query(q=q.strip(), media_type=media_type, tag=tag.strip(), author=author.strip(), limit=limit, offset=offset, include_risk=include_risk)
+
+
+@app.get("/api/risk")
+def api_risk(limit: int = Query(100, ge=1, le=300)) -> dict:
+    return risk_queue(limit=limit)
 
 
 @app.post("/api/media/rebuild-index")

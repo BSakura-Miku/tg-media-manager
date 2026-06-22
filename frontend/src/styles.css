@@ -46,6 +46,40 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: var(--bg); color: var(--text); }
 main { min-height: 100vh; display: grid; grid-template-columns: 244px 1fr; }
+.loginShell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr;
+  place-items: center;
+  padding: 24px;
+}
+.loginPanel {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.loginPanel .brand {
+  padding: 0 0 8px;
+}
+.loginForm {
+  display: grid;
+  gap: 10px;
+}
+.loginForm label {
+  display: grid;
+  gap: 6px;
+  color: var(--soft);
+  font-size: 13px;
+  font-weight: 650;
+}
+.loginForm button {
+  justify-self: start;
+  padding: 0 14px;
+}
 aside { border-right: 1px solid var(--line); padding: 20px 14px; background: var(--sidebar); }
 .brand { display: flex; gap: 10px; align-items: center; padding: 8px 10px 22px; }
 .brand strong { display: block; font-size: 15px; }

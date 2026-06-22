@@ -359,9 +359,11 @@ def import_vision_outputs(root: Path | None = None) -> dict:
     return {"vision_tags": imported_tags, "timeline_segments": timeline_segments}
 
 
-def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str = "", limit: int = 100, offset: int = 0) -> dict:
+def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str = "", limit: int = 100, offset: int = 0, include_risk: bool = False) -> dict:
     clauses = []
     params: list[object] = []
+    if not include_risk:
+        clauses.append("m.risk_state='normal'")
     if media_type in {"photo", "video"}:
         clauses.append("m.media_type=?")
         params.append(media_type)
@@ -391,6 +393,25 @@ def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str
             [*params, limit, offset],
         ).fetchall()
     return {"total": total, "limit": limit, "offset": offset, "items": [dict(row) for row in rows]}
+
+
+def risk_queue(limit: int = 100) -> dict:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT m.*, GROUP_CONCAT(t.tag, ',') AS tags
+            FROM media_items m
+            LEFT JOIN media_tags t ON t.media_id=m.id
+            WHERE m.risk_state != 'normal' OR EXISTS (
+                SELECT 1 FROM media_tags rt WHERE rt.media_id=m.id AND rt.category='risk'
+            )
+            GROUP BY m.id
+            ORDER BY m.mtime DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return {"items": [dict(row) for row in rows], "total": len(rows)}
 
 
 def media_detail(media_id: int) -> dict | None:

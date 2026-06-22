@@ -40,6 +40,11 @@ const i18n = {
     faces: 'Face Groups',
     logs: 'Logs',
     settings: 'Settings',
+    login: 'Login',
+    password: 'Password',
+    unlock: 'Unlock',
+    privacyTitle: 'Privacy first',
+    privacyCopy: 'Local-only processing. Media, frames, face embeddings, tags, and indexes stay on this machine/NAS.',
     all: 'All',
     manifest: 'Manifest',
     move_plan: 'Move Plan',
@@ -260,6 +265,11 @@ const i18n = {
     faces: '人脸组',
     logs: '日志',
     settings: '设置',
+    login: '登录',
+    password: '密码',
+    unlock: '解锁',
+    privacyTitle: '隐私优先',
+    privacyCopy: '全流程本地处理。媒体、抽帧、人脸特征、标签和索引都保存在这台机器/NAS。',
     all: '全部',
     manifest: '总清单',
     move_plan: '移动计划',
@@ -534,6 +544,25 @@ function Empty({ label }) {
   return <div className="empty">{label}</div>;
 }
 
+function LoginScreen({ login, error, theme, setTheme, t }) {
+  const [password, setPassword] = useState('');
+  return (
+    <main className="loginShell">
+      <section className="loginPanel">
+        <div className="brand"><Bot size={22} /><div><strong>{t.app}</strong><span>{t.manager}</span></div></div>
+        <h1>{t.login}</h1>
+        <p>{t.privacyCopy}</p>
+        {error && <div className="alert">{error}</div>}
+        <form className="loginForm" onSubmit={event => { event.preventDefault(); login(password); }}>
+          <label>{t.password}<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoFocus /></label>
+          <button type="submit"><Save size={16} />{t.unlock}</button>
+        </form>
+        <button className="iconButton" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Theme">{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
+      </section>
+    </main>
+  );
+}
+
 function CommandButton({ command, label, Icon, help, busy, start, t }) {
   const displayLabel = t.commandNames?.[command] || label;
   const displayHelp = t.commandHelp?.[command] || help;
@@ -574,6 +603,7 @@ function App() {
   const [browsePath, setBrowsePath] = useState('/media');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [auth, setAuth] = useState({ enabled: false, authenticated: true, local_only: true });
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'zh-CN');
   const t = i18n[language] || i18n['zh-CN'];
@@ -610,12 +640,27 @@ function App() {
   }, [language]);
 
   useEffect(() => {
-    refresh().catch(exc => setError(exc.message));
-    loadMedia().catch(() => {});
-    loadSimilarity().catch(() => {});
+    api('/api/auth/status').then(status => {
+      setAuth(status);
+      if (status.authenticated) {
+        refresh().catch(exc => setError(exc.message));
+        loadMedia().catch(() => {});
+        loadSimilarity().catch(() => {});
+      }
+    }).catch(exc => setError(exc.message));
     const id = setInterval(() => refresh().catch(() => {}), 4000);
     return () => clearInterval(id);
   }, []);
+
+  async function login(password) {
+    setError('');
+    await api('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+    const status = await api('/api/auth/status');
+    setAuth(status);
+    await refresh();
+    await loadMedia();
+    await loadSimilarity();
+  }
 
   async function start(command) {
     if (command.startsWith('workflow-')) {
@@ -801,6 +846,10 @@ function App() {
   const vision = summary?.vision || {};
   const analysis = summary?.analysis || {};
   const hasRunning = useMemo(() => jobs.some(job => job.status === 'running' || job.status === 'queued'), [jobs]);
+
+  if (auth.enabled && !auth.authenticated) {
+    return <LoginScreen login={login} error={error} theme={theme} setTheme={setTheme} t={t} />;
+  }
 
   return (
     <main>
@@ -1353,6 +1402,15 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
           <div className="row"><span>last job</span><strong>{monitor?.last_job_id || '-'}</strong></div>
         </div>
         <button className="panelButton" onClick={checkMonitorNow}><RefreshCw size={16} />{t.checkNow}</button>
+      </div>
+      <div className="panel">
+        <div className="panelHead"><h2>{t.privacyTitle}</h2><span>{t.localOnly}</span></div>
+        <div className="hintBox"><span>{t.privacyCopy}</span></div>
+        <div className="list">
+          <div className="row"><span>APP_PASSWORD</span><strong>{t.password}</strong></div>
+          <div className="row"><span>Risk queue</span><strong>_QUARANTINE / review</strong></div>
+          <div className="row"><span>Audit log</span><strong>jobs + media_operations</strong></div>
+        </div>
       </div>
     </section>
   );
