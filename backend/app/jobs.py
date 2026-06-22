@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 
 from .db import connect, get_settings
-from .metadata import import_vision_outputs, rebuild_metadata_index, rebuild_similarity_index
+from .metadata import import_vision_outputs, rebuild_metadata_index, rebuild_similarity_index, transcribe_videos
 
 
 ALLOWED_COMMANDS = {
@@ -14,6 +14,7 @@ ALLOWED_COMMANDS = {
     "workflow-review-cleanup": [["normalize-organized"], ["classify-keywords"], ["organize-review"], ["refresh-state"], ["__metadata_index__"]],
     "workflow-face-balanced": [["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"]],
     "workflow-vision-plan": [["extract-frames"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"]],
+    "workflow-transcribe-sample": [["__transcribe_sample__"], ["__metadata_index__"]],
     "scan": ["scan"],
     "analyze-filenames": ["analyze-filenames"],
     "classify-keywords": ["classify-keywords"],
@@ -43,6 +44,8 @@ ALLOWED_COMMANDS = {
     "apply-vision-labels": ["apply-vision-labels", "--apply"],
     "index-metadata": ["__metadata_index__"],
     "index-similarity": ["__similarity_index__"],
+    "transcribe-sample": ["__transcribe_sample__"],
+    "transcribe": ["__transcribe__"],
 }
 
 
@@ -86,6 +89,8 @@ def run_job(job_id: int, command: str) -> None:
             "index-metadata" if step == ["__metadata_index__"] else
             "index-vision" if step == ["__vision_index__"] else
             "index-similarity" if step == ["__similarity_index__"] else
+            "transcribe-sample" if step == ["__transcribe_sample__"] else
+            "transcribe" if step == ["__transcribe__"] else
             " ".join([*base_args, *step])
             for step in steps
         )
@@ -107,6 +112,14 @@ def run_job(job_id: int, command: str) -> None:
                 result = rebuild_similarity_index(Path(output_root))
                 stdout_parts.append(f"$ index-similarity\n{result}")
                 returncode = 0
+            elif step == ["__transcribe_sample__"]:
+                result = transcribe_videos(Path(output_root), limit=5)
+                stdout_parts.append(f"$ transcribe-sample\n{result}")
+                returncode = 0 if result.get("ok") else 1
+            elif step == ["__transcribe__"]:
+                result = transcribe_videos(Path(output_root), limit=200)
+                stdout_parts.append(f"$ transcribe\n{result}")
+                returncode = 0 if result.get("ok") else 1
             else:
                 step_args = [*base_args, *step]
                 proc = subprocess.run(step_args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)

@@ -19,6 +19,9 @@ import {
   ScanFace,
   Search,
   Settings,
+  Share2,
+  Shuffle,
+  Mic,
   Sun,
   Tags,
   TerminalSquare,
@@ -36,6 +39,8 @@ const i18n = {
     jobs: 'Jobs',
     library: 'Library',
     virtualLibrary: 'Virtual Library',
+    tagGraph: 'Tag Graph',
+    randomFlow: 'Random Flow',
     authors: 'Authors',
     faces: 'Face Groups',
     logs: 'Logs',
@@ -70,6 +75,7 @@ const i18n = {
     commonCommands: 'Common',
     faceCommands: 'Face',
     visionCommands: 'Vision',
+    transcriptCommands: 'Speech',
     maintenanceCommands: 'Maintenance',
     dangerousCommands: 'Moves files',
     recommendedWorkflows: 'Recommended Workflows',
@@ -81,6 +87,8 @@ const i18n = {
     faceWorkflowHint: 'Extract frames, scan faces, cluster with balanced threshold, build face plan.',
     visionWorkflow: 'Scene labels',
     visionWorkflowHint: 'Run local OpenCLIP scene/category labels and create a dry-run move plan.',
+    transcribeWorkflow: 'Speech to text',
+    transcribeWorkflowHint: 'Extract video audio locally, transcribe speech, and make transcripts searchable.',
     ready: 'Ready',
     running: 'Running',
     starting: 'Starting...',
@@ -166,6 +174,14 @@ const i18n = {
     rebuildIndex: 'Rebuild index',
     rebuildSimilarity: 'Rebuild similarity',
     mediaBrowser: 'Media browser',
+    randomMedia: 'Random media',
+    randomize: 'Randomize',
+    tagGraphHelp: 'Tags that often appear together are connected. Click a node or edge to search matching media.',
+    tagGraphEmpty: 'No tag graph yet. Rebuild index and sync vision labels first.',
+    refreshGraph: 'Refresh graph',
+    relatedTags: 'Related tags',
+    transcript: 'Transcript',
+    noTranscript: 'No transcript yet',
     mediaSearch: 'Search media, tags, authors',
     allMedia: 'All media',
     photosOnly: 'Photos',
@@ -193,8 +209,11 @@ const i18n = {
       'workflow-review-cleanup': 'Review Cleanup',
       'workflow-face-balanced': 'Rebuild Faces',
       'workflow-vision-plan': 'Scene Plan',
+      'workflow-transcribe-sample': 'Speech Sample',
       'index-metadata': 'Rebuild Index',
       'index-similarity': 'Similarity Index',
+      'transcribe-sample': 'Speech Sample',
+      transcribe: 'Transcribe',
       scan: 'Scan',
       'analyze-filenames': 'Analyze Names',
       'classify-keywords': 'Keywords',
@@ -225,8 +244,11 @@ const i18n = {
       'workflow-review-cleanup': 'Revisit Unknown/NeedsManualCheck and exact duplicates.',
       'workflow-face-balanced': 'Rebuild face index and same-face groups conservatively.',
       'workflow-vision-plan': 'Run local image scene labels and create a dry-run plan.',
+      'workflow-transcribe-sample': 'Transcribe a small sample of videos and index the text.',
       'index-metadata': 'Import organized files and manifests into the virtual SQLite library.',
       'index-similarity': 'Build exact duplicate, image perceptual hash, and video keyframe similarity groups.',
+      'transcribe-sample': 'Transcribe up to 5 videos that do not have transcript text.',
+      transcribe: 'Transcribe more videos that do not have transcript text.',
       scan: 'Read source folders and write manifest_all.csv plus move_plan.csv. Does not move by itself.',
       'analyze-filenames': 'Mine filename words, actor candidates, and noisy tokens.',
       'classify-keywords': 'Move obvious Unknown items into keyword buckets.',
@@ -261,6 +283,8 @@ const i18n = {
     jobs: '任务',
     library: '媒体库',
     virtualLibrary: '虚拟媒体库',
+    tagGraph: '标签图谱',
+    randomFlow: '随机瀑布流',
     authors: '作者',
     faces: '人脸组',
     logs: '日志',
@@ -295,6 +319,7 @@ const i18n = {
     commonCommands: '常用',
     faceCommands: '人脸',
     visionCommands: '视觉',
+    transcriptCommands: '语音',
     maintenanceCommands: '维护',
     dangerousCommands: '会移动文件',
     recommendedWorkflows: '推荐流程',
@@ -306,6 +331,8 @@ const i18n = {
     faceWorkflowHint: '全量抽帧、人脸扫描、均衡阈值聚类，并生成人脸移动计划。',
     visionWorkflow: '场景识别计划',
     visionWorkflowHint: '用本地 OpenCLIP 做画面分类，并生成 dry-run 场景移动计划。',
+    transcribeWorkflow: '语音转文字',
+    transcribeWorkflowHint: '本地抽取视频音频，识别语音文字，并让文字进入搜索。',
     ready: '就绪',
     running: '运行中',
     starting: '启动中...',
@@ -391,6 +418,14 @@ const i18n = {
     rebuildIndex: '重建索引',
     rebuildSimilarity: '重建相似索引',
     mediaBrowser: '媒体浏览',
+    randomMedia: '随机媒体',
+    randomize: '随机刷新',
+    tagGraphHelp: '经常一起出现的标签会连线。点击节点或连线可以按标签查媒体。',
+    tagGraphEmpty: '还没有标签图谱。先重建索引并同步视觉标签。',
+    refreshGraph: '刷新图谱',
+    relatedTags: '关联标签',
+    transcript: '转写文字',
+    noTranscript: '还没有转写内容',
     mediaSearch: '搜索媒体、标签、作者',
     allMedia: '全部媒体',
     photosOnly: '照片',
@@ -418,8 +453,11 @@ const i18n = {
       'workflow-review-cleanup': '清理 Review',
       'workflow-face-balanced': '重建人脸组',
       'workflow-vision-plan': '场景识别计划',
+      'workflow-transcribe-sample': '语音样本',
       'index-metadata': '重建索引',
       'index-similarity': '相似索引',
+      'transcribe-sample': '语音样本',
+      transcribe: '语音转写',
       scan: '扫描清单',
       'analyze-filenames': '分析文件名',
       'classify-keywords': '关键词归类',
@@ -450,8 +488,11 @@ const i18n = {
       'workflow-review-cleanup': '重新整理 Unknown/NeedsManualCheck，并做精确去重。',
       'workflow-face-balanced': '重新抽帧、人脸扫描、保守聚类，生成新的人脸计划。',
       'workflow-vision-plan': '本地识别画面场景/标签，只生成预览计划。',
+      'workflow-transcribe-sample': '抽样转写视频语音，并把文字导入搜索。',
       'index-metadata': '把已整理文件和清单导入 SQLite 虚拟媒体库。',
       'index-similarity': '生成精确重复、图片感知 hash、视频关键帧相似组。',
+      'transcribe-sample': '最多转写 5 个还没有文字的视频。',
+      transcribe: '继续转写更多还没有文字的视频。',
       scan: '读取来源目录，生成 manifest_all.csv 和 move_plan.csv；本身不移动。',
       'analyze-filenames': '挖掘文件名里的人名、关键词、噪声词。',
       'classify-keywords': '把明显的 Unknown 文件移动到关键词分类。',
@@ -485,8 +526,11 @@ const commands = [
   ['workflow-review-cleanup', 'Review Cleanup', Archive, 'Recommended: normalize, classify review, dedupe, refresh'],
   ['workflow-face-balanced', 'Rebuild Faces', Users, 'Recommended: full frames, face scan, balanced cluster, report, plan'],
   ['workflow-vision-plan', 'Scene Plan', Camera, 'Recommended: full frames, OpenCLIP labels, dry-run vision plan'],
+  ['workflow-transcribe-sample', 'Speech Sample', Mic, 'Transcribe a small local video sample'],
   ['index-metadata', 'Rebuild Index', Database, 'Import organized files into the virtual media library'],
   ['index-similarity', 'Similarity Index', Archive, 'Build duplicate and similarity groups'],
+  ['transcribe-sample', 'Speech Sample', Mic, 'Transcribe up to 5 videos'],
+  ['transcribe', 'Transcribe', Mic, 'Transcribe more videos'],
   ['scan', 'Scan', Search, 'Rebuild manifests and move plan'],
   ['analyze-filenames', 'Analyze Names', FileSearch, 'Mine actor and keyword signals'],
   ['classify-keywords', 'Keywords', Tags, 'Move clear Unknown items into keyword buckets'],
@@ -517,6 +561,8 @@ const nav = [
   ['dashboard', 'dashboard', Database],
   ['jobs', 'jobs', Activity],
   ['library', 'library', Folder],
+  ['tagGraph', 'tagGraph', Share2],
+  ['randomFlow', 'randomFlow', Shuffle],
   ['authors', 'authors', Users],
   ['faces', 'faces', Users],
   ['logs', 'logs', TerminalSquare],
@@ -593,7 +639,9 @@ function App() {
   const [source, setSource] = useState('all');
   const [results, setResults] = useState([]);
   const [mediaResults, setMediaResults] = useState({ total: 0, items: [] });
+  const [randomResults, setRandomResults] = useState({ total: 0, items: [] });
   const [similarityResults, setSimilarityResults] = useState({ groups: [] });
+  const [tagGraph, setTagGraph] = useState({ nodes: [], edges: [] });
   const [authors, setAuthors] = useState([]);
   const [faces, setFaces] = useState([]);
   const [faceSuggestions, setFaceSuggestions] = useState([]);
@@ -645,6 +693,8 @@ function App() {
       if (status.authenticated) {
         refresh().catch(exc => setError(exc.message));
         loadMedia().catch(() => {});
+        loadRandomMedia().catch(() => {});
+        loadTagGraph().catch(() => {});
         loadSimilarity().catch(() => {});
       }
     }).catch(exc => setError(exc.message));
@@ -659,6 +709,8 @@ function App() {
     setAuth(status);
     await refresh();
     await loadMedia();
+    await loadRandomMedia();
+    await loadTagGraph();
     await loadSimilarity();
   }
 
@@ -714,11 +766,38 @@ function App() {
       media_type: params.media_type || 'all',
       tag: params.tag || '',
       author: params.author || '',
+      randomize: params.randomize ? 'true' : 'false',
       limit: String(params.limit || 80),
       offset: String(params.offset || 0),
     });
     const data = await api(`/api/media?${search.toString()}`);
     setMediaResults(data);
+    return data;
+  }
+
+  async function loadRandomMedia(params = {}) {
+    const search = new URLSearchParams({
+      q: params.q || '',
+      media_type: params.media_type || 'all',
+      tag: params.tag || '',
+      author: params.author || '',
+      randomize: 'true',
+      limit: String(params.limit || 80),
+      offset: '0',
+    });
+    const data = await api(`/api/media?${search.toString()}`);
+    setRandomResults(data);
+    return data;
+  }
+
+  async function loadTagGraph(params = {}) {
+    const search = new URLSearchParams({
+      limit_nodes: String(params.limit_nodes || 90),
+      limit_edges: String(params.limit_edges || 220),
+      min_edge: String(params.min_edge || 2),
+    });
+    const data = await api(`/api/tags/graph?${search.toString()}`);
+    setTagGraph(data);
     return data;
   }
 
@@ -909,6 +988,8 @@ function App() {
 
         {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} setActive={setActive} t={t} /></section>}
         {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} t={t} />}
+        {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} loadMedia={loadMedia} setActive={setActive} t={t} />}
+        {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} t={t} />}
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
@@ -957,6 +1038,7 @@ function WorkflowPanel({ t, start, busy }) {
     ['workflow-review-cleanup', t.reviewCleanupWorkflow, t.reviewCleanupHint, Archive],
     ['workflow-face-balanced', t.faceWorkflow, t.faceWorkflowHint, Users],
     ['workflow-vision-plan', t.visionWorkflow, t.visionWorkflowHint, Camera],
+    ['workflow-transcribe-sample', t.transcribeWorkflow, t.transcribeWorkflowHint, Mic],
   ];
   return (
     <section className="panel">
@@ -979,6 +1061,7 @@ function CommandGuide({ t }) {
     [t.commonCommands, ['workflow-new-downloads', 'workflow-review-cleanup', 'scan', 'apply']],
     [t.faceCommands, ['workflow-face-balanced', 'face-scan-sample', 'face-cluster-balanced', 'face-cluster-report', 'apply-face-groups-dry-run', 'apply-face-groups']],
     [t.visionCommands, ['workflow-vision-plan', 'vision-scan-sample', 'index-vision', 'apply-vision-labels-dry-run', 'apply-vision-labels']],
+    [t.transcriptCommands, ['workflow-transcribe-sample', 'transcribe-sample', 'transcribe']],
     [t.maintenanceCommands, ['refresh-state', 'dedupe-organized-dry-run', 'dedupe-organized', 'clean-empty-dirs']],
   ];
   return (
@@ -1042,6 +1125,79 @@ function LogPanel({ selectedJob, jobLog, start, setActive, t }) {
   const next = selectedJob ? jobNextStep(selectedJob.command, t) : '';
   const actions = selectedJob ? jobNextActions(selectedJob.command, t, start, setActive) : [];
   return <div className="panel"><div className="panelHead"><h2>{selectedJob ? `Job #${selectedJob.id}` : t.jobLog}</h2><span>{selectedJob?.status || t.selectJob}</span></div>{!selectedJob ? <Empty label={t.selectJobHint} /> : <div className="logBlock"><div className="list"><div className="row"><span>{t.command}</span><strong>{selectedJob.command}</strong></div><div className="row"><span>{t.started}</span><strong>{selectedJob.started_at || '-'}</strong></div><div className="row"><span>{t.finished}</span><strong>{selectedJob.finished_at || '-'}</strong></div></div>{next && <div className="hintBox"><strong>{t.jobNextStep}</strong><span>{next}</span>{actions.length > 0 && <div className="nextActions">{actions.map(([label, action]) => <button key={label} onClick={action}><Play size={15} />{label}</button>)}</div>}</div>}<h3>stdout</h3><pre>{jobLog?.stdout || '(empty)'}</pre><h3>stderr</h3><pre>{jobLog?.stderr || '(empty)'}</pre></div>}</div>;
+}
+
+function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
+  const [minEdge, setMinEdge] = useState(2);
+  const nodes = graph.nodes || [];
+  const edges = graph.edges || [];
+  const topNodes = nodes.slice(0, 48);
+  const maxCount = Math.max(...topNodes.map(node => Number(node.media_count || 0)), 1);
+  const positions = new Map(topNodes.map((node, index) => {
+    const angle = (index / Math.max(1, topNodes.length)) * Math.PI * 2;
+    const radius = 38 + (index % 4) * 8;
+    return [node.tag, { x: 50 + Math.cos(angle) * radius, y: 50 + Math.sin(angle) * radius }];
+  }));
+  function openTag(tag) {
+    loadMedia({ tag, limit: 100 });
+    setActive('library');
+  }
+  return (
+    <>
+      <section className="panel">
+        <div className="panelHead"><h2>{t.tagGraph}</h2><div className="panelActions"><select value={minEdge} onChange={event => setMinEdge(Number(event.target.value))}><option value="1">1+</option><option value="2">2+</option><option value="4">4+</option><option value="8">8+</option></select><button className="panelButton" onClick={() => loadTagGraph({ min_edge: minEdge })}><RefreshCw size={16} />{t.refreshGraph}</button></div><span>{nodes.length}</span></div>
+        <div className="hintBox"><span>{t.tagGraphHelp}</span></div>
+        {!nodes.length ? <Empty label={t.tagGraphEmpty} /> : (
+          <div className="graphLayout">
+            <svg className="tagGraphCanvas" viewBox="0 0 100 100" role="img">
+              {edges.filter(edge => positions.has(edge.source) && positions.has(edge.target)).slice(0, 180).map(edge => {
+                const left = positions.get(edge.source);
+                const right = positions.get(edge.target);
+                return <line key={`${edge.source}-${edge.target}`} x1={left.x} y1={left.y} x2={right.x} y2={right.y} strokeWidth={Math.min(1.8, 0.25 + Number(edge.weight || 1) / 18)} />;
+              })}
+              {topNodes.map(node => {
+                const point = positions.get(node.tag);
+                const size = 1.8 + (Number(node.media_count || 0) / maxCount) * 4.2;
+                return <g key={node.tag} onClick={() => openTag(node.tag)}><circle cx={point.x} cy={point.y} r={size} /><text x={point.x} y={point.y - size - 1.2}>{node.tag}</text></g>;
+              })}
+            </svg>
+            <div className="tagNodeList">
+              {nodes.slice(0, 60).map(node => <button key={`${node.category}-${node.tag}`} onClick={() => openTag(node.tag)}><span>{node.category || t.tags}</span><strong>{node.tag}</strong><em>{node.media_count}</em></button>)}
+            </div>
+          </div>
+        )}
+      </section>
+      <section className="panel">
+        <div className="panelHead"><h2>{t.relatedTags}</h2><span>{edges.length}</span></div>
+        {!edges.length ? <Empty label={t.noRows} /> : <div className="edgeList">{edges.slice(0, 80).map(edge => <button key={`${edge.source}-${edge.target}`} onClick={() => openTag(edge.source)}><strong>{edge.source}</strong><span>{edge.target}</span><em>{edge.weight}</em></button>)}</div>}
+      </section>
+    </>
+  );
+}
+
+function RandomFlowPanel({ mediaResults, loadRandomMedia, t }) {
+  const [filters, setFilters] = useState({ media_type: 'all', tag: '', author: '', q: '' });
+  function run(event) {
+    event?.preventDefault();
+    loadRandomMedia(filters);
+  }
+  return (
+    <section className="panel">
+      <div className="panelHead"><h2>{t.randomFlow}</h2><button className="panelButton" onClick={run}><Shuffle size={16} />{t.randomize}</button><span>{mediaResults.total || 0}</span></div>
+      <form className="mediaSearchBar randomBar" onSubmit={run}>
+        <select value={filters.media_type} onChange={event => setFilters({ ...filters, media_type: event.target.value })}>
+          <option value="all">{t.allMedia}</option>
+          <option value="photo">{t.photosOnly}</option>
+          <option value="video">{t.videosOnly}</option>
+        </select>
+        <input value={filters.q} onChange={event => setFilters({ ...filters, q: event.target.value })} placeholder={t.mediaSearch} />
+        <input value={filters.tag} onChange={event => setFilters({ ...filters, tag: event.target.value })} placeholder={t.tags} />
+        <input value={filters.author} onChange={event => setFilters({ ...filters, author: event.target.value })} placeholder={t.authorName} />
+        <button type="submit"><Shuffle size={16} />{t.randomize}</button>
+      </form>
+      <MediaGrid items={mediaResults.items || []} t={t} />
+    </section>
+  );
 }
 
 function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loadSimilarity, start, performSearch, setQuery, setSource, t }) {
@@ -1185,6 +1341,8 @@ function MediaViewer({ item, detail, close, t }) {
                 </div>
               </>
             )}
+            <h3>{t.transcript}</h3>
+            {data.transcript?.text ? <pre className="transcriptBlock">{data.transcript.text}</pre> : <div className="empty smallEmpty">{t.noTranscript}</div>}
           </div>
         </div>
       </div>
@@ -1204,6 +1362,14 @@ function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, t }) 
   const [sort, setSort] = useState('files');
   const [scope, setScope] = useState('all');
   const [view, setView] = useState('cards');
+  const [selected, setSelected] = useState(null);
+  const [media, setMedia] = useState({ items: [], total: 0 });
+  async function openAuthor(author) {
+    setSelected(author);
+    setMedia({ items: [], total: 0 });
+    const data = await api(`/api/authors/${encodeURIComponent(author.name)}/media?limit=120`);
+    setMedia(data);
+  }
   const filtered = useMemo(() => {
     const needle = filter.trim().toLowerCase();
     return [...authors]
@@ -1251,29 +1417,30 @@ function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, t }) 
       </section>
       {view === 'cards' ? (
         <section className="authorGrid">
-          {filtered.map(author => <AuthorCard author={author} key={author.name} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />)}
+          {filtered.map(author => <AuthorCard author={author} key={author.name} openAuthor={openAuthor} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />)}
         </section>
       ) : (
         <AuthorTable authors={filtered} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />
       )}
+      {selected && <CollectionViewer title={selected.name} subtitle={`${selected.files} ${t.media}`} items={media.items || []} close={() => setSelected(null)} t={t} />}
     </>
   );
 }
 
-function AuthorCard({ author, renameAuthor, excludeAuthor, t }) {
+function AuthorCard({ author, openAuthor, renameAuthor, excludeAuthor, t }) {
   const [target, setTarget] = useState(author.name);
   useEffect(() => setTarget(author.name), [author.name]);
   return (
-    <article className="authorCard">
+    <article className="authorCard clickableCard" onClick={() => openAuthor(author)}>
       <div className="authorThumb"><span>{author.name.slice(0, 2)}</span><img src={`${author.thumbnail_url}?v=${encodeURIComponent(author.files)}`} alt={author.name} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} /></div>
       <div className="authorMeta">
         <strong>{author.name}</strong>
         <div className="faceStats"><span>{author.files} {t.media}</span><span>{author.photos} {t.photos}</span><span>{author.videos} {t.videos}</span><span>{author.face_groups || 0} FaceGroups</span></div>
-        <form onSubmit={event => { event.preventDefault(); renameAuthor(author.name, target); }}>
+        <form onClick={event => event.stopPropagation()} onSubmit={event => { event.preventDefault(); renameAuthor(author.name, target); }}>
           <input value={target} onChange={event => setTarget(event.target.value)} placeholder={t.renameTo} />
           <button type="submit" title={t.renameTo}><Save size={15} /></button>
         </form>
-        <button className="dangerButton" onClick={() => excludeAuthor(author.name)}><Archive size={15} />{t.excludeAuthor}</button>
+        <button className="dangerButton" onClick={event => { event.stopPropagation(); excludeAuthor(author.name); }}><Archive size={15} />{t.excludeAuthor}</button>
       </div>
     </article>
   );
@@ -1311,6 +1478,14 @@ function AuthorTableRow({ author, renameAuthor, excludeAuthor, t }) {
 }
 
 function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFaces, t }) {
+  const [selected, setSelected] = useState(null);
+  const [media, setMedia] = useState({ items: [], total: 0 });
+  async function openFace(face) {
+    setSelected(face);
+    setMedia({ items: [], total: 0 });
+    const data = await api(`/api/face-groups/${encodeURIComponent(face.face_group)}/media?limit=160`);
+    setMedia(data);
+  }
   return (
     <>
       <section className="panel">
@@ -1320,8 +1495,9 @@ function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFa
       </section>
       <section className="panel">
         <div className="panelHead"><h2>{t.faces}</h2><button className="panelButton" onClick={() => mergeNamedFaces('')}><Users size={16} />{t.mergeSameName}</button><span>{faces.length}</span></div>
-        {!faces.length ? <Empty label={t.noRows} /> : <div className="faceGrid">{faces.map(face => <FaceCard face={face} key={face.face_group} nameFace={nameFace} t={t} />)}</div>}
+        {!faces.length ? <Empty label={t.noRows} /> : <div className="faceGrid">{faces.map(face => <FaceCard face={face} key={face.face_group} openFace={openFace} nameFace={nameFace} t={t} />)}</div>}
       </section>
+      {selected && <CollectionViewer title={selected.actor_name || selected.face_group} subtitle={selected.face_group} items={media.items || []} close={() => setSelected(null)} t={t} />}
     </>
   );
 }
@@ -1344,22 +1520,35 @@ function MergeCard({ item, mergeFace, t }) {
   );
 }
 
-function FaceCard({ face, nameFace, t }) {
+function FaceCard({ face, openFace, nameFace, t }) {
   const [actor, setActor] = useState(face.actor_name || '');
   useEffect(() => setActor(face.actor_name || ''), [face.actor_name]);
   return (
-    <article className="faceCard">
+    <article className="faceCard clickableCard" onClick={() => openFace(face)}>
       <div className="thumb"><img src={`${face.thumbnail_url}?v=${encodeURIComponent(face.representative_frame || '')}`} alt={face.face_group} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} /></div>
       <div className="faceMeta">
         <strong>{face.face_group}</strong>
         <span>{face.actor_name ? `${t.namedAs}: ${face.actor_name}` : t.unnamed}</span>
         <div className="faceStats"><span>{face.media || face.group_media_count || 0} {t.media}</span><span>{face.faces || face.group_face_count || 0} {t.facesCount}</span></div>
-        <form onSubmit={event => { event.preventDefault(); nameFace(face.face_group, actor); }}>
+        <form onClick={event => event.stopPropagation()} onSubmit={event => { event.preventDefault(); nameFace(face.face_group, actor); }}>
           <input value={actor} onChange={event => setActor(event.target.value)} placeholder={t.nameActor} />
           <button type="submit" title={t.saveName}><Save size={15} /></button>
         </form>
       </div>
     </article>
+  );
+}
+
+function CollectionViewer({ title, subtitle, items, close, t }) {
+  return (
+    <div className="viewerBackdrop" role="dialog" aria-modal="true">
+      <div className="viewerPanel collectionPanel">
+        <div className="viewerHead"><div><h2>{title}</h2><p>{subtitle}</p></div><button className="iconButton" onClick={close}><XCircle size={18} /></button></div>
+        <div className="collectionBody">
+          <MediaGrid items={items} t={t} />
+        </div>
+      </div>
+    </div>
   );
 }
 

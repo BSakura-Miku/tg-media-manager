@@ -18,7 +18,18 @@ from pydantic import BaseModel
 from .db import connect, get_settings, init_db, rows_to_dicts, save_settings
 from .jobs import ALLOWED_COMMANDS, create_job
 from .media_stats import summary
-from .metadata import media_detail, media_query, mime_for, rebuild_metadata_index, rebuild_similarity_index, risk_queue, similarity_groups
+from .metadata import (
+    media_by_relative_paths,
+    media_detail,
+    media_for_author,
+    media_query,
+    mime_for,
+    rebuild_metadata_index,
+    rebuild_similarity_index,
+    risk_queue,
+    similarity_groups,
+    tag_graph,
+)
 
 try:
     from PIL import Image, ImageChops, ImageOps
@@ -581,10 +592,20 @@ def api_media(
     tag: str = Query("", max_length=120),
     author: str = Query("", max_length=120),
     include_risk: bool = Query(False),
+    randomize: bool = Query(False),
     limit: int = Query(80, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict:
-    return media_query(q=q.strip(), media_type=media_type, tag=tag.strip(), author=author.strip(), limit=limit, offset=offset, include_risk=include_risk)
+    return media_query(q=q.strip(), media_type=media_type, tag=tag.strip(), author=author.strip(), limit=limit, offset=offset, include_risk=include_risk, randomize=randomize)
+
+
+@app.get("/api/tags/graph")
+def api_tag_graph(
+    limit_nodes: int = Query(80, ge=5, le=180),
+    limit_edges: int = Query(180, ge=0, le=500),
+    min_edge: int = Query(2, ge=1, le=50),
+) -> dict:
+    return tag_graph(limit_nodes=limit_nodes, limit_edges=limit_edges, min_edge=min_edge)
 
 
 @app.get("/api/risk")
@@ -770,6 +791,17 @@ def api_author_thumbnail(actor_name: str):
     raise HTTPException(status_code=404, detail="Thumbnail not found")
 
 
+@app.get("/api/authors/{actor_name}/media")
+def api_author_media(
+    actor_name: str,
+    media_type: str = Query("all"),
+    limit: int = Query(80, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    actor = safe_actor_name(actor_name)
+    return media_for_author(actor, media_type=media_type, limit=limit, offset=offset)
+
+
 @app.post("/api/authors/rename")
 def api_rename_actor(req: ActorRenameRequest) -> dict:
     old_name = safe_actor_name(req.old_name)
@@ -849,6 +881,18 @@ def api_face_group_thumbnail(face_group: str):
         if image_path.exists():
             return FileResponse(image_path, media_type="image/jpeg")
     raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+
+@app.get("/api/face-groups/{face_group}/media")
+def api_face_group_media(face_group: str, limit: int = Query(120, ge=1, le=300)) -> dict:
+    if not face_group.startswith("FaceGroup_"):
+        raise HTTPException(status_code=400, detail="Invalid face group")
+    root = output_root()
+    paths = []
+    for row in read_csv(root / "_MANIFESTS" / "face_groups.csv"):
+        if row.get("face_group") == face_group and row.get("media_path"):
+            paths.append(row["media_path"])
+    return media_by_relative_paths(root, sorted(set(paths)), limit=limit)
 
 
 @app.post("/api/face-groups/name")

@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import mimetypes
 import os
 import re
+import subprocess
 import time
 from collections import defaultdict
 from io import StringIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from .db import connect, get_settings, init_db
 
@@ -359,7 +362,7 @@ def import_vision_outputs(root: Path | None = None) -> dict:
     return {"vision_tags": imported_tags, "timeline_segments": timeline_segments}
 
 
-def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str = "", limit: int = 100, offset: int = 0, include_risk: bool = False) -> dict:
+def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str = "", limit: int = 100, offset: int = 0, include_risk: bool = False, randomize: bool = False) -> dict:
     clauses = []
     params: list[object] = []
     if not include_risk:
@@ -374,10 +377,11 @@ def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str
         clauses.append("EXISTS (SELECT 1 FROM media_tags t WHERE t.media_id=m.id AND t.tag LIKE ?)")
         params.append(f"%{tag}%")
     if q:
-        clauses.append("(m.filename LIKE ? OR m.original_name LIKE ? OR m.author LIKE ? OR m.person LIKE ? OR m.scene LIKE ? OR m.platform LIKE ? OR m.quality LIKE ? OR EXISTS (SELECT 1 FROM media_tags t WHERE t.media_id=m.id AND t.tag LIKE ?))")
+        clauses.append("(m.filename LIKE ? OR m.original_name LIKE ? OR m.author LIKE ? OR m.person LIKE ? OR m.scene LIKE ? OR m.platform LIKE ? OR m.quality LIKE ? OR EXISTS (SELECT 1 FROM media_tags t WHERE t.media_id=m.id AND t.tag LIKE ?) OR EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=m.id AND tr.text LIKE ?))")
         like = f"%{q}%"
-        params.extend([like, like, like, like, like, like, like, like])
+        params.extend([like, like, like, like, like, like, like, like, like])
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    order = "RANDOM()" if randomize else "m.mtime DESC, m.id DESC"
     with connect() as conn:
         total = int(conn.execute(f"SELECT COUNT(*) AS c FROM media_items m {where}", params).fetchone()["c"])
         rows = conn.execute(
@@ -387,7 +391,7 @@ def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str
             LEFT JOIN media_tags t ON t.media_id=m.id AND t.state != 'rejected'
             {where}
             GROUP BY m.id
-            ORDER BY m.mtime DESC, m.id DESC
+            ORDER BY {order}
             LIMIT ? OFFSET ?
             """,
             [*params, limit, offset],
@@ -430,11 +434,169 @@ def media_detail(media_id: int) -> dict | None:
             (media_id,),
         ).fetchall()
         ops = conn.execute("SELECT operation, detail, created_at FROM media_operations WHERE media_id=? OR media_id IS NULL ORDER BY id DESC LIMIT 30", (media_id,)).fetchall()
+        transcript = conn.execute("SELECT language, text, segments_json, model, source, updated_at FROM media_transcripts WHERE media_id=?", (media_id,)).fetchone()
     data = dict(row)
     data["tags"] = [dict(item) for item in tags]
     data["timeline"] = [dict(item) for item in timeline]
     data["operations"] = [dict(item) for item in ops]
+    if transcript is not None:
+        transcript_data = dict(transcript)
+        try:
+            transcript_data["segments"] = json.loads(transcript_data.pop("segments_json") or "[]")
+        except Exception:
+            transcript_data["segments"] = []
+        data["transcript"] = transcript_data
     return data
+
+
+def media_for_author(author: str, media_type: str = "all", limit: int = 80, offset: int = 0) -> dict:
+    return media_query(media_type=media_type, author=author, limit=limit, offset=offset, include_risk=False)
+
+
+def tag_graph(limit_nodes: int = 80, limit_edges: int = 180, min_edge: int = 2) -> dict:
+    with connect() as conn:
+        tag_rows = conn.execute(
+            """
+            SELECT tag, category, COUNT(DISTINCT media_id) AS media_count, AVG(confidence) AS confidence
+            FROM media_tags
+            WHERE state != 'rejected' AND tag != ''
+            GROUP BY tag, category
+            ORDER BY media_count DESC, tag
+            LIMIT ?
+            """,
+            (limit_nodes,),
+        ).fetchall()
+        tags = [dict(row) for row in tag_rows]
+        allowed = {row["tag"] for row in tags}
+        edge_counts: defaultdict[tuple[str, str], int] = defaultdict(int)
+        if allowed:
+            media_tags = conn.execute(
+                """
+                SELECT media_id, tag
+                FROM media_tags
+                WHERE state != 'rejected' AND tag != ''
+                ORDER BY media_id, tag
+                """
+            ).fetchall()
+            grouped: defaultdict[int, set[str]] = defaultdict(set)
+            for row in media_tags:
+                tag = row["tag"]
+                if tag in allowed:
+                    grouped[int(row["media_id"])].add(tag)
+            for values in grouped.values():
+                sorted_tags = sorted(values)
+                for left_index, left in enumerate(sorted_tags):
+                    for right in sorted_tags[left_index + 1:]:
+                        edge_counts[(left, right)] += 1
+        edges = [
+            {"source": left, "target": right, "weight": count}
+            for (left, right), count in edge_counts.items()
+            if count >= min_edge
+        ]
+        edges.sort(key=lambda item: (-item["weight"], item["source"], item["target"]))
+    return {"nodes": tags, "edges": edges[:limit_edges]}
+
+
+def media_by_relative_paths(root: Path, relative_paths: list[str], limit: int = 120) -> dict:
+    clean = [str(Path(item)) for item in relative_paths if item]
+    if not clean:
+        return {"items": [], "total": 0}
+    with connect() as conn:
+        placeholders = ",".join("?" for _ in clean)
+        rows = conn.execute(
+            f"""
+            SELECT m.*, GROUP_CONCAT(t.tag, ',') AS tags
+            FROM media_items m
+            LEFT JOIN media_tags t ON t.media_id=m.id AND t.state != 'rejected'
+            WHERE m.relative_path IN ({placeholders})
+            GROUP BY m.id
+            ORDER BY m.mtime DESC
+            LIMIT ?
+            """,
+            [*clean, limit],
+        ).fetchall()
+    return {"items": [dict(row) for row in rows], "total": len(rows)}
+
+
+def transcribe_videos(root: Path, limit: int = 12, model_size: str = "base") -> dict:
+    try:
+        from faster_whisper import WhisperModel  # type: ignore
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "faster-whisper is not installed in this image. Install the transcribe extra or build a transcribe-enabled image.",
+            "detail": repr(exc),
+        }
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, path, filename
+            FROM media_items
+            WHERE media_type='video'
+              AND NOT EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=media_items.id)
+            ORDER BY mtime DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    if not rows:
+        return {"ok": True, "processed": 0, "segments": 0}
+    device = os.environ.get("WHISPER_DEVICE", "cpu")
+    compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+    model_name = os.environ.get("WHISPER_MODEL", model_size)
+    model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=os.environ.get("MODEL_ROOT", "/models"))
+    processed = 0
+    segment_count = 0
+    errors = []
+    with TemporaryDirectory(prefix="tgmm_audio_") as tmpdir:
+        tmp_root = Path(tmpdir)
+        with connect() as conn:
+            for row in rows:
+                path = Path(row["path"])
+                if not path.exists():
+                    continue
+                wav = tmp_root / f"{row['id']}.wav"
+                proc = subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(path), "-vn", "-ac", "1", "-ar", "16000", "-t", os.environ.get("TRANSCRIBE_MAX_SECONDS", "900"), str(wav)],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=None,
+                )
+                if proc.returncode != 0 or not wav.exists():
+                    errors.append({"id": row["id"], "error": proc.stderr[-1000:]})
+                    continue
+                try:
+                    segments_iter, info = model.transcribe(str(wav), vad_filter=True)
+                    segments = [
+                        {"start": round(float(seg.start), 2), "end": round(float(seg.end), 2), "text": seg.text.strip()}
+                        for seg in segments_iter
+                        if seg.text.strip()
+                    ]
+                    text = "\n".join(item["text"] for item in segments)
+                    conn.execute(
+                        """
+                        INSERT INTO media_transcripts (media_id, language, text, segments_json, model, source, updated_at)
+                        VALUES (?, ?, ?, ?, ?, 'faster-whisper', CURRENT_TIMESTAMP)
+                        ON CONFLICT(media_id) DO UPDATE SET
+                            language=excluded.language,
+                            text=excluded.text,
+                            segments_json=excluded.segments_json,
+                            model=excluded.model,
+                            source=excluded.source,
+                            updated_at=CURRENT_TIMESTAMP
+                        """,
+                        (int(row["id"]), getattr(info, "language", "") or "", text, json.dumps(segments, ensure_ascii=False), model_name),
+                    )
+                    conn.execute(
+                        "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'transcribe', ?)",
+                        (int(row["id"]), f"segments={len(segments)} model={model_name}"),
+                    )
+                    processed += 1
+                    segment_count += len(segments)
+                except Exception as exc:
+                    errors.append({"id": row["id"], "error": repr(exc)})
+    return {"ok": True, "processed": processed, "segments": segment_count, "errors": errors[:20]}
 
 
 def mime_for(path: Path, media_type: str) -> str:

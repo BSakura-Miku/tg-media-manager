@@ -425,6 +425,131 @@ select, input {
   white-space: nowrap;
   font-size: 12px;
 }
+.transcriptBlock {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--soft);
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+}
+.smallEmpty {
+  min-height: 54px;
+}
+.collectionPanel {
+  width: min(1320px, 96vw);
+}
+.collectionBody {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+.clickableCard {
+  cursor: pointer;
+}
+.clickableCard:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  transform: translateY(-1px);
+}
+.graphLayout {
+  display: grid;
+  grid-template-columns: minmax(460px, 1fr) 320px;
+  gap: 12px;
+  align-items: stretch;
+}
+.tagGraphCanvas {
+  width: 100%;
+  min-height: 560px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--line) 26%, transparent) 1px, transparent 1px),
+    linear-gradient(color-mix(in srgb, var(--line) 26%, transparent) 1px, transparent 1px),
+    var(--panel-2);
+  background-size: 24px 24px;
+}
+.tagGraphCanvas line {
+  stroke: color-mix(in srgb, var(--accent) 46%, var(--line));
+  opacity: .62;
+}
+.tagGraphCanvas circle {
+  fill: color-mix(in srgb, var(--accent) 74%, var(--panel));
+  stroke: var(--text);
+  stroke-width: .18;
+  cursor: pointer;
+}
+.tagGraphCanvas text {
+  fill: var(--soft);
+  font-size: 2.8px;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--panel-2);
+  stroke-width: .75px;
+  cursor: pointer;
+}
+.tagNodeList {
+  max-height: 560px;
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+}
+.tagNodeList button,
+.edgeList button {
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  text-align: left;
+  justify-content: stretch;
+  padding: 8px 10px;
+  background: var(--panel-2);
+}
+.tagNodeList span,
+.edgeList span {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.tagNodeList strong,
+.edgeList strong {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.tagNodeList em,
+.edgeList em {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  color: var(--accent);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+.edgeList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px;
+}
+.edgeList button {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px;
+  grid-template-rows: auto;
+}
+.edgeList em {
+  grid-row: auto;
+  grid-column: 3;
+  justify-self: end;
+}
+.randomBar {
+  grid-template-columns: 140px minmax(160px, 1fr) minmax(120px, .6fr) minmax(120px, .6fr) auto;
+}
 .guideGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(180px, 1fr));
@@ -845,6 +970,8 @@ tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); col
   .guideGrid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
   .authorToolbar { grid-template-columns: 1fr 1fr; }
   .viewerBody { grid-template-columns: 1fr; }
+  .graphLayout { grid-template-columns: 1fr; }
+  .tagGraphCanvas { min-height: 440px; }
   .twoCol, .jobsLayout, .settingsLayout { grid-template-columns: 1fr; }
   header { align-items: flex-start; flex-direction: column; }
   .headerActions { min-width: 0; width: 100%; }
@@ -863,6 +990,7 @@ tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); col
   .guideGrid { grid-template-columns: 1fr; }
   .authorToolbar { grid-template-columns: 1fr; }
   .mediaSearchBar { grid-template-columns: 1fr; }
+  .randomBar { grid-template-columns: 1fr; }
   .mediaGrid { grid-template-columns: 1fr; }
   .viewerBackdrop { padding: 10px; }
   .viewerMedia { min-height: 260px; }

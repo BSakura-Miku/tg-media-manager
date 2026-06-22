@@ -148,6 +148,20 @@ def init_db() -> None:
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS media_transcripts (
+                media_id INTEGER PRIMARY KEY,
+                language TEXT NOT NULL DEFAULT '',
+                text TEXT NOT NULL DEFAULT '',
+                segments_json TEXT NOT NULL DEFAULT '[]',
+                model TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT 'faster-whisper',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_media_transcripts_text ON media_transcripts(text);
             """
         )
 

@@ -5,28 +5,42 @@ RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.11-slim-bookworm
+FROM python:3.11-slim-bookworm AS python-build
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0 build-essential libva-drm2 intel-media-va-driver vainfo \
+    && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt /app/backend/requirements.txt
 COPY backend/requirements-vision.txt /app/backend/requirements-vision.txt
 COPY backend/requirements-clip.txt /app/backend/requirements-clip.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt \
-    && pip install --no-cache-dir -r /app/backend/requirements-vision.txt \
-    && pip install --no-cache-dir -r /app/backend/requirements-clip.txt \
-    && pip uninstall -y onnxruntime \
-    && pip install --no-cache-dir --force-reinstall --no-deps "onnxruntime-openvino>=1.24"
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir -r /app/backend/requirements.txt \
+    && /opt/venv/bin/pip install --no-cache-dir -r /app/backend/requirements-vision.txt \
+    && /opt/venv/bin/pip install --no-cache-dir -r /app/backend/requirements-clip.txt \
+    && /opt/venv/bin/pip uninstall -y onnxruntime \
+    && /opt/venv/bin/pip install --no-cache-dir --force-reinstall --no-deps "onnxruntime-openvino>=1.24"
+
+FROM python:3.11-slim-bookworm
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/opt/venv/bin:$PATH"
+WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends intel-opencl-icd libze1 clinfo \
+    && apt-get install -y --no-install-recommends ffmpeg libgl1 libglib2.0-0 libva-drm2 vainfo \
+    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then apt-get install -y --no-install-recommends intel-media-va-driver; fi \
     && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends clinfo \
+    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then apt-get install -y --no-install-recommends intel-opencl-icd libze1; fi \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=python-build /opt/venv /opt/venv
 COPY backend/ /app/backend/
 COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
 
