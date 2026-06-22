@@ -158,6 +158,7 @@ def api_system_hardware() -> dict:
         "dri": run(["sh", "-lc", "ls -la /dev/dri 2>/dev/null || true"]),
         "ffmpeg_hwaccels": run(["ffmpeg", "-hide_banner", "-hwaccels"]),
         "vainfo": run(["sh", "-lc", "vainfo --display drm --device ${FFMPEG_HW_DEVICE:-/dev/dri/renderD128} 2>&1 | head -80 || true"]),
+        "clinfo": run(["sh", "-lc", "clinfo 2>&1 | head -120 || true"]),
         "onnxruntime": run(["python", "-c", "import onnxruntime as ort; print('\\n'.join(ort.get_available_providers()))"]),
     }
 
