@@ -429,6 +429,15 @@ def actor_counts(actor_dir: Path) -> tuple[int, int]:
     return photos, videos
 
 
+def actor_has_thumbnail(root: Path, actor: str) -> bool:
+    actor_dir = root / "Actors" / actor
+    photo_exts = {".jpg", ".jpeg", ".png", ".webp"}
+    if (actor_dir / "Photos").exists() and any(path.is_file() and path.suffix.lower() in photo_exts for path in (actor_dir / "Photos").rglob("*")):
+        return True
+    cache = root / "_MANIFESTS" / "author_thumbs" / f"{actor}.jpg"
+    return cache.exists()
+
+
 @app.get("/api/authors")
 def api_authors() -> list[dict]:
     root = output_root()
@@ -452,6 +461,7 @@ def api_authors() -> list[dict]:
                 "videos": videos,
                 "files": total,
                 "face_groups": face_counts.get(actor_dir.name, 0),
+                "has_thumbnail": actor_has_thumbnail(root, actor_dir.name),
                 "thumbnail_url": f"/api/authors/{actor_dir.name}/thumbnail",
             })
     rows.sort(key=lambda row: (-int(row["files"]), row["name"]))
@@ -475,6 +485,26 @@ def api_author_thumbnail(actor_name: str):
             if path.is_file() and path.suffix.lower() in photo_exts:
                 media_type = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
                 return FileResponse(path, media_type=media_type)
+
+    thumb_dir = root / "_MANIFESTS" / "author_thumbs"
+    thumb = thumb_dir / f"{actor}.jpg"
+    if thumb.exists():
+        return FileResponse(thumb, media_type="image/jpeg")
+    video_exts = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
+    video_dir = actor_dir / "Videos"
+    if video_dir.exists():
+        for video in sorted(video_dir.rglob("*")):
+            if not video.is_file() or video.suffix.lower() not in video_exts:
+                continue
+            thumb_dir.mkdir(parents=True, exist_ok=True)
+            proc = subprocess.run(
+                ["ffmpeg", "-y", "-ss", "00:00:02", "-i", str(video), "-frames:v", "1", "-vf", "scale='min(800,iw)':-2", "-q:v", "4", str(thumb)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+            )
+            if proc.returncode == 0 and thumb.exists():
+                return FileResponse(thumb, media_type="image/jpeg")
 
     aliases = {row.get("face_group", ""): row.get("actor_name", "") for row in read_csv(root / "_MANIFESTS" / "face_aliases.csv")}
     groups = read_csv(root / "_MANIFESTS" / "face_groups.csv")

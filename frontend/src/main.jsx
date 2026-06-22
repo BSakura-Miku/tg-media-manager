@@ -59,6 +59,7 @@ const i18n = {
     wordSignals: 'Word Signals',
     runJobs: 'Run Jobs',
     commandGuide: 'Command Guide',
+    advancedCommands: 'Advanced commands',
     commonCommands: 'Common',
     faceCommands: 'Face',
     visionCommands: 'Vision',
@@ -80,6 +81,15 @@ const i18n = {
     visionPipeline: 'Vision Pipeline',
     localOnly: 'local only',
     sourceLeftovers: 'Source Leftovers',
+    workbench: 'Workbench',
+    workbenchHint: 'Start from the queue with the highest count. Workflows run multiple safe jobs in sequence and show the next step in the job log.',
+    reviewQueue: 'Review queue',
+    newFilesAction: 'Organize new files',
+    reviewAction: 'Clean review folders',
+    faceAction: 'Review face merges',
+    duplicateAction: 'Preview duplicates',
+    openFaces: 'Open Face Groups',
+    runNext: 'Run next step',
     searchResults: 'Search Results',
     recentLogs: 'Recent Logs',
     moveLogRows: 'move log rows',
@@ -105,10 +115,32 @@ const i18n = {
     saveSettings: 'Save settings',
     syncAuthors: 'Sync authors',
     authorSearch: 'Search authors',
+    sortAuthors: 'Sort authors',
+    filterAuthors: 'Filter',
+    authorView: 'View',
+    cardView: 'Cards',
+    tableView: 'Table',
+    allAuthors: 'All authors',
+    withThumb: 'With thumbnail',
+    withoutThumb: 'Missing thumbnail',
+    withFaceGroup: 'With FaceGroup',
+    withoutFaceGroup: 'No FaceGroup',
+    byFiles: 'Most media',
+    byPhotos: 'Most photos',
+    byVideos: 'Most videos',
+    byFaceGroups: 'Most FaceGroups',
+    byName: 'Name A-Z',
     renameTo: 'Rename / merge to',
     excludeAuthor: 'Exclude',
     authorHint: 'Rename merges folders when the target already exists. Exclude moves a mistaken author to review.',
     syncAuthorsDone: 'Authors synced',
+    authorName: 'Author',
+    files: 'Files',
+    photos: 'Photos',
+    videos: 'Videos',
+    thumbnail: 'Thumbnail',
+    present: 'Present',
+    missing: 'Missing',
     browse: 'Browse',
     directories: 'Directories',
     currentPath: 'Current path',
@@ -224,6 +256,7 @@ const i18n = {
     wordSignals: '词信号',
     runJobs: '运行任务',
     commandGuide: '功能说明',
+    advancedCommands: '高级命令',
     commonCommands: '常用',
     faceCommands: '人脸',
     visionCommands: '视觉',
@@ -245,6 +278,15 @@ const i18n = {
     visionPipeline: '视觉流水线',
     localOnly: '仅本地',
     sourceLeftovers: '来源残留',
+    workbench: '工作台',
+    workbenchHint: '优先处理数量最多的队列。推荐流程会连续执行多个安全任务，任务日志里会提示下一步。',
+    reviewQueue: '待处理队列',
+    newFilesAction: '整理新文件',
+    reviewAction: '清理 Review',
+    faceAction: '检查人脸合并',
+    duplicateAction: '预览重复文件',
+    openFaces: '打开人脸组',
+    runNext: '执行下一步',
     searchResults: '搜索结果',
     recentLogs: '最近日志',
     moveLogRows: '移动日志行',
@@ -270,10 +312,32 @@ const i18n = {
     saveSettings: '保存设置',
     syncAuthors: '同步作者目录',
     authorSearch: '搜索作者',
+    sortAuthors: '作者排序',
+    filterAuthors: '筛选',
+    authorView: '视图',
+    cardView: '卡片',
+    tableView: '表格',
+    allAuthors: '全部作者',
+    withThumb: '有缩略图',
+    withoutThumb: '缺缩略图',
+    withFaceGroup: '有关联人脸',
+    withoutFaceGroup: '无人脸关联',
+    byFiles: '媒体最多',
+    byPhotos: '照片最多',
+    byVideos: '视频最多',
+    byFaceGroups: '人脸组最多',
+    byName: '名称 A-Z',
     renameTo: '改名 / 合并到',
     excludeAuthor: '排除',
     authorHint: '改名时如果目标作者已存在，会自动合并目录；排除会把误识别作者移到 Review。',
     syncAuthorsDone: '作者目录已同步',
+    authorName: '作者',
+    files: '文件',
+    photos: '照片',
+    videos: '视频',
+    thumbnail: '缩略图',
+    present: '有',
+    missing: '缺失',
     browse: '浏览',
     directories: '目录',
     currentPath: '当前位置',
@@ -709,14 +773,19 @@ function App() {
               <Stat label={t.filename_analysis} value={analysis.filename_analysis_rows} icon={Search} />
               <Stat label={t.wordSignals} value={analysis.filename_words_rows} icon={Tags} />
             </section>
+            <WorkbenchPanel summary={summary} leftovers={leftovers} vision={vision} start={start} setActive={setActive} busy={busy || hasRunning} t={t} />
             <WorkflowPanel t={t} start={start} busy={busy || hasRunning} />
-            <CommandGuide t={t} />
-            <section className="panel"><div className="panelHead"><h2>{t.runJobs}</h2><span>{busy ? t.starting : hasRunning ? t.running : t.ready}</span></div><div className="commandGrid">{commands.map(([command, label, Icon, help]) => <CommandButton key={command} command={command} label={label} Icon={Icon} help={help} busy={busy || hasRunning} start={start} t={t} />)}</div></section>
+            <details className="panel advancedPanel">
+              <summary><span>{t.advancedCommands}</span><small>{t.commandGuide}</small></summary>
+              <CommandGuide t={t} />
+              <div className="panelHead"><h2>{t.runJobs}</h2><span>{busy ? t.starting : hasRunning ? t.running : t.ready}</span></div>
+              <div className="commandGrid">{commands.map(([command, label, Icon, help]) => <CommandButton key={command} command={command} label={label} Icon={Icon} help={help} busy={busy || hasRunning} start={start} t={t} />)}</div>
+            </details>
             <section className="twoCol"><BucketPanel title={t.keywordBuckets} rows={summary?.keywords || []} /><VisionPanel vision={vision} t={t} /><SourcePanel leftovers={leftovers} title={t.sourceLeftovers} /></section>
           </>
         )}
 
-        {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} t={t} /></section>}
+        {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} setActive={setActive} t={t} /></section>}
         {active === 'library' && <LibraryPanel results={results} performSearch={performSearch} setQuery={setQuery} setSource={setSource} t={t} />}
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} t={t} />}
@@ -729,6 +798,35 @@ function App() {
 
 function BucketPanel({ title, rows }) {
   return <div className="panel"><div className="panelHead"><h2>{title}</h2><span>{rows.length}</span></div><div className="list">{rows.map(item => <div className="row" key={item.name}><span>{item.name}</span><strong>{item.files}</strong></div>)}</div></div>;
+}
+
+function WorkbenchPanel({ summary, leftovers, vision, start, setActive, busy, t }) {
+  const leftoverTotal = Object.values(leftovers || {}).reduce((a, b) => a + b, 0);
+  const reviewTotal = Number(summary?.top?.unknown || 0) + Number(summary?.top?.duplicates || 0);
+  const faceSuggestions = Number(vision?.face_merge_suggestion_rows || 0);
+  const duplicateRows = Number(vision?.organized_duplicate_rows || 0);
+  const cards = [
+    [t.newDownloadsWorkflow, leftoverTotal, t.sourceLeftovers, t.newFilesAction, () => start('workflow-new-downloads'), Search],
+    [t.reviewCleanupWorkflow, reviewTotal, t.reviewQueue, t.reviewAction, () => start('workflow-review-cleanup'), Archive],
+    [t.faceMergeSuggestions, faceSuggestions, t.faces, t.faceAction, () => setActive('faces'), Users],
+    [t.exactDuplicates, duplicateRows, t.duplicates, t.duplicateAction, () => start('dedupe-organized-dry-run'), Archive],
+  ];
+  return (
+    <section className="panel">
+      <div className="panelHead"><h2>{t.workbench}</h2><span>{t.ready}</span></div>
+      <div className="hintBox"><span>{t.workbenchHint}</span></div>
+      <div className="workbenchGrid">
+        {cards.map(([title, value, label, action, onClick, Icon]) => (
+          <button className="workbenchCard" disabled={busy && action !== t.faceAction} key={title} onClick={onClick}>
+            <Icon size={18} />
+            <span>{label}</span>
+            <strong>{value}</strong>
+            <b>{action}</b>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function WorkflowPanel({ t, start, busy }) {
@@ -762,7 +860,7 @@ function CommandGuide({ t }) {
     [t.maintenanceCommands, ['refresh-state', 'dedupe-organized-dry-run', 'dedupe-organized', 'clean-empty-dirs']],
   ];
   return (
-    <section className="panel">
+    <div className="guideSection">
       <div className="panelHead"><h2>{t.commandGuide}</h2><span>{t.runJobs}</span></div>
       <div className="guideGrid">
         {groups.map(([title, ids]) => (
@@ -772,7 +870,7 @@ function CommandGuide({ t }) {
           </div>
         ))}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -795,9 +893,33 @@ function jobNextStep(command, t) {
   return '';
 }
 
-function LogPanel({ selectedJob, jobLog, t }) {
+function jobNextActions(command, t, start, setActive) {
+  if (command === 'face-scan-sample') {
+    return [
+      [t.commandNames['face-cluster-balanced'], () => start('face-cluster-balanced')],
+      [t.commandNames['face-cluster-report'], () => start('face-cluster-report')],
+      [t.openFaces, () => setActive('faces')],
+    ];
+  }
+  if (command === 'extract-frames-sample') {
+    return [
+      [t.commandNames['face-scan-sample'], () => start('face-scan-sample')],
+      [t.commandNames['vision-scan-sample'], () => start('vision-scan-sample')],
+    ];
+  }
+  if (command === 'vision-scan-sample') {
+    return [
+      [t.commandNames['apply-vision-labels-dry-run'], () => start('apply-vision-labels-dry-run')],
+      [t.commandNames['apply-vision-labels'], () => start('apply-vision-labels')],
+    ];
+  }
+  return [];
+}
+
+function LogPanel({ selectedJob, jobLog, start, setActive, t }) {
   const next = selectedJob ? jobNextStep(selectedJob.command, t) : '';
-  return <div className="panel"><div className="panelHead"><h2>{selectedJob ? `Job #${selectedJob.id}` : t.jobLog}</h2><span>{selectedJob?.status || t.selectJob}</span></div>{!selectedJob ? <Empty label={t.selectJobHint} /> : <div className="logBlock"><div className="list"><div className="row"><span>{t.command}</span><strong>{selectedJob.command}</strong></div><div className="row"><span>{t.started}</span><strong>{selectedJob.started_at || '-'}</strong></div><div className="row"><span>{t.finished}</span><strong>{selectedJob.finished_at || '-'}</strong></div></div>{next && <div className="hintBox"><strong>{t.jobNextStep}</strong><span>{next}</span></div>}<h3>stdout</h3><pre>{jobLog?.stdout || '(empty)'}</pre><h3>stderr</h3><pre>{jobLog?.stderr || '(empty)'}</pre></div>}</div>;
+  const actions = selectedJob ? jobNextActions(selectedJob.command, t, start, setActive) : [];
+  return <div className="panel"><div className="panelHead"><h2>{selectedJob ? `Job #${selectedJob.id}` : t.jobLog}</h2><span>{selectedJob?.status || t.selectJob}</span></div>{!selectedJob ? <Empty label={t.selectJobHint} /> : <div className="logBlock"><div className="list"><div className="row"><span>{t.command}</span><strong>{selectedJob.command}</strong></div><div className="row"><span>{t.started}</span><strong>{selectedJob.started_at || '-'}</strong></div><div className="row"><span>{t.finished}</span><strong>{selectedJob.finished_at || '-'}</strong></div></div>{next && <div className="hintBox"><strong>{t.jobNextStep}</strong><span>{next}</span>{actions.length > 0 && <div className="nextActions">{actions.map(([label, action]) => <button key={label} onClick={action}><Play size={15} />{label}</button>)}</div>}</div>}<h3>stdout</h3><pre>{jobLog?.stdout || '(empty)'}</pre><h3>stderr</h3><pre>{jobLog?.stderr || '(empty)'}</pre></div>}</div>;
 }
 
 function LibraryPanel({ results, performSearch, setQuery, setSource, t }) {
@@ -826,17 +948,61 @@ function LibraryPanel({ results, performSearch, setQuery, setSource, t }) {
 
 function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, t }) {
   const [filter, setFilter] = useState('');
-  const filtered = authors.filter(author => author.name.toLowerCase().includes(filter.trim().toLowerCase()));
+  const [sort, setSort] = useState('files');
+  const [scope, setScope] = useState('all');
+  const [view, setView] = useState('cards');
+  const filtered = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    return [...authors]
+      .filter(author => {
+        if (needle && !author.name.toLowerCase().includes(needle)) return false;
+        if (scope === 'with-thumb') return !!author.has_thumbnail;
+        if (scope === 'without-thumb') return !author.has_thumbnail;
+        if (scope === 'with-face') return Number(author.face_groups || 0) > 0;
+        if (scope === 'without-face') return Number(author.face_groups || 0) === 0;
+        return true;
+      })
+      .sort((a, b) => {
+        if (sort === 'name') return a.name.localeCompare(b.name, 'zh-Hans-CN');
+        const key = sort === 'photos' ? 'photos' : sort === 'videos' ? 'videos' : sort === 'faces' ? 'face_groups' : 'files';
+        return Number(b[key] || 0) - Number(a[key] || 0) || a.name.localeCompare(b.name, 'zh-Hans-CN');
+      });
+  }, [authors, filter, sort, scope]);
   return (
     <>
       <section className="panel">
         <div className="panelHead"><h2>{t.authors}</h2><button className="panelButton" onClick={syncAuthors}><RefreshCw size={16} />{t.syncAuthors}</button><span>{filtered.length}/{authors.length}</span></div>
         <div className="hintBox"><span>{t.authorHint}</span></div>
-        <div className="browseBar"><input value={filter} onChange={event => setFilter(event.target.value)} placeholder={t.authorSearch} /><button onClick={() => setFilter('')}><RotateCcw size={16} /></button></div>
+        <div className="authorToolbar">
+          <input value={filter} onChange={event => setFilter(event.target.value)} placeholder={t.authorSearch} />
+          <select value={sort} onChange={event => setSort(event.target.value)} title={t.sortAuthors}>
+            <option value="files">{t.byFiles}</option>
+            <option value="photos">{t.byPhotos}</option>
+            <option value="videos">{t.byVideos}</option>
+            <option value="faces">{t.byFaceGroups}</option>
+            <option value="name">{t.byName}</option>
+          </select>
+          <select value={scope} onChange={event => setScope(event.target.value)} title={t.filterAuthors}>
+            <option value="all">{t.allAuthors}</option>
+            <option value="with-thumb">{t.withThumb}</option>
+            <option value="without-thumb">{t.withoutThumb}</option>
+            <option value="with-face">{t.withFaceGroup}</option>
+            <option value="without-face">{t.withoutFaceGroup}</option>
+          </select>
+          <div className="segmented" aria-label={t.authorView}>
+            <button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}>{t.cardView}</button>
+            <button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}>{t.tableView}</button>
+          </div>
+          <button onClick={() => { setFilter(''); setScope('all'); setSort('files'); }}><RotateCcw size={16} /></button>
+        </div>
       </section>
-      <section className="authorGrid">
-        {filtered.map(author => <AuthorCard author={author} key={author.name} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />)}
-      </section>
+      {view === 'cards' ? (
+        <section className="authorGrid">
+          {filtered.map(author => <AuthorCard author={author} key={author.name} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />)}
+        </section>
+      ) : (
+        <AuthorTable authors={filtered} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />
+      )}
     </>
   );
 }
@@ -846,10 +1012,10 @@ function AuthorCard({ author, renameAuthor, excludeAuthor, t }) {
   useEffect(() => setTarget(author.name), [author.name]);
   return (
     <article className="authorCard">
-      <div className="authorThumb"><img src={`${author.thumbnail_url}?v=${encodeURIComponent(author.files)}`} alt={author.name} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} /></div>
+      <div className="authorThumb"><span>{author.name.slice(0, 2)}</span><img src={`${author.thumbnail_url}?v=${encodeURIComponent(author.files)}`} alt={author.name} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} /></div>
       <div className="authorMeta">
         <strong>{author.name}</strong>
-        <div className="faceStats"><span>{author.files} {t.media}</span><span>{author.photos} Photos</span><span>{author.videos} Videos</span><span>{author.face_groups || 0} FaceGroups</span></div>
+        <div className="faceStats"><span>{author.files} {t.media}</span><span>{author.photos} {t.photos}</span><span>{author.videos} {t.videos}</span><span>{author.face_groups || 0} FaceGroups</span></div>
         <form onSubmit={event => { event.preventDefault(); renameAuthor(author.name, target); }}>
           <input value={target} onChange={event => setTarget(event.target.value)} placeholder={t.renameTo} />
           <button type="submit" title={t.renameTo}><Save size={15} /></button>
@@ -857,6 +1023,37 @@ function AuthorCard({ author, renameAuthor, excludeAuthor, t }) {
         <button className="dangerButton" onClick={() => excludeAuthor(author.name)}><Archive size={15} />{t.excludeAuthor}</button>
       </div>
     </article>
+  );
+}
+
+function AuthorTable({ authors, renameAuthor, excludeAuthor, t }) {
+  if (!authors.length) return <section className="panel"><Empty label={t.noRows} /></section>;
+  return (
+    <section className="panel">
+      <div className="tableWrap authorTable">
+        <table>
+          <thead><tr><th>{t.thumbnail}</th><th>{t.authorName}</th><th>{t.files}</th><th>{t.photos}</th><th>{t.videos}</th><th>FaceGroups</th><th>{t.renameTo}</th><th>{t.excludeAuthor}</th></tr></thead>
+          <tbody>{authors.map(author => <AuthorTableRow author={author} key={author.name} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />)}</tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function AuthorTableRow({ author, renameAuthor, excludeAuthor, t }) {
+  const [target, setTarget] = useState(author.name);
+  useEffect(() => setTarget(author.name), [author.name]);
+  return (
+    <tr>
+      <td><div className="authorMiniThumb"><span>{author.name.slice(0, 1)}</span><img src={`${author.thumbnail_url}?v=${encodeURIComponent(author.files)}`} alt={author.name} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} /></div></td>
+      <td title={author.name}>{author.name}</td>
+      <td>{author.files}</td>
+      <td>{author.photos}</td>
+      <td>{author.videos}</td>
+      <td>{author.face_groups || 0}</td>
+      <td><form className="inlineForm" onSubmit={event => { event.preventDefault(); renameAuthor(author.name, target); }}><input value={target} onChange={event => setTarget(event.target.value)} /><button type="submit" title={t.renameTo}><Save size={14} /></button></form></td>
+      <td><button className="dangerButton" onClick={() => excludeAuthor(author.name)}><Archive size={14} />{t.excludeAuthor}</button></td>
+    </tr>
   );
 }
 
