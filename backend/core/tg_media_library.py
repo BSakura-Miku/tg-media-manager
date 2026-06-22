@@ -1126,6 +1126,40 @@ def frame_cache_dir(config: Config) -> Path:
     return config.manifests / "vision_cache"
 
 
+def ffmpeg_hw_prefix() -> list[str]:
+    mode = os.environ.get("FFMPEG_HWACCEL", "").strip().lower()
+    if mode in {"", "none", "false", "0", "off"}:
+        return []
+    device = os.environ.get("FFMPEG_HW_DEVICE", "/dev/dri/renderD128")
+    if mode in {"vaapi", "auto"} and Path(device).exists():
+        return ["-hwaccel", "vaapi", "-hwaccel_device", device]
+    if mode == "qsv":
+        return ["-hwaccel", "qsv"]
+    return []
+
+
+def run_ffmpeg_with_fallback(base_cmd: list[str], out: Path, timeout: int) -> bool:
+    prefixes = []
+    hw = ffmpeg_hw_prefix()
+    if hw:
+        prefixes.append(hw)
+    prefixes.append([])
+    for prefix in prefixes:
+        if out.exists():
+            try:
+                out.unlink()
+            except OSError:
+                pass
+        cmd = ["ffmpeg", "-y", *prefix, *base_cmd]
+        try:
+            proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+        except (subprocess.SubprocessError, OSError):
+            continue
+        if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
+            return True
+    return False
+
+
 def extract_video_frames(src: Path, out_dir: Path, frames: int) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs = []
@@ -1137,9 +1171,8 @@ def extract_video_frames(src: Path, out_dir: Path, frames: int) -> list[Path]:
         # fps expression samples across the duration without needing metadata parsing.
         vf = f"thumbnail,scale='min(640,iw)':-2"
         ss = str(max(0, i * 7 + 1))
-        cmd = ["ffmpeg", "-y", "-ss", ss, "-i", str(src), "-frames:v", "1", "-vf", vf, "-q:v", "4", str(out)]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
-        if out.exists():
+        base_cmd = ["-ss", ss, "-i", str(src), "-frames:v", "1", "-vf", vf, "-q:v", "4", str(out)]
+        if run_ffmpeg_with_fallback(base_cmd, out, 30):
             outputs.append(out)
     return outputs
 
@@ -1149,8 +1182,8 @@ def extract_image_thumb(src: Path, out_dir: Path) -> list[Path]:
     out = out_dir / "frame_01.jpg"
     if out.exists():
         return [out]
-    cmd = ["ffmpeg", "-y", "-i", str(src), "-frames:v", "1", "-vf", "scale='min(640,iw)':-2", "-q:v", "4", str(out)]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    base_cmd = ["-i", str(src), "-frames:v", "1", "-vf", "scale='min(640,iw)':-2", "-q:v", "4", str(out)]
+    run_ffmpeg_with_fallback(base_cmd, out, 20)
     return [out] if out.exists() else []
 
 

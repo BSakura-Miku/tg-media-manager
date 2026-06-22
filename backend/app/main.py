@@ -134,6 +134,24 @@ def health() -> dict:
     return {"ok": True}
 
 
+@app.get("/api/system/hardware")
+def api_system_hardware() -> dict:
+    def run(args: list[str]) -> str:
+        try:
+            return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=8).stdout[-4000:]
+        except Exception as exc:
+            return repr(exc)
+
+    return {
+        "ffmpeg_hwaccel": os.environ.get("FFMPEG_HWACCEL", ""),
+        "ffmpeg_hw_device": os.environ.get("FFMPEG_HW_DEVICE", ""),
+        "dri_exists": Path("/dev/dri").exists(),
+        "dri": run(["sh", "-lc", "ls -la /dev/dri 2>/dev/null || true"]),
+        "ffmpeg_hwaccels": run(["ffmpeg", "-hide_banner", "-hwaccels"]),
+        "vainfo": run(["sh", "-lc", "vainfo --display drm --device ${FFMPEG_HW_DEVICE:-/dev/dri/renderD128} 2>&1 | head -80 || true"]),
+    }
+
+
 @app.get("/api/summary")
 def api_summary() -> dict:
     return summary()
@@ -219,6 +237,45 @@ def run_core_command(command: list[str], timeout: int = 120) -> subprocess.Compl
     settings = default_settings()
     args = ["python", core_script_path(), "--root", settings["media_root"], "--output-root", settings["output_root"], *command]
     return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+
+
+def ffmpeg_hw_prefix() -> list[str]:
+    mode = os.environ.get("FFMPEG_HWACCEL", "").strip().lower()
+    if mode in {"", "none", "false", "0", "off"}:
+        return []
+    device = os.environ.get("FFMPEG_HW_DEVICE", "/dev/dri/renderD128")
+    if mode in {"vaapi", "auto"} and Path(device).exists():
+        return ["-hwaccel", "vaapi", "-hwaccel_device", device]
+    if mode == "qsv":
+        return ["-hwaccel", "qsv"]
+    return []
+
+
+def run_ffmpeg_thumbnail(src: Path, dest: Path, width: int = 800, timeout: int = 30) -> bool:
+    prefixes = []
+    hw = ffmpeg_hw_prefix()
+    if hw:
+        prefixes.append(hw)
+    prefixes.append([])
+    base_cmd = ["-ss", "00:00:02", "-i", str(src), "-frames:v", "1", "-vf", f"scale='min({width},iw)':-2", "-q:v", "4", str(dest)]
+    for prefix in prefixes:
+        if dest.exists():
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+        try:
+            proc = subprocess.run(
+                ["ffmpeg", "-y", *prefix, *base_cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout,
+            )
+        except (subprocess.SubprocessError, OSError):
+            continue
+        if proc.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+            return True
+    return False
 
 
 def default_settings() -> dict:
@@ -527,13 +584,7 @@ def api_media_thumbnail(media_id: int):
     if thumb.exists():
         return FileResponse(thumb, media_type="image/jpeg")
     thumb_dir.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(
-        ["ffmpeg", "-y", "-ss", "00:00:02", "-i", str(path), "-frames:v", "1", "-vf", "scale='min(800,iw)':-2", "-q:v", "4", str(thumb)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=30,
-    )
-    if proc.returncode == 0 and thumb.exists():
+    if run_ffmpeg_thumbnail(path, thumb, width=800, timeout=30):
         return FileResponse(thumb, media_type="image/jpeg")
     raise HTTPException(status_code=404, detail="Thumbnail not found")
 
@@ -638,13 +689,7 @@ def api_author_thumbnail(actor_name: str):
             if not video.is_file() or video.suffix.lower() not in video_exts:
                 continue
             thumb_dir.mkdir(parents=True, exist_ok=True)
-            proc = subprocess.run(
-                ["ffmpeg", "-y", "-ss", "00:00:02", "-i", str(video), "-frames:v", "1", "-vf", "scale='min(800,iw)':-2", "-q:v", "4", str(thumb)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=30,
-            )
-            if proc.returncode == 0 and thumb.exists():
+            if run_ffmpeg_thumbnail(video, thumb, width=800, timeout=30):
                 return FileResponse(thumb, media_type="image/jpeg")
 
     aliases = {row.get("face_group", ""): row.get("actor_name", "") for row in read_csv(root / "_MANIFESTS" / "face_aliases.csv")}

@@ -18,12 +18,16 @@ services:
       APP_PASSWORD: ${APP_PASSWORD:-}
       ENABLE_PERCEPTUAL_HASH: ${ENABLE_PERCEPTUAL_HASH:-false}
       ENABLE_QUICK_HASH: ${ENABLE_QUICK_HASH:-false}
+      FFMPEG_HWACCEL: ${FFMPEG_HWACCEL:-vaapi}
+      FFMPEG_HW_DEVICE: ${FFMPEG_HW_DEVICE:-/dev/dri/renderD128}
+    devices:
+      - /dev/dri:/dev/dri
     volumes:
       - /volume4/BS-Secondary/BS-Media2/BS-Lsp/Tgdownloads/LSP:/media
       - ./data:/data
       - ./models:/models
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/summary', timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
