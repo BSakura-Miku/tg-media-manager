@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import threading
+from pathlib import Path
+
+from .db import connect, get_settings
+
+
+ALLOWED_COMMANDS = {
+    "workflow-new-downloads": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["refresh-state"]],
+    "workflow-review-cleanup": [["normalize-organized"], ["classify-keywords"], ["organize-review"], ["refresh-state"]],
+    "workflow-face-balanced": [["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"]],
+    "workflow-vision-plan": [["extract-frames"], ["vision-scan"], ["apply-vision-labels"]],
+    "scan": ["scan"],
+    "analyze-filenames": ["analyze-filenames"],
+    "classify-keywords": ["classify-keywords"],
+    "organize-review": ["organize-review"],
+    "normalize-organized": ["normalize-organized"],
+    "refresh-state": ["refresh-state"],
+    "apply": ["apply"],
+    "apply-include-review": ["apply", "--include-review"],
+    "clean-empty-dirs": ["clean-empty-dirs"],
+    "dedupe-organized-dry-run": ["dedupe-organized"],
+    "dedupe-organized": ["dedupe-organized", "--apply"],
+    "extract-frames-sample": ["extract-frames", "--limit", "120"],
+    "extract-frames": ["extract-frames"],
+    "face-setup": ["face-setup"],
+    "face-scan-sample": ["face-scan", "--limit", "120"],
+    "face-scan": ["face-scan"],
+    "vision-scan-sample": ["vision-scan", "--limit", "120"],
+    "vision-scan": ["vision-scan"],
+    "face-cluster": ["face-cluster", "--threshold", "0.75"],
+    "face-cluster-balanced": ["face-cluster", "--threshold", "0.80"],
+    "face-cluster-relaxed": ["face-cluster", "--threshold", "0.90"],
+    "face-cluster-report": ["face-cluster-report"],
+    "apply-face-groups-dry-run": ["apply-face-groups"],
+    "apply-face-groups": ["apply-face-groups", "--apply"],
+    "apply-vision-labels-dry-run": ["apply-vision-labels"],
+    "apply-vision-labels": ["apply-vision-labels", "--apply"],
+}
+
+
+def core_script() -> Path:
+    configured = os.environ.get("CORE_SCRIPT")
+    if configured:
+        return Path(configured)
+    container_path = Path("/app/backend/core/tg_media_library.py")
+    if container_path.exists():
+        return container_path
+    return Path(__file__).resolve().parents[1] / "core" / "tg_media_library.py"
+
+
+def create_job(command: str) -> int:
+    if command not in ALLOWED_COMMANDS:
+        raise ValueError(f"Unsupported command: {command}")
+    with connect() as conn:
+        active = conn.execute("SELECT id, command, status FROM jobs WHERE status IN ('queued', 'running') ORDER BY id DESC LIMIT 1").fetchone()
+        if active is not None:
+            raise RuntimeError(f"Job #{active['id']} ({active['command']}) is still {active['status']}")
+        cur = conn.execute("INSERT INTO jobs (command, status, message) VALUES (?, 'queued', '')", (command,))
+        job_id = int(cur.lastrowid)
+    thread = threading.Thread(target=run_job, args=(job_id, command), daemon=True)
+    thread.start()
+    return job_id
+
+
+def run_job(job_id: int, command: str) -> None:
+    settings = get_settings()
+    media_root = settings.get("media_root") or os.environ.get("MEDIA_ROOT", "/media")
+    output_root = settings.get("output_root") or os.environ.get("MEDIA_OUTPUT_ROOT") or media_root
+    source_dirs = settings.get("source_dirs") or os.environ.get("MEDIA_SOURCE_DIRS", "")
+    steps = ALLOWED_COMMANDS[command]
+    if steps and isinstance(steps[0], str):
+        steps = [steps]
+    base_args = ["python", str(core_script()), "--root", media_root, "--output-root", output_root]
+    if source_dirs:
+        base_args.extend(["--source-dirs", source_dirs])
+    args = [*base_args, *steps[0]]
+    with connect() as conn:
+        message = " && ".join(" ".join([*base_args, *step]) for step in steps)
+        conn.execute("UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, message=? WHERE id=?", (message, job_id))
+    try:
+        stdout_parts = []
+        stderr_parts = []
+        returncode = 0
+        for step in steps:
+            step_args = [*base_args, *step]
+            proc = subprocess.run(step_args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
+            stdout_parts.append(f"$ {' '.join(step_args)}\n{proc.stdout}")
+            if proc.stderr:
+                stderr_parts.append(f"$ {' '.join(step_args)}\n{proc.stderr}")
+            returncode = proc.returncode
+            if proc.returncode != 0:
+                break
+        status = "done" if returncode == 0 else "failed"
+        with connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET status=?, progress=100, finished_at=CURRENT_TIMESTAMP, stdout=?, stderr=?, message=? WHERE id=?",
+                (status, "\n".join(stdout_parts)[-20000:], "\n".join(stderr_parts)[-20000:], f"exit {returncode}", job_id),
+            )
+    except Exception as exc:
+        with connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET status='failed', finished_at=CURRENT_TIMESTAMP, stderr=?, message=? WHERE id=?",
+                (repr(exc), "exception", job_id),
+            )

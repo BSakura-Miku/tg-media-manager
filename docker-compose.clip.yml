@@ -1,0 +1,19 @@
+services:
+  web:
+    image: tg-media-manager:clip
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.clip
+    environment:
+      MEDIA_ROOT: /media
+      MEDIA_OUTPUT_ROOT: /media
+      MEDIA_SOURCE_DIRS: ${MEDIA_SOURCE_DIRS:-}
+      BROWSE_ROOTS: /media,/library,/incoming
+      APP_DB: /data/tg_media_manager.sqlite3
+      MODEL_ROOT: /models
+      INSIGHTFACE_HOME: /models/insightface
+      TORCH_HOME: /models/torch
+    volumes:
+      - /tmp/bssecondary_mount/BS-Media2/BS-Lsp/Tgdownloads/LSP:/media
+      - ./data:/data
+      - ./models:/models

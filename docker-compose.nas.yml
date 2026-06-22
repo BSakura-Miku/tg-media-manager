@@ -1,0 +1,28 @@
+services:
+  tg-media-manager:
+    container_name: tg-media-manager
+    image: ${TG_MEDIA_MANAGER_IMAGE:-bsakuramiku/tg-media-manager:clip-amd64}
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      TZ: Asia/Shanghai
+      MEDIA_ROOT: /media
+      MEDIA_OUTPUT_ROOT: /media
+      MEDIA_SOURCE_DIRS: ${MEDIA_SOURCE_DIRS:-}
+      BROWSE_ROOTS: /media,/library,/incoming
+      APP_DB: /data/tg_media_manager.sqlite3
+      MODEL_ROOT: /models
+      INSIGHTFACE_HOME: /models/insightface
+      APP_PASSWORD: ${APP_PASSWORD:-}
+    volumes:
+      - /volume4/BS-Secondary/BS-Media2/BS-Lsp/Tgdownloads/LSP:/media
+      - ./data:/data
+      - ./models:/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/summary', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

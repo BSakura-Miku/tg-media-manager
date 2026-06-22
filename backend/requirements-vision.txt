@@ -1,0 +1,7 @@
+# Optional local-only face stack. Build with Dockerfile.vision or install into a venv/container.
+# InsightFace is preferred for face detection + embeddings.
+numpy>=1.26
+pillow>=10
+opencv-python-headless>=4.9
+onnxruntime>=1.17
+insightface>=0.7.3
