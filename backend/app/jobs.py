@@ -6,11 +6,12 @@ import threading
 from pathlib import Path
 
 from .db import connect, get_settings
+from .metadata import rebuild_metadata_index
 
 
 ALLOWED_COMMANDS = {
-    "workflow-new-downloads": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["refresh-state"]],
-    "workflow-review-cleanup": [["normalize-organized"], ["classify-keywords"], ["organize-review"], ["refresh-state"]],
+    "workflow-new-downloads": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["refresh-state"], ["__metadata_index__"]],
+    "workflow-review-cleanup": [["normalize-organized"], ["classify-keywords"], ["organize-review"], ["refresh-state"], ["__metadata_index__"]],
     "workflow-face-balanced": [["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"]],
     "workflow-vision-plan": [["extract-frames"], ["vision-scan"], ["apply-vision-labels"]],
     "scan": ["scan"],
@@ -39,6 +40,7 @@ ALLOWED_COMMANDS = {
     "apply-face-groups": ["apply-face-groups", "--apply"],
     "apply-vision-labels-dry-run": ["apply-vision-labels"],
     "apply-vision-labels": ["apply-vision-labels", "--apply"],
+    "index-metadata": ["__metadata_index__"],
 }
 
 
@@ -77,23 +79,27 @@ def run_job(job_id: int, command: str) -> None:
     base_args = ["python", str(core_script()), "--root", media_root, "--output-root", output_root]
     if source_dirs:
         base_args.extend(["--source-dirs", source_dirs])
-    args = [*base_args, *steps[0]]
     with connect() as conn:
-        message = " && ".join(" ".join([*base_args, *step]) for step in steps)
+        message = " && ".join("index-metadata" if step == ["__metadata_index__"] else " ".join([*base_args, *step]) for step in steps)
         conn.execute("UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, message=? WHERE id=?", (message, job_id))
     try:
         stdout_parts = []
         stderr_parts = []
         returncode = 0
         for step in steps:
-            step_args = [*base_args, *step]
-            proc = subprocess.run(step_args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
-            stdout_parts.append(f"$ {' '.join(step_args)}\n{proc.stdout}")
-            if proc.stderr:
-                stderr_parts.append(f"$ {' '.join(step_args)}\n{proc.stderr}")
-            returncode = proc.returncode
-            if proc.returncode != 0:
-                break
+            if step == ["__metadata_index__"]:
+                result = rebuild_metadata_index(Path(output_root))
+                stdout_parts.append(f"$ index-metadata\n{result}")
+                returncode = 0
+            else:
+                step_args = [*base_args, *step]
+                proc = subprocess.run(step_args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
+                stdout_parts.append(f"$ {' '.join(step_args)}\n{proc.stdout}")
+                if proc.stderr:
+                    stderr_parts.append(f"$ {' '.join(step_args)}\n{proc.stderr}")
+                returncode = proc.returncode
+                if proc.returncode != 0:
+                    break
         status = "done" if returncode == 0 else "failed"
         with connect() as conn:
             conn.execute(

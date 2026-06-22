@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from .db import connect, get_settings, init_db, rows_to_dicts, save_settings
 from .jobs import ALLOWED_COMMANDS, create_job
 from .media_stats import summary
+from .metadata import media_detail, media_query, mime_for, rebuild_metadata_index
 
 
 app = FastAPI(title="TG Media Manager")
@@ -395,6 +396,72 @@ def api_search(
             if len(results) >= limit:
                 return {"query": q, "source": source, "limit": limit, "results": results}
     return {"query": q, "source": source, "limit": limit, "results": results}
+
+
+@app.get("/api/media")
+def api_media(
+    q: str = Query("", max_length=200),
+    media_type: str = Query("all"),
+    tag: str = Query("", max_length=120),
+    author: str = Query("", max_length=120),
+    limit: int = Query(80, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    return media_query(q=q.strip(), media_type=media_type, tag=tag.strip(), author=author.strip(), limit=limit, offset=offset)
+
+
+@app.post("/api/media/rebuild-index")
+def api_rebuild_media_index() -> dict:
+    return rebuild_metadata_index(output_root())
+
+
+def checked_media_detail(media_id: int) -> dict:
+    detail = media_detail(media_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Media not found")
+    path = Path(detail["path"]).resolve()
+    try:
+        path.relative_to(output_root().resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Media path is outside library root") from exc
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Media file missing")
+    detail["path"] = str(path)
+    return detail
+
+
+@app.get("/api/media/{media_id}")
+def api_media_detail(media_id: int) -> dict:
+    return checked_media_detail(media_id)
+
+
+@app.get("/api/media/{media_id}/file")
+def api_media_file(media_id: int):
+    detail = checked_media_detail(media_id)
+    path = Path(detail["path"])
+    return FileResponse(path, media_type=mime_for(path, detail.get("media_type", "")))
+
+
+@app.get("/api/media/{media_id}/thumbnail")
+def api_media_thumbnail(media_id: int):
+    detail = checked_media_detail(media_id)
+    path = Path(detail["path"])
+    if detail.get("media_type") == "photo":
+        return FileResponse(path, media_type=mime_for(path, "photo"))
+    thumb_dir = output_root() / "_MANIFESTS" / "media_thumbs"
+    thumb = thumb_dir / f"{media_id}.jpg"
+    if thumb.exists():
+        return FileResponse(thumb, media_type="image/jpeg")
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        ["ffmpeg", "-y", "-ss", "00:00:02", "-i", str(path), "-frames:v", "1", "-vf", "scale='min(800,iw)':-2", "-q:v", "4", str(thumb)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+    )
+    if proc.returncode == 0 and thumb.exists():
+        return FileResponse(thumb, media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail="Thumbnail not found")
 
 
 @app.get("/api/logs")

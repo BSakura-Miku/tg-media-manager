@@ -41,6 +41,76 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS media_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT NOT NULL UNIQUE,
+                root TEXT NOT NULL DEFAULT '',
+                relative_path TEXT NOT NULL DEFAULT '',
+                filename TEXT NOT NULL,
+                original_name TEXT NOT NULL DEFAULT '',
+                ext TEXT NOT NULL DEFAULT '',
+                media_type TEXT NOT NULL DEFAULT 'other',
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                mtime REAL NOT NULL DEFAULT 0,
+                sha256 TEXT NOT NULL DEFAULT '',
+                hash8 TEXT NOT NULL DEFAULT '',
+                width INTEGER,
+                height INTEGER,
+                duration REAL,
+                resolution TEXT NOT NULL DEFAULT '',
+                author TEXT NOT NULL DEFAULT '',
+                person TEXT NOT NULL DEFAULT '',
+                platform TEXT NOT NULL DEFAULT '',
+                series TEXT NOT NULL DEFAULT '',
+                code TEXT NOT NULL DEFAULT '',
+                scene TEXT NOT NULL DEFAULT '',
+                quality TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                normalized_path TEXT NOT NULL DEFAULT '',
+                risk_state TEXT NOT NULL DEFAULT 'normal',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_media_items_type ON media_items(media_type);
+            CREATE INDEX IF NOT EXISTS idx_media_items_author ON media_items(author);
+            CREATE INDEX IF NOT EXISTS idx_media_items_source ON media_items(source);
+            CREATE INDEX IF NOT EXISTS idx_media_items_quality ON media_items(quality);
+            CREATE INDEX IF NOT EXISTS idx_media_items_risk ON media_items(risk_state);
+
+            CREATE TABLE IF NOT EXISTS media_tags (
+                media_id INTEGER NOT NULL,
+                tag TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 1.0,
+                source TEXT NOT NULL DEFAULT 'auto',
+                state TEXT NOT NULL DEFAULT 'confirmed',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (media_id, tag, source),
+                FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_media_tags_tag ON media_tags(tag);
+            CREATE INDEX IF NOT EXISTS idx_media_tags_category ON media_tags(category);
+            CREATE INDEX IF NOT EXISTS idx_media_tags_state ON media_tags(state);
+
+            CREATE TABLE IF NOT EXISTS media_operations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                media_id INTEGER,
+                operation TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS parser_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                pattern TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
 

@@ -35,6 +35,7 @@ const i18n = {
     dashboard: 'Dashboard',
     jobs: 'Jobs',
     library: 'Library',
+    virtualLibrary: 'Virtual Library',
     authors: 'Authors',
     faces: 'Face Groups',
     logs: 'Logs',
@@ -156,6 +157,18 @@ const i18n = {
     workflowConfirm: 'This will run several jobs in sequence. Continue?',
     libraryHelp: 'The Library page shows manifest search results. Pick a source above, search by actor, keyword, path, hash, FaceGroup, or scene label.',
     libraryQuickSearch: 'Quick search',
+    rebuildIndex: 'Rebuild index',
+    mediaBrowser: 'Media browser',
+    mediaSearch: 'Search media, tags, authors',
+    allMedia: 'All media',
+    photosOnly: 'Photos',
+    videosOnly: 'Videos',
+    openMedia: 'Open',
+    mediaDetail: 'Media detail',
+    originalName: 'Original name',
+    filePath: 'File path',
+    tags: 'Tags',
+    noIndexHint: 'No indexed media yet. Run Rebuild index after scan/apply.',
     mergeIntoLeft: 'Merge into left',
     mergeIntoRight: 'Merge into right',
     mergeSameName: 'Merge same-name groups',
@@ -171,6 +184,7 @@ const i18n = {
       'workflow-review-cleanup': 'Review Cleanup',
       'workflow-face-balanced': 'Rebuild Faces',
       'workflow-vision-plan': 'Scene Plan',
+      'index-metadata': 'Rebuild Index',
       scan: 'Scan',
       'analyze-filenames': 'Analyze Names',
       'classify-keywords': 'Keywords',
@@ -200,6 +214,7 @@ const i18n = {
       'workflow-review-cleanup': 'Revisit Unknown/NeedsManualCheck and exact duplicates.',
       'workflow-face-balanced': 'Rebuild face index and same-face groups conservatively.',
       'workflow-vision-plan': 'Run local image scene labels and create a dry-run plan.',
+      'index-metadata': 'Import organized files and manifests into the virtual SQLite library.',
       scan: 'Read source folders and write manifest_all.csv plus move_plan.csv. Does not move by itself.',
       'analyze-filenames': 'Mine filename words, actor candidates, and noisy tokens.',
       'classify-keywords': 'Move obvious Unknown items into keyword buckets.',
@@ -232,6 +247,7 @@ const i18n = {
     dashboard: '概览',
     jobs: '任务',
     library: '媒体库',
+    virtualLibrary: '虚拟媒体库',
     authors: '作者',
     faces: '人脸组',
     logs: '日志',
@@ -353,6 +369,18 @@ const i18n = {
     workflowConfirm: '这会连续运行多个任务，继续？',
     libraryHelp: '媒体库页是清单搜索结果页：在上方选择来源，可以按人物、关键词、路径、hash、人脸组、场景标签搜索。',
     libraryQuickSearch: '快捷搜索',
+    rebuildIndex: '重建索引',
+    mediaBrowser: '媒体浏览',
+    mediaSearch: '搜索媒体、标签、作者',
+    allMedia: '全部媒体',
+    photosOnly: '照片',
+    videosOnly: '视频',
+    openMedia: '打开',
+    mediaDetail: '媒体详情',
+    originalName: '原始文件名',
+    filePath: '文件路径',
+    tags: '标签',
+    noIndexHint: '还没有索引媒体。扫描/整理后先点重建索引。',
     mergeIntoLeft: '合并到左边',
     mergeIntoRight: '合并到右边',
     mergeSameName: '合并同名人脸组',
@@ -368,6 +396,7 @@ const i18n = {
       'workflow-review-cleanup': '清理 Review',
       'workflow-face-balanced': '重建人脸组',
       'workflow-vision-plan': '场景识别计划',
+      'index-metadata': '重建索引',
       scan: '扫描清单',
       'analyze-filenames': '分析文件名',
       'classify-keywords': '关键词归类',
@@ -397,6 +426,7 @@ const i18n = {
       'workflow-review-cleanup': '重新整理 Unknown/NeedsManualCheck，并做精确去重。',
       'workflow-face-balanced': '重新抽帧、人脸扫描、保守聚类，生成新的人脸计划。',
       'workflow-vision-plan': '本地识别画面场景/标签，只生成预览计划。',
+      'index-metadata': '把已整理文件和清单导入 SQLite 虚拟媒体库。',
       scan: '读取来源目录，生成 manifest_all.csv 和 move_plan.csv；本身不移动。',
       'analyze-filenames': '挖掘文件名里的人名、关键词、噪声词。',
       'classify-keywords': '把明显的 Unknown 文件移动到关键词分类。',
@@ -429,6 +459,7 @@ const commands = [
   ['workflow-review-cleanup', 'Review Cleanup', Archive, 'Recommended: normalize, classify review, dedupe, refresh'],
   ['workflow-face-balanced', 'Rebuild Faces', Users, 'Recommended: full frames, face scan, balanced cluster, report, plan'],
   ['workflow-vision-plan', 'Scene Plan', Camera, 'Recommended: full frames, OpenCLIP labels, dry-run vision plan'],
+  ['index-metadata', 'Rebuild Index', Database, 'Import organized files into the virtual media library'],
   ['scan', 'Scan', Search, 'Rebuild manifests and move plan'],
   ['analyze-filenames', 'Analyze Names', FileSearch, 'Mine actor and keyword signals'],
   ['classify-keywords', 'Keywords', Tags, 'Move clear Unknown items into keyword buckets'],
@@ -514,6 +545,7 @@ function App() {
   const [query, setQuery] = useState('');
   const [source, setSource] = useState('all');
   const [results, setResults] = useState([]);
+  const [mediaResults, setMediaResults] = useState({ total: 0, items: [] });
   const [authors, setAuthors] = useState([]);
   const [faces, setFaces] = useState([]);
   const [faceSuggestions, setFaceSuggestions] = useState([]);
@@ -560,6 +592,7 @@ function App() {
 
   useEffect(() => {
     refresh().catch(exc => setError(exc.message));
+    loadMedia().catch(() => {});
     const id = setInterval(() => refresh().catch(() => {}), 4000);
     return () => clearInterval(id);
   }, []);
@@ -608,6 +641,20 @@ function App() {
     } catch (exc) {
       setError(exc.message);
     }
+  }
+
+  async function loadMedia(params = {}) {
+    const search = new URLSearchParams({
+      q: params.q || '',
+      media_type: params.media_type || 'all',
+      tag: params.tag || '',
+      author: params.author || '',
+      limit: String(params.limit || 80),
+      offset: String(params.offset || 0),
+    });
+    const data = await api(`/api/media?${search.toString()}`);
+    setMediaResults(data);
+    return data;
   }
 
   async function saveSettings(next) {
@@ -786,7 +833,7 @@ function App() {
         )}
 
         {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} setActive={setActive} t={t} /></section>}
-        {active === 'library' && <LibraryPanel results={results} performSearch={performSearch} setQuery={setQuery} setSource={setSource} t={t} />}
+        {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} loadMedia={loadMedia} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} t={t} />}
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
@@ -922,7 +969,9 @@ function LogPanel({ selectedJob, jobLog, start, setActive, t }) {
   return <div className="panel"><div className="panelHead"><h2>{selectedJob ? `Job #${selectedJob.id}` : t.jobLog}</h2><span>{selectedJob?.status || t.selectJob}</span></div>{!selectedJob ? <Empty label={t.selectJobHint} /> : <div className="logBlock"><div className="list"><div className="row"><span>{t.command}</span><strong>{selectedJob.command}</strong></div><div className="row"><span>{t.started}</span><strong>{selectedJob.started_at || '-'}</strong></div><div className="row"><span>{t.finished}</span><strong>{selectedJob.finished_at || '-'}</strong></div></div>{next && <div className="hintBox"><strong>{t.jobNextStep}</strong><span>{next}</span>{actions.length > 0 && <div className="nextActions">{actions.map(([label, action]) => <button key={label} onClick={action}><Play size={15} />{label}</button>)}</div>}</div>}<h3>stdout</h3><pre>{jobLog?.stdout || '(empty)'}</pre><h3>stderr</h3><pre>{jobLog?.stderr || '(empty)'}</pre></div>}</div>;
 }
 
-function LibraryPanel({ results, performSearch, setQuery, setSource, t }) {
+function LibraryPanel({ results, mediaResults, loadMedia, start, performSearch, setQuery, setSource, t }) {
+  const [mediaQuery, setMediaQuery] = useState('');
+  const [mediaType, setMediaType] = useState('all');
   const quick = [
     ['filename_words', 'JK'],
     ['face_merge_suggestions', 'FaceGroup'],
@@ -934,8 +983,26 @@ function LibraryPanel({ results, performSearch, setQuery, setSource, t }) {
     setQuery(value);
     performSearch(value, src);
   }
+  function runMediaSearch(event) {
+    event?.preventDefault();
+    loadMedia({ q: mediaQuery, media_type: mediaType });
+  }
   return (
     <>
+      <section className="panel">
+        <div className="panelHead"><h2>{t.virtualLibrary}</h2><button className="panelButton" onClick={() => start('index-metadata')}><Database size={16} />{t.rebuildIndex}</button><span>{mediaResults.total || 0}</span></div>
+        <div className="hintBox"><span>{t.noIndexHint}</span></div>
+        <form className="mediaSearchBar" onSubmit={runMediaSearch}>
+          <select value={mediaType} onChange={event => { setMediaType(event.target.value); loadMedia({ q: mediaQuery, media_type: event.target.value }); }}>
+            <option value="all">{t.allMedia}</option>
+            <option value="photo">{t.photosOnly}</option>
+            <option value="video">{t.videosOnly}</option>
+          </select>
+          <input value={mediaQuery} onChange={event => setMediaQuery(event.target.value)} placeholder={t.mediaSearch} />
+          <button type="submit"><Search size={16} />{t.searchResults}</button>
+        </form>
+        <MediaGrid items={mediaResults.items || []} loadMedia={loadMedia} t={t} />
+      </section>
       <section className="panel">
         <div className="panelHead"><h2>{t.library}</h2><span>{t.libraryQuickSearch}</span></div>
         <div className="hintBox"><span>{t.libraryHelp}</span></div>
@@ -943,6 +1010,69 @@ function LibraryPanel({ results, performSearch, setQuery, setSource, t }) {
       </section>
       <section className="panel"><div className="panelHead"><h2>{t.searchResults}</h2><span>{results.length} rows</span></div><ResultsTable rows={results} t={t} /></section>
     </>
+  );
+}
+
+function MediaGrid({ items, t }) {
+  const [selected, setSelected] = useState(null);
+  const [detail, setDetail] = useState(null);
+  async function open(item) {
+    setSelected(item);
+    const data = await api(`/api/media/${item.id}`);
+    setDetail(data);
+  }
+  if (!items?.length) return <Empty label={t.noRows} />;
+  return (
+    <>
+      <div className="mediaGrid">
+        {items.map(item => (
+          <button className="mediaCard" key={item.id} onClick={() => open(item)}>
+            <div className="mediaThumb">
+              <img src={`/api/media/${item.id}/thumbnail`} alt={item.filename} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} />
+              <span>{item.media_type === 'video' ? 'VID' : 'IMG'}</span>
+            </div>
+            <div className="mediaMeta">
+              <strong>{item.author || item.person || item.filename}</strong>
+              <p>{item.filename}</p>
+              <div className="faceStats">
+                <span>{item.media_type}</span>
+                {item.quality && <span>{item.quality}</span>}
+                {item.scene && <span>{item.scene}</span>}
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+      {selected && <MediaViewer item={selected} detail={detail} close={() => { setSelected(null); setDetail(null); }} t={t} />}
+    </>
+  );
+}
+
+function MediaViewer({ item, detail, close, t }) {
+  const data = detail || item;
+  const tags = Array.isArray(data.tags) ? data.tags : String(data.tags || '').split(',').filter(Boolean).map(tag => ({ tag }));
+  return (
+    <div className="viewerBackdrop" role="dialog" aria-modal="true">
+      <div className="viewerPanel">
+        <div className="viewerHead"><h2>{t.mediaDetail}</h2><button className="iconButton" onClick={close}><XCircle size={18} /></button></div>
+        <div className="viewerBody">
+          <div className="viewerMedia">
+            {data.media_type === 'video' ? <video src={`/api/media/${data.id}/file`} controls poster={`/api/media/${data.id}/thumbnail`} /> : <img src={`/api/media/${data.id}/file`} alt={data.filename} />}
+          </div>
+          <div className="viewerInfo">
+            <div className="list">
+              <div className="row"><span>{t.authorName}</span><strong>{data.author || '-'}</strong></div>
+              <div className="row"><span>{t.originalName}</span><strong>{data.original_name || data.filename}</strong></div>
+              <div className="row"><span>{t.filePath}</span><strong>{data.relative_path || data.filename}</strong></div>
+              <div className="row"><span>{t.thumbnail}</span><strong>{data.resolution || data.quality || '-'}</strong></div>
+              <div className="row"><span>{t.media}</span><strong>{data.media_type}</strong></div>
+            </div>
+            <h3>{t.tags}</h3>
+            <div className="tagCloud">{tags.map(tag => <span key={`${tag.tag}-${tag.source || ''}`}>{tag.tag}{tag.confidence ? ` ${Math.round(Number(tag.confidence) * 100)}%` : ''}</span>)}</div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
