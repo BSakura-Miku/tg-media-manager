@@ -493,6 +493,8 @@ def upsert_similarity_group(conn, kind: str, signature: str, members: list[tuple
 def rebuild_similarity_index(root: Path | None = None) -> dict:
     init_db()
     root = root or output_root()
+    enable_perceptual = os.environ.get("ENABLE_PERCEPTUAL_HASH", "false").lower() in {"1", "true", "yes", "on"}
+    enable_quick_hash = os.environ.get("ENABLE_QUICK_HASH", "false").lower() in {"1", "true", "yes", "on"}
     exact: defaultdict[str, list[dict]] = defaultdict(list)
     perceptual: defaultdict[str, list[dict]] = defaultdict(list)
     video_fingerprints: defaultdict[str, list[dict]] = defaultdict(list)
@@ -504,14 +506,14 @@ def rebuild_similarity_index(root: Path | None = None) -> dict:
             path = Path(row["path"])
             if not path.exists():
                 continue
-            exact_sig = row.get("sha256") or quick_file_hash(path)
+            exact_sig = row.get("sha256") or (quick_file_hash(path) if enable_quick_hash else "")
             if exact_sig:
                 exact[f"{row['size_bytes']}:{exact_sig}"].append(row)
-            if row["media_type"] == "photo":
+            if enable_perceptual and row["media_type"] == "photo":
                 sig = dhash(path)
                 if sig:
                     perceptual[sig].append(row)
-            elif row["media_type"] == "video":
+            elif enable_perceptual and row["media_type"] == "video":
                 frames = conn.execute(
                     "SELECT representative_frame FROM media_timeline_segments WHERE media_id=? AND representative_frame != '' ORDER BY start_seconds LIMIT 3",
                     (row["id"],),
@@ -536,8 +538,8 @@ def rebuild_similarity_index(root: Path | None = None) -> dict:
                 upsert_similarity_group(conn, kind, signature, payload)
                 groups += 1
                 members += len(payload)
-        conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("rebuild_similarity_index", f"groups={groups} members={members} root={root}"))
-    return {"groups": groups, "members": members, "root": str(root)}
+        conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("rebuild_similarity_index", f"groups={groups} members={members} perceptual={enable_perceptual} quick_hash={enable_quick_hash} root={root}"))
+    return {"groups": groups, "members": members, "perceptual": enable_perceptual, "quick_hash": enable_quick_hash, "root": str(root)}
 
 
 def similarity_groups(limit: int = 100) -> dict:

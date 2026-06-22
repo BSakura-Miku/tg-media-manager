@@ -16,6 +16,8 @@ services:
       MODEL_ROOT: /models
       INSIGHTFACE_HOME: /models/insightface
       APP_PASSWORD: ${APP_PASSWORD:-}
+      ENABLE_PERCEPTUAL_HASH: ${ENABLE_PERCEPTUAL_HASH:-false}
+      ENABLE_QUICK_HASH: ${ENABLE_QUICK_HASH:-false}
     volumes:
       - /volume4/BS-Secondary/BS-Media2/BS-Lsp/Tgdownloads/LSP:/media
       - ./data:/data
