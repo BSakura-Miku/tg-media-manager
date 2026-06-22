@@ -114,7 +114,7 @@ async def optional_password_gate(request: Request, call_next):
     if not password:
         return await call_next(request)
     path = request.url.path
-    if path.startswith("/api/auth") or path.startswith("/assets") or path == "/api/health":
+    if path.startswith("/api/auth") or path.startswith("/assets") or path in {"/api/health", "/api/version"}:
         return await call_next(request)
     cookie = request.cookies.get("tgmm_auth", "")
     if hmac.compare_digest(cookie, auth_token()):
@@ -150,6 +150,15 @@ def api_auth_logout(response: Response) -> dict:
 @app.get("/api/health")
 def health() -> dict:
     return {"ok": True}
+
+
+@app.get("/api/version")
+def api_version() -> dict:
+    return {
+        "version": os.environ.get("APP_VERSION", "dev"),
+        "image": os.environ.get("APP_IMAGE", ""),
+        "built_at": os.environ.get("APP_BUILT_AT", ""),
+    }
 
 
 @app.get("/api/system/hardware")

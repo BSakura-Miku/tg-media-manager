@@ -84,6 +84,7 @@ aside { border-right: 1px solid var(--line); padding: 20px 14px; background: var
 .brand { display: flex; gap: 10px; align-items: center; padding: 8px 10px 22px; }
 .brand strong { display: block; font-size: 15px; }
 .brand span { color: var(--muted); font-size: 12px; }
+.brand small { display: block; margin-top: 3px; color: var(--accent); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
 nav { display: grid; gap: 4px; }
 nav button {
   justify-content: flex-start;

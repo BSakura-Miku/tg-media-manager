@@ -34,6 +34,7 @@ const i18n = {
   en: {
     app: 'TG Media',
     manager: 'Manager',
+    version: 'Version',
     title: 'Media Operations',
     dashboard: 'Dashboard',
     jobs: 'Jobs',
@@ -278,6 +279,7 @@ const i18n = {
   'zh-CN': {
     app: 'TG 媒体',
     manager: '管理器',
+    version: '版本',
     title: '媒体整理',
     dashboard: '概览',
     jobs: '任务',
@@ -590,12 +592,12 @@ function Empty({ label }) {
   return <div className="empty">{label}</div>;
 }
 
-function LoginScreen({ login, error, theme, setTheme, t }) {
+function LoginScreen({ login, error, theme, setTheme, t, version }) {
   const [password, setPassword] = useState('');
   return (
     <main className="loginShell">
       <section className="loginPanel">
-        <div className="brand"><Bot size={22} /><div><strong>{t.app}</strong><span>{t.manager}</span></div></div>
+        <div className="brand"><Bot size={22} /><div><strong>{t.app}</strong><span>{t.manager}</span>{version?.version && <small>{t.version} {version.version}</small>}</div></div>
         <h1>{t.login}</h1>
         <p>{t.privacyCopy}</p>
         {error && <div className="alert">{error}</div>}
@@ -652,12 +654,13 @@ function App() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [auth, setAuth] = useState({ enabled: false, authenticated: true, local_only: true });
+  const [version, setVersion] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'zh-CN');
   const t = i18n[language] || i18n['zh-CN'];
 
   async function refresh() {
-    const [s, j, a, f, suggestions, cfg, mon] = await Promise.all([
+    const [s, j, a, f, suggestions, cfg, mon, ver] = await Promise.all([
       api('/api/summary'),
       api('/api/jobs'),
       api('/api/authors').catch(() => []),
@@ -665,6 +668,7 @@ function App() {
       api('/api/face-merge-suggestions').catch(() => []),
       api('/api/settings').catch(() => null),
       api('/api/monitor').catch(() => null),
+      api('/api/version').catch(() => null),
     ]);
     setSummary(s);
     setJobs(j);
@@ -672,6 +676,7 @@ function App() {
     setFaces(f);
     setFaceSuggestions(suggestions);
     setMonitor(mon);
+    if (ver) setVersion(ver);
     if (cfg) {
       setSettings(cfg);
       setBrowsePath(cfg.media_root || '/media');
@@ -690,6 +695,7 @@ function App() {
   useEffect(() => {
     api('/api/auth/status').then(status => {
       setAuth(status);
+      api('/api/version').then(setVersion).catch(() => {});
       if (status.authenticated) {
         refresh().catch(exc => setError(exc.message));
         loadMedia().catch(() => {});
@@ -927,13 +933,13 @@ function App() {
   const hasRunning = useMemo(() => jobs.some(job => job.status === 'running' || job.status === 'queued'), [jobs]);
 
   if (auth.enabled && !auth.authenticated) {
-    return <LoginScreen login={login} error={error} theme={theme} setTheme={setTheme} t={t} />;
+    return <LoginScreen login={login} error={error} theme={theme} setTheme={setTheme} t={t} version={version} />;
   }
 
   return (
     <main>
       <aside>
-        <div className="brand"><Bot size={22} /><div><strong>{t.app}</strong><span>{t.manager}</span></div></div>
+        <div className="brand"><Bot size={22} /><div><strong>{t.app}</strong><span>{t.manager}</span>{version?.version && <small>{t.version} {version.version}</small>}</div></div>
         <nav>{nav.map(([id, labelKey, Icon]) => <button className={active === id ? 'active' : ''} key={id} onClick={() => setActive(id)}><Icon size={16} /> {t[labelKey]}</button>)}</nav>
       </aside>
 
