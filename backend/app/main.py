@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from .db import connect, get_settings, init_db, rows_to_dicts, save_settings
 from .jobs import ALLOWED_COMMANDS, create_job
 from .media_stats import summary
-from .metadata import media_detail, media_query, mime_for, rebuild_metadata_index
+from .metadata import media_detail, media_query, mime_for, rebuild_metadata_index, rebuild_similarity_index, similarity_groups
 
 
 app = FastAPI(title="TG Media Manager")
@@ -413,6 +413,16 @@ def api_media(
 @app.post("/api/media/rebuild-index")
 def api_rebuild_media_index() -> dict:
     return rebuild_metadata_index(output_root())
+
+
+@app.post("/api/media/rebuild-similarity")
+def api_rebuild_similarity() -> dict:
+    return rebuild_similarity_index(output_root())
+
+
+@app.get("/api/media/similarity-groups")
+def api_similarity_groups(limit: int = Query(100, ge=1, le=300)) -> dict:
+    return similarity_groups(limit=limit)
 
 
 def checked_media_detail(media_id: int) -> dict:

@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 
 from .db import connect, get_settings
-from .metadata import import_vision_outputs, rebuild_metadata_index
+from .metadata import import_vision_outputs, rebuild_metadata_index, rebuild_similarity_index
 
 
 ALLOWED_COMMANDS = {
@@ -42,6 +42,7 @@ ALLOWED_COMMANDS = {
     "apply-vision-labels-dry-run": ["apply-vision-labels"],
     "apply-vision-labels": ["apply-vision-labels", "--apply"],
     "index-metadata": ["__metadata_index__"],
+    "index-similarity": ["__similarity_index__"],
 }
 
 
@@ -82,7 +83,10 @@ def run_job(job_id: int, command: str) -> None:
         base_args.extend(["--source-dirs", source_dirs])
     with connect() as conn:
         message = " && ".join(
-            "index-metadata" if step == ["__metadata_index__"] else "index-vision" if step == ["__vision_index__"] else " ".join([*base_args, *step])
+            "index-metadata" if step == ["__metadata_index__"] else
+            "index-vision" if step == ["__vision_index__"] else
+            "index-similarity" if step == ["__similarity_index__"] else
+            " ".join([*base_args, *step])
             for step in steps
         )
         conn.execute("UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, message=? WHERE id=?", (message, job_id))
@@ -98,6 +102,10 @@ def run_job(job_id: int, command: str) -> None:
             elif step == ["__vision_index__"]:
                 result = import_vision_outputs(Path(output_root))
                 stdout_parts.append(f"$ index-vision\n{result}")
+                returncode = 0
+            elif step == ["__similarity_index__"]:
+                result = rebuild_similarity_index(Path(output_root))
+                stdout_parts.append(f"$ index-similarity\n{result}")
                 returncode = 0
             else:
                 step_args = [*base_args, *step]

@@ -88,6 +88,12 @@ select, input {
 .panel { padding: 14px; margin-bottom: 12px; }
 .panelHead { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
 .panelHead span { color: var(--muted); font-size: 12px; }
+.panelActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
 .commandGrid { display: grid; grid-template-columns: repeat(5, minmax(132px, 1fr)); gap: 8px; }
 .workflowGrid { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 10px; }
 .workflowCard {
@@ -174,6 +180,62 @@ select, input {
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
 }
+.similarityGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+.similarityCard {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.similarityHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.similarityHead strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.similarityHead span {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+.similarityItems {
+  display: grid;
+  gap: 7px;
+}
+.similarityItem {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+.similarityItem img {
+  width: 58px;
+  height: 42px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+}
+.similarityItem strong,
+.similarityItem span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.similarityItem strong { color: var(--soft); }
+.similarityItem span { color: var(--muted); }
 .mediaCard {
   min-height: 276px;
   display: grid;
@@ -752,6 +814,8 @@ tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); col
   .twoCol, .jobsLayout, .settingsLayout { grid-template-columns: 1fr; }
   header { align-items: flex-start; flex-direction: column; }
   .headerActions { min-width: 0; width: 100%; }
+  .panelHead { flex-wrap: wrap; }
+  .panelActions { width: 100%; margin-left: 0; }
 }
 
 @media (max-width: 760px) {

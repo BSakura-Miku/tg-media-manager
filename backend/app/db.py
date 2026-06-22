@@ -119,6 +119,28 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_media_timeline_media ON media_timeline_segments(media_id);
 
+            CREATE TABLE IF NOT EXISTS similarity_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                score REAL NOT NULL DEFAULT 1.0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(kind, signature)
+            );
+
+            CREATE TABLE IF NOT EXISTS similarity_members (
+                group_id INTEGER NOT NULL,
+                media_id INTEGER NOT NULL,
+                role TEXT NOT NULL DEFAULT 'candidate',
+                score REAL NOT NULL DEFAULT 1.0,
+                detail TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (group_id, media_id),
+                FOREIGN KEY (group_id) REFERENCES similarity_groups(id) ON DELETE CASCADE,
+                FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_similarity_members_media ON similarity_members(media_id);
+
             CREATE TABLE IF NOT EXISTS parser_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,

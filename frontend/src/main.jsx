@@ -57,6 +57,7 @@ const i18n = {
     faceMergeSuggestions: 'Face Merge Suggestions',
     visionPlan: 'Vision Plan',
     exactDuplicates: 'Exact Duplicates',
+    similarityGroups: 'Similarity Groups',
     wordSignals: 'Word Signals',
     runJobs: 'Run Jobs',
     commandGuide: 'Command Guide',
@@ -158,6 +159,7 @@ const i18n = {
     libraryHelp: 'The Library page shows manifest search results. Pick a source above, search by actor, keyword, path, hash, FaceGroup, or scene label.',
     libraryQuickSearch: 'Quick search',
     rebuildIndex: 'Rebuild index',
+    rebuildSimilarity: 'Rebuild similarity',
     mediaBrowser: 'Media browser',
     mediaSearch: 'Search media, tags, authors',
     allMedia: 'All media',
@@ -187,6 +189,7 @@ const i18n = {
       'workflow-face-balanced': 'Rebuild Faces',
       'workflow-vision-plan': 'Scene Plan',
       'index-metadata': 'Rebuild Index',
+      'index-similarity': 'Similarity Index',
       scan: 'Scan',
       'analyze-filenames': 'Analyze Names',
       'classify-keywords': 'Keywords',
@@ -218,6 +221,7 @@ const i18n = {
       'workflow-face-balanced': 'Rebuild face index and same-face groups conservatively.',
       'workflow-vision-plan': 'Run local image scene labels and create a dry-run plan.',
       'index-metadata': 'Import organized files and manifests into the virtual SQLite library.',
+      'index-similarity': 'Build exact duplicate, image perceptual hash, and video keyframe similarity groups.',
       scan: 'Read source folders and write manifest_all.csv plus move_plan.csv. Does not move by itself.',
       'analyze-filenames': 'Mine filename words, actor candidates, and noisy tokens.',
       'classify-keywords': 'Move obvious Unknown items into keyword buckets.',
@@ -273,6 +277,7 @@ const i18n = {
     faceMergeSuggestions: '人脸合并建议',
     visionPlan: '场景计划',
     exactDuplicates: '精确重复',
+    similarityGroups: '相似组',
     wordSignals: '词信号',
     runJobs: '运行任务',
     commandGuide: '功能说明',
@@ -374,6 +379,7 @@ const i18n = {
     libraryHelp: '媒体库页是清单搜索结果页：在上方选择来源，可以按人物、关键词、路径、hash、人脸组、场景标签搜索。',
     libraryQuickSearch: '快捷搜索',
     rebuildIndex: '重建索引',
+    rebuildSimilarity: '重建相似索引',
     mediaBrowser: '媒体浏览',
     mediaSearch: '搜索媒体、标签、作者',
     allMedia: '全部媒体',
@@ -403,6 +409,7 @@ const i18n = {
       'workflow-face-balanced': '重建人脸组',
       'workflow-vision-plan': '场景识别计划',
       'index-metadata': '重建索引',
+      'index-similarity': '相似索引',
       scan: '扫描清单',
       'analyze-filenames': '分析文件名',
       'classify-keywords': '关键词归类',
@@ -434,6 +441,7 @@ const i18n = {
       'workflow-face-balanced': '重新抽帧、人脸扫描、保守聚类，生成新的人脸计划。',
       'workflow-vision-plan': '本地识别画面场景/标签，只生成预览计划。',
       'index-metadata': '把已整理文件和清单导入 SQLite 虚拟媒体库。',
+      'index-similarity': '生成精确重复、图片感知 hash、视频关键帧相似组。',
       scan: '读取来源目录，生成 manifest_all.csv 和 move_plan.csv；本身不移动。',
       'analyze-filenames': '挖掘文件名里的人名、关键词、噪声词。',
       'classify-keywords': '把明显的 Unknown 文件移动到关键词分类。',
@@ -468,6 +476,7 @@ const commands = [
   ['workflow-face-balanced', 'Rebuild Faces', Users, 'Recommended: full frames, face scan, balanced cluster, report, plan'],
   ['workflow-vision-plan', 'Scene Plan', Camera, 'Recommended: full frames, OpenCLIP labels, dry-run vision plan'],
   ['index-metadata', 'Rebuild Index', Database, 'Import organized files into the virtual media library'],
+  ['index-similarity', 'Similarity Index', Archive, 'Build duplicate and similarity groups'],
   ['scan', 'Scan', Search, 'Rebuild manifests and move plan'],
   ['analyze-filenames', 'Analyze Names', FileSearch, 'Mine actor and keyword signals'],
   ['classify-keywords', 'Keywords', Tags, 'Move clear Unknown items into keyword buckets'],
@@ -555,6 +564,7 @@ function App() {
   const [source, setSource] = useState('all');
   const [results, setResults] = useState([]);
   const [mediaResults, setMediaResults] = useState({ total: 0, items: [] });
+  const [similarityResults, setSimilarityResults] = useState({ groups: [] });
   const [authors, setAuthors] = useState([]);
   const [faces, setFaces] = useState([]);
   const [faceSuggestions, setFaceSuggestions] = useState([]);
@@ -602,6 +612,7 @@ function App() {
   useEffect(() => {
     refresh().catch(exc => setError(exc.message));
     loadMedia().catch(() => {});
+    loadSimilarity().catch(() => {});
     const id = setInterval(() => refresh().catch(() => {}), 4000);
     return () => clearInterval(id);
   }, []);
@@ -663,6 +674,12 @@ function App() {
     });
     const data = await api(`/api/media?${search.toString()}`);
     setMediaResults(data);
+    return data;
+  }
+
+  async function loadSimilarity() {
+    const data = await api('/api/media/similarity-groups?limit=80');
+    setSimilarityResults(data);
     return data;
   }
 
@@ -842,7 +859,7 @@ function App() {
         )}
 
         {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} setActive={setActive} t={t} /></section>}
-        {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} loadMedia={loadMedia} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} t={t} />}
+        {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} t={t} />}
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
@@ -978,7 +995,7 @@ function LogPanel({ selectedJob, jobLog, start, setActive, t }) {
   return <div className="panel"><div className="panelHead"><h2>{selectedJob ? `Job #${selectedJob.id}` : t.jobLog}</h2><span>{selectedJob?.status || t.selectJob}</span></div>{!selectedJob ? <Empty label={t.selectJobHint} /> : <div className="logBlock"><div className="list"><div className="row"><span>{t.command}</span><strong>{selectedJob.command}</strong></div><div className="row"><span>{t.started}</span><strong>{selectedJob.started_at || '-'}</strong></div><div className="row"><span>{t.finished}</span><strong>{selectedJob.finished_at || '-'}</strong></div></div>{next && <div className="hintBox"><strong>{t.jobNextStep}</strong><span>{next}</span>{actions.length > 0 && <div className="nextActions">{actions.map(([label, action]) => <button key={label} onClick={action}><Play size={15} />{label}</button>)}</div>}</div>}<h3>stdout</h3><pre>{jobLog?.stdout || '(empty)'}</pre><h3>stderr</h3><pre>{jobLog?.stderr || '(empty)'}</pre></div>}</div>;
 }
 
-function LibraryPanel({ results, mediaResults, loadMedia, start, performSearch, setQuery, setSource, t }) {
+function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loadSimilarity, start, performSearch, setQuery, setSource, t }) {
   const [mediaQuery, setMediaQuery] = useState('');
   const [mediaType, setMediaType] = useState('all');
   const quick = [
@@ -1012,6 +1029,7 @@ function LibraryPanel({ results, mediaResults, loadMedia, start, performSearch, 
         </form>
         <MediaGrid items={mediaResults.items || []} loadMedia={loadMedia} t={t} />
       </section>
+      <SimilarityPanel groups={similarityResults.groups || []} start={start} refresh={loadSimilarity} t={t} />
       <section className="panel">
         <div className="panelHead"><h2>{t.library}</h2><span>{t.libraryQuickSearch}</span></div>
         <div className="hintBox"><span>{t.libraryHelp}</span></div>
@@ -1019,6 +1037,31 @@ function LibraryPanel({ results, mediaResults, loadMedia, start, performSearch, 
       </section>
       <section className="panel"><div className="panelHead"><h2>{t.searchResults}</h2><span>{results.length} rows</span></div><ResultsTable rows={results} t={t} /></section>
     </>
+  );
+}
+
+function SimilarityPanel({ groups, start, refresh, t }) {
+  return (
+    <section className="panel">
+      <div className="panelHead"><h2>{t.similarityGroups}</h2><div className="panelActions"><button className="panelButton" onClick={() => start('index-similarity')}><Archive size={16} />{t.rebuildSimilarity}</button><button className="panelButton" onClick={refresh}><RefreshCw size={16} />{t.refreshState || t.ready}</button></div><span>{groups.length}</span></div>
+      {!groups.length ? <Empty label={t.noRows} /> : <div className="similarityGrid">{groups.map(group => <SimilarityCard group={group} key={group.id} />)}</div>}
+    </section>
+  );
+}
+
+function SimilarityCard({ group }) {
+  return (
+    <article className="similarityCard">
+      <div className="similarityHead"><strong>{group.kind}</strong><span>{group.members}</span></div>
+      <div className="similarityItems">
+        {(group.items || []).slice(0, 4).map(item => (
+          <div className="similarityItem" key={item.id}>
+            <img src={`/api/media/${item.id}/thumbnail`} alt={item.filename} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} />
+            <div><strong>{item.role}</strong><span>{item.filename}</span></div>
+          </div>
+        ))}
+      </div>
+    </article>
   );
 }
 

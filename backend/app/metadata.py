@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import mimetypes
 import os
 import re
 import time
+from collections import defaultdict
 from io import StringIO
 from pathlib import Path
 
 from .db import connect, get_settings, init_db
+
+try:
+    from PIL import Image
+except Exception:
+    Image = None
 
 
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
@@ -414,3 +421,130 @@ def mime_for(path: Path, media_type: str) -> str:
     if guessed:
         return guessed
     return "video/mp4" if media_type == "video" else "image/jpeg"
+
+
+def dhash(path: Path) -> str:
+    if Image is None or not path.exists():
+        return ""
+    try:
+        with Image.open(path) as img:
+            gray = img.convert("L").resize((9, 8))
+            pixels = list(gray.getdata())
+        bits = []
+        for row in range(8):
+            offset = row * 9
+            for col in range(8):
+                bits.append(1 if pixels[offset + col] > pixels[offset + col + 1] else 0)
+        value = 0
+        for bit in bits:
+            value = (value << 1) | bit
+        return f"{value:016x}"
+    except Exception:
+        return ""
+
+
+def quick_file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            digest.update(handle.read(1024 * 1024))
+        digest.update(str(path.stat().st_size).encode())
+        return digest.hexdigest()
+    except Exception:
+        return ""
+
+
+def upsert_similarity_group(conn, kind: str, signature: str, members: list[tuple[int, str, float, str]]) -> int:
+    conn.execute(
+        "INSERT INTO similarity_groups (kind, signature, score) VALUES (?, ?, ?) ON CONFLICT(kind, signature) DO UPDATE SET score=excluded.score",
+        (kind, signature, max((score for _media_id, _role, score, _detail in members), default=1.0)),
+    )
+    group_id = int(conn.execute("SELECT id FROM similarity_groups WHERE kind=? AND signature=?", (kind, signature)).fetchone()["id"])
+    conn.execute("DELETE FROM similarity_members WHERE group_id=?", (group_id,))
+    for media_id, role, score, detail in members:
+        conn.execute(
+            "INSERT OR REPLACE INTO similarity_members (group_id, media_id, role, score, detail) VALUES (?, ?, ?, ?, ?)",
+            (group_id, media_id, role, score, detail),
+        )
+    return group_id
+
+
+def rebuild_similarity_index(root: Path | None = None) -> dict:
+    init_db()
+    root = root or output_root()
+    exact: defaultdict[str, list[dict]] = defaultdict(list)
+    perceptual: defaultdict[str, list[dict]] = defaultdict(list)
+    video_fingerprints: defaultdict[str, list[dict]] = defaultdict(list)
+    with connect() as conn:
+        rows = [dict(row) for row in conn.execute("SELECT id, path, relative_path, media_type, size_bytes, sha256, hash8 FROM media_items").fetchall()]
+        conn.execute("DELETE FROM similarity_members")
+        conn.execute("DELETE FROM similarity_groups")
+        for row in rows:
+            path = Path(row["path"])
+            if not path.exists():
+                continue
+            exact_sig = row.get("sha256") or quick_file_hash(path)
+            if exact_sig:
+                exact[f"{row['size_bytes']}:{exact_sig}"].append(row)
+            if row["media_type"] == "photo":
+                sig = dhash(path)
+                if sig:
+                    perceptual[sig].append(row)
+            elif row["media_type"] == "video":
+                frames = conn.execute(
+                    "SELECT representative_frame FROM media_timeline_segments WHERE media_id=? AND representative_frame != '' ORDER BY start_seconds LIMIT 3",
+                    (row["id"],),
+                ).fetchall()
+                frame_hashes = []
+                for frame in frames:
+                    sig = dhash(root / frame["representative_frame"])
+                    if sig:
+                        frame_hashes.append(sig)
+                if frame_hashes:
+                    video_fingerprints["|".join(frame_hashes)].append(row)
+        groups = 0
+        members = 0
+        for kind, bucket in [("exact", exact), ("image_phash", perceptual), ("video_fingerprint", video_fingerprints)]:
+            for signature, items in bucket.items():
+                if len(items) < 2:
+                    continue
+                ranked = sorted(items, key=lambda item: (-int(item.get("size_bytes") or 0), item["relative_path"]))
+                payload = []
+                for index, item in enumerate(ranked):
+                    payload.append((int(item["id"]), "keep" if index == 0 else "candidate", 1.0, item["relative_path"]))
+                upsert_similarity_group(conn, kind, signature, payload)
+                groups += 1
+                members += len(payload)
+        conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("rebuild_similarity_index", f"groups={groups} members={members} root={root}"))
+    return {"groups": groups, "members": members, "root": str(root)}
+
+
+def similarity_groups(limit: int = 100) -> dict:
+    with connect() as conn:
+        groups = conn.execute(
+            """
+            SELECT g.id, g.kind, g.signature, g.score, COUNT(m.media_id) AS members
+            FROM similarity_groups g
+            JOIN similarity_members m ON m.group_id=g.id
+            GROUP BY g.id
+            ORDER BY members DESC, g.kind, g.id
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        out = []
+        for group in groups:
+            items = conn.execute(
+                """
+                SELECT m.role, m.score, m.detail, i.id, i.filename, i.relative_path, i.media_type, i.author, i.quality
+                FROM similarity_members m
+                JOIN media_items i ON i.id=m.media_id
+                WHERE m.group_id=?
+                ORDER BY CASE m.role WHEN 'keep' THEN 0 ELSE 1 END, i.size_bytes DESC
+                """,
+                (group["id"],),
+            ).fetchall()
+            data = dict(group)
+            data["items"] = [dict(item) for item in items]
+            out.append(data)
+    return {"groups": out}
