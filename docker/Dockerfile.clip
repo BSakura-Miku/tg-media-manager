@@ -19,7 +19,9 @@ COPY backend/requirements-vision.txt /app/backend/requirements-vision.txt
 COPY backend/requirements-clip.txt /app/backend/requirements-clip.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt \
     && pip install --no-cache-dir -r /app/backend/requirements-vision.txt \
-    && pip install --no-cache-dir -r /app/backend/requirements-clip.txt
+    && pip install --no-cache-dir -r /app/backend/requirements-clip.txt \
+    && pip uninstall -y onnxruntime \
+    && pip install --no-cache-dir --force-reinstall --no-deps "onnxruntime-openvino>=1.24"
 
 COPY backend/ /app/backend/
 COPY --from=frontend-build /app/frontend/dist /app/frontend/dist

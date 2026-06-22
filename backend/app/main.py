@@ -20,6 +20,13 @@ from .jobs import ALLOWED_COMMANDS, create_job
 from .media_stats import summary
 from .metadata import media_detail, media_query, mime_for, rebuild_metadata_index, rebuild_similarity_index, risk_queue, similarity_groups
 
+try:
+    from PIL import Image, ImageChops, ImageOps
+except Exception:
+    Image = None
+    ImageChops = None
+    ImageOps = None
+
 
 app = FastAPI(title="TG Media Manager")
 app.add_middleware(
@@ -145,10 +152,13 @@ def api_system_hardware() -> dict:
     return {
         "ffmpeg_hwaccel": os.environ.get("FFMPEG_HWACCEL", ""),
         "ffmpeg_hw_device": os.environ.get("FFMPEG_HW_DEVICE", ""),
+        "face_providers": os.environ.get("FACE_PROVIDERS", ""),
+        "openvino_device": os.environ.get("OPENVINO_DEVICE", ""),
         "dri_exists": Path("/dev/dri").exists(),
         "dri": run(["sh", "-lc", "ls -la /dev/dri 2>/dev/null || true"]),
         "ffmpeg_hwaccels": run(["ffmpeg", "-hide_banner", "-hwaccels"]),
         "vainfo": run(["sh", "-lc", "vainfo --display drm --device ${FFMPEG_HW_DEVICE:-/dev/dri/renderD128} 2>&1 | head -80 || true"]),
+        "onnxruntime": run(["python", "-c", "import onnxruntime as ort; print('\\n'.join(ort.get_available_providers()))"]),
     }
 
 
@@ -251,19 +261,61 @@ def ffmpeg_hw_prefix() -> list[str]:
     return []
 
 
+THUMB_SIZE = (800, 520)
+
+
+def trim_uniform_border(image):
+    if ImageChops is None:
+        return image
+    try:
+        bg = Image.new(image.mode, image.size, image.getpixel((0, 0)))
+        diff = ImageChops.difference(image, bg)
+        bbox = diff.getbbox()
+    except Exception:
+        return image
+    if not bbox:
+        return image
+    left, top, right, bottom = bbox
+    original_area = image.size[0] * image.size[1]
+    cropped_area = max(1, right - left) * max(1, bottom - top)
+    if cropped_area < original_area * 0.18:
+        return image
+    if (left, top, right, bottom) == (0, 0, image.size[0], image.size[1]):
+        return image
+    return image.crop(bbox)
+
+
+def write_smart_thumbnail(src: Path, dest: Path) -> bool:
+    if Image is None or ImageOps is None:
+        return False
+    try:
+        with Image.open(src) as opened:
+            image = ImageOps.exif_transpose(opened).convert("RGB")
+            image = trim_uniform_border(image)
+            resampling = getattr(Image, "Resampling", Image).LANCZOS
+            image = ImageOps.fit(image, THUMB_SIZE, method=resampling, centering=(0.5, 0.35))
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            image.save(dest, "JPEG", quality=86, optimize=True)
+        return dest.exists() and dest.stat().st_size > 0
+    except Exception:
+        return False
+
+
 def run_ffmpeg_thumbnail(src: Path, dest: Path, width: int = 800, timeout: int = 30) -> bool:
     prefixes = []
     hw = ffmpeg_hw_prefix()
     if hw:
         prefixes.append(hw)
     prefixes.append([])
-    base_cmd = ["-ss", "00:00:02", "-i", str(src), "-frames:v", "1", "-vf", f"scale='min({width},iw)':-2", "-q:v", "4", str(dest)]
+    tmp = dest.with_name(f".{dest.stem}.raw.jpg")
+    base_cmd = ["-ss", "00:00:02", "-i", str(src), "-frames:v", "1", "-vf", f"thumbnail,scale='min({width},iw)':-2", "-q:v", "4", str(tmp)]
     for prefix in prefixes:
-        if dest.exists():
-            try:
-                dest.unlink()
-            except OSError:
-                pass
+        for candidate in (dest, tmp):
+            if candidate.exists():
+                try:
+                    candidate.unlink()
+                except OSError:
+                    pass
         try:
             proc = subprocess.run(
                 ["ffmpeg", "-y", *prefix, *base_cmd],
@@ -273,8 +325,16 @@ def run_ffmpeg_thumbnail(src: Path, dest: Path, width: int = 800, timeout: int =
             )
         except (subprocess.SubprocessError, OSError):
             continue
-        if proc.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+        if proc.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0 and write_smart_thumbnail(tmp, dest):
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
             return True
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
     return False
 
 
@@ -577,14 +637,14 @@ def api_media_file(media_id: int):
 def api_media_thumbnail(media_id: int):
     detail = checked_media_detail(media_id)
     path = Path(detail["path"])
-    if detail.get("media_type") == "photo":
-        return FileResponse(path, media_type=mime_for(path, "photo"))
-    thumb_dir = output_root() / "_MANIFESTS" / "media_thumbs"
+    thumb_dir = output_root() / "_MANIFESTS" / "media_thumbs_v2"
     thumb = thumb_dir / f"{media_id}.jpg"
     if thumb.exists():
         return FileResponse(thumb, media_type="image/jpeg")
     thumb_dir.mkdir(parents=True, exist_ok=True)
-    if run_ffmpeg_thumbnail(path, thumb, width=800, timeout=30):
+    if detail.get("media_type") == "photo" and write_smart_thumbnail(path, thumb):
+        return FileResponse(thumb, media_type="image/jpeg")
+    if detail.get("media_type") == "video" and run_ffmpeg_thumbnail(path, thumb, width=800, timeout=30):
         return FileResponse(thumb, media_type="image/jpeg")
     raise HTTPException(status_code=404, detail="Thumbnail not found")
 

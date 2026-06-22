@@ -20,6 +20,8 @@ services:
       ENABLE_QUICK_HASH: ${ENABLE_QUICK_HASH:-false}
       FFMPEG_HWACCEL: ${FFMPEG_HWACCEL:-vaapi}
       FFMPEG_HW_DEVICE: ${FFMPEG_HW_DEVICE:-/dev/dri/renderD128}
+      FACE_PROVIDERS: ${FACE_PROVIDERS:-OpenVINOExecutionProvider,CPUExecutionProvider}
+      OPENVINO_DEVICE: ${OPENVINO_DEVICE:-GPU}
     devices:
       - /dev/dri:/dev/dri
     volumes:

@@ -1223,8 +1223,15 @@ def extract_frames(config: Config, limit: int | None, frames: int) -> None:
 
 def face_setup() -> None:
     print("Face backends are optional and local-only.")
-    print("Docker vision image recommendation: install insightface, onnxruntime, opencv-python-headless, numpy, pillow.")
+    print("Docker vision image recommendation: install insightface, onnxruntime-openvino, opencv-python-headless, numpy, pillow.")
     print("OpenCLIP image classification requires torch and open-clip-torch.")
+    print(f"FACE_PROVIDERS={os.environ.get('FACE_PROVIDERS', 'CPUExecutionProvider')}")
+    print(f"OPENVINO_DEVICE={os.environ.get('OPENVINO_DEVICE', 'CPU')}")
+    try:
+        import onnxruntime as ort  # type: ignore
+        print("ONNXRuntime providers: " + ", ".join(ort.get_available_providers()))
+    except Exception as exc:
+        print(f"ONNXRuntime unavailable: {type(exc).__name__}")
     print("No face data is uploaded by this script.")
 
 
@@ -1324,14 +1331,40 @@ def load_face_backend():
         pass
     try:
         import cv2  # type: ignore
+        import onnxruntime as ort  # type: ignore
         from insightface.app import FaceAnalysis  # type: ignore
         model_root = Path(os.environ["INSIGHTFACE_HOME"]) if os.environ.get("INSIGHTFACE_HOME") else Path(os.environ.get("MODEL_ROOT", "/models")) / "insightface"
+        requested = [item.strip() for item in os.environ.get("FACE_PROVIDERS", "CPUExecutionProvider").split(",") if item.strip()]
+        available = set(ort.get_available_providers())
+        providers = [provider for provider in requested if provider in available]
+        if not providers:
+            providers = ["CPUExecutionProvider"]
+        provider_options = []
+        for provider in providers:
+            if provider == "OpenVINOExecutionProvider":
+                provider_options.append({"device_type": os.environ.get("OPENVINO_DEVICE", "GPU")})
+            else:
+                provider_options.append({})
         app = FaceAnalysis(
             name=os.environ.get("INSIGHTFACE_MODEL", "buffalo_l"),
             root=str(model_root),
-            providers=["CPUExecutionProvider"],
+            providers=providers,
+            provider_options=provider_options,
         )
-        app.prepare(ctx_id=-1, det_size=(640, 640))
+        ctx_id = 0 if providers and providers[0] == "OpenVINOExecutionProvider" else -1
+        try:
+            app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+        except Exception:
+            if providers == ["CPUExecutionProvider"]:
+                raise
+            app = FaceAnalysis(
+                name=os.environ.get("INSIGHTFACE_MODEL", "buffalo_l"),
+                root=str(model_root),
+                providers=["CPUExecutionProvider"],
+            )
+            app.prepare(ctx_id=-1, det_size=(640, 640))
+            providers = ["CPUExecutionProvider"]
+        print(f"face backend insightface providers={','.join(providers)}", flush=True)
         return "insightface", (app, cv2)
     except Exception as exc:
         raise RuntimeError(
