@@ -149,6 +149,13 @@ def tags_for(filename: str, rel_path: str, parsed: dict) -> list[dict]:
     return list(unique.values())
 
 
+def category_for_tag(tag: str) -> str:
+    for category, known_tag, _words in TAG_RULES:
+        if known_tag == tag:
+            return category
+    return "vision"
+
+
 def manifest_maps(root: Path) -> tuple[dict[str, dict], dict[str, dict]]:
     manifests = root / "_MANIFESTS"
     manifest = {}
@@ -278,7 +285,71 @@ def rebuild_metadata_index(root: Path | None = None) -> dict:
         else:
             conn.execute("DELETE FROM media_items")
         conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("rebuild_metadata_index", f"indexed={indexed} root={root}"))
-    return {"indexed": indexed, "root": str(root), "elapsed_seconds": round(time.time() - started, 3)}
+    vision = import_vision_outputs(root)
+    return {"indexed": indexed, "vision": vision, "root": str(root), "elapsed_seconds": round(time.time() - started, 3)}
+
+
+def import_vision_outputs(root: Path | None = None) -> dict:
+    init_db()
+    root = root or output_root()
+    manifests = root / "_MANIFESTS"
+    labels = read_csv(manifests / "vision_labels.csv")
+    frames = read_csv(manifests / "frame_index.csv")
+    label_by_path = {row.get("media_path", ""): row for row in labels if row.get("media_path")}
+    imported_tags = 0
+    timeline_segments = 0
+    with connect() as conn:
+        for row in labels:
+            media_path = row.get("media_path", "")
+            label = row.get("category", "")
+            if not media_path or not label:
+                continue
+            media = conn.execute("SELECT id FROM media_items WHERE relative_path=?", (media_path,)).fetchone()
+            if media is None:
+                continue
+            try:
+                confidence = float(row.get("score") or 0)
+            except Exception:
+                confidence = 0.0
+            state = "confirmed" if confidence >= 0.70 else "pending"
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+                VALUES (?, ?, ?, ?, 'vision', ?)
+                """,
+                (int(media["id"]), label, category_for_tag(label), confidence, state),
+            )
+            imported_tags += 1
+        for row in frames:
+            media_path = row.get("media_path", "")
+            media = conn.execute("SELECT id, media_type FROM media_items WHERE relative_path=?", (media_path,)).fetchone()
+            if media is None:
+                continue
+            media_id = int(media["id"])
+            conn.execute("DELETE FROM media_timeline_segments WHERE media_id=? AND source='keyframe'", (media_id,))
+            frame_paths = [item for item in (row.get("frames") or "").split("|") if item]
+            if not frame_paths:
+                continue
+            label_row = label_by_path.get(media_path, {})
+            label = label_row.get("category") or "关键帧"
+            try:
+                confidence = float(label_row.get("score") or 0)
+            except Exception:
+                confidence = 0.0
+            if media["media_type"] == "video":
+                for idx, frame in enumerate(frame_paths):
+                    start = float(idx * 7)
+                    end = float((idx + 1) * 7)
+                    conn.execute(
+                        """
+                        INSERT INTO media_timeline_segments (media_id, start_seconds, end_seconds, label, confidence, source, representative_frame)
+                        VALUES (?, ?, ?, ?, ?, 'keyframe', ?)
+                        """,
+                        (media_id, start, end, label, confidence, frame),
+                    )
+                    timeline_segments += 1
+        conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("import_vision_outputs", f"vision_tags={imported_tags} timeline_segments={timeline_segments} root={root}"))
+    return {"vision_tags": imported_tags, "timeline_segments": timeline_segments}
 
 
 def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str = "", limit: int = 100, offset: int = 0) -> dict:
@@ -321,9 +392,19 @@ def media_detail(media_id: int) -> dict | None:
         if row is None:
             return None
         tags = conn.execute("SELECT tag, category, confidence, source, state FROM media_tags WHERE media_id=? ORDER BY category, tag", (media_id,)).fetchall()
+        timeline = conn.execute(
+            """
+            SELECT start_seconds, end_seconds, label, confidence, source, representative_frame
+            FROM media_timeline_segments
+            WHERE media_id=?
+            ORDER BY start_seconds, id
+            """,
+            (media_id,),
+        ).fetchall()
         ops = conn.execute("SELECT operation, detail, created_at FROM media_operations WHERE media_id=? OR media_id IS NULL ORDER BY id DESC LIMIT 30", (media_id,)).fetchall()
     data = dict(row)
     data["tags"] = [dict(item) for item in tags]
+    data["timeline"] = [dict(item) for item in timeline]
     data["operations"] = [dict(item) for item in ops]
     return data
 

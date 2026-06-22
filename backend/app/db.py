@@ -104,6 +104,21 @@ def init_db() -> None:
                 FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS media_timeline_segments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                media_id INTEGER NOT NULL,
+                start_seconds REAL NOT NULL DEFAULT 0,
+                end_seconds REAL NOT NULL DEFAULT 0,
+                label TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'auto',
+                representative_frame TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_media_timeline_media ON media_timeline_segments(media_id);
+
             CREATE TABLE IF NOT EXISTS parser_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,

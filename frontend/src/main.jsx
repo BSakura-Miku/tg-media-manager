@@ -168,6 +168,8 @@ const i18n = {
     originalName: 'Original name',
     filePath: 'File path',
     tags: 'Tags',
+    timeline: 'Timeline',
+    confidence: 'Confidence',
     noIndexHint: 'No indexed media yet. Run Rebuild index after scan/apply.',
     mergeIntoLeft: 'Merge into left',
     mergeIntoRight: 'Merge into right',
@@ -193,6 +195,7 @@ const i18n = {
       'extract-frames-sample': 'Frames Sample',
       'face-setup': 'Face Setup',
       'vision-scan-sample': 'Vision Sample',
+      'index-vision': 'Sync Vision',
       'face-scan-sample': 'Face Sample',
       'face-cluster': 'Cluster Faces',
       'face-cluster-balanced': 'Cluster Balanced',
@@ -223,6 +226,7 @@ const i18n = {
       'extract-frames-sample': 'Cache thumbnails/frames for a small sample.',
       'face-setup': 'Show face/vision dependency status.',
       'vision-scan-sample': 'Run OpenCLIP labels on a small sample.',
+      'index-vision': 'Import vision_labels.csv and frame_index.csv into tags and timeline segments.',
       'face-scan-sample': 'Detect faces on a small sample only.',
       'face-cluster': 'Cluster existing face embeddings with normal threshold.',
       'face-cluster-balanced': 'Recommended face clustering threshold.',
@@ -380,6 +384,8 @@ const i18n = {
     originalName: '原始文件名',
     filePath: '文件路径',
     tags: '标签',
+    timeline: '时间轴',
+    confidence: '置信度',
     noIndexHint: '还没有索引媒体。扫描/整理后先点重建索引。',
     mergeIntoLeft: '合并到左边',
     mergeIntoRight: '合并到右边',
@@ -405,6 +411,7 @@ const i18n = {
       'extract-frames-sample': '抽帧样本',
       'face-setup': '检查人脸环境',
       'vision-scan-sample': '视觉样本',
+      'index-vision': '同步视觉索引',
       'face-scan-sample': '人脸样本',
       'face-cluster': '人脸聚类',
       'face-cluster-balanced': '均衡聚类',
@@ -435,6 +442,7 @@ const i18n = {
       'extract-frames-sample': '只抽一小批缩略图/视频帧，供测试。',
       'face-setup': '检查人脸/视觉依赖是否可用。',
       'vision-scan-sample': '只对小样本跑场景识别。',
+      'index-vision': '把 vision_labels.csv 和 frame_index.csv 导入标签和时间轴。',
       'face-scan-sample': '只对小样本检测人脸。',
       'face-cluster': '用普通阈值聚类已有的人脸特征。',
       'face-cluster-balanced': '推荐阈值，比较稳，不容易乱合。',
@@ -468,6 +476,7 @@ const commands = [
   ['extract-frames-sample', 'Frames Sample', Camera, 'Cache frames for a small sample'],
   ['face-setup', 'Face Setup', ScanFace, 'Show local face dependency status'],
   ['vision-scan-sample', 'Vision Sample', Camera, 'Run OpenCLIP sample when CLIP image is used'],
+  ['index-vision', 'Sync Vision', Camera, 'Import vision outputs into media tags and timelines'],
   ['face-scan-sample', 'Face Sample', ScanFace, 'Detect faces for a small sample'],
   ['face-cluster', 'Cluster Faces', Users, 'Group similar local face embeddings'],
   ['face-cluster-balanced', 'Cluster Balanced', Users, 'Balanced same-face clustering'],
@@ -903,7 +912,7 @@ function CommandGuide({ t }) {
   const groups = [
     [t.commonCommands, ['workflow-new-downloads', 'workflow-review-cleanup', 'scan', 'apply']],
     [t.faceCommands, ['workflow-face-balanced', 'face-scan-sample', 'face-cluster-balanced', 'face-cluster-report', 'apply-face-groups-dry-run', 'apply-face-groups']],
-    [t.visionCommands, ['workflow-vision-plan', 'vision-scan-sample', 'apply-vision-labels-dry-run', 'apply-vision-labels']],
+    [t.visionCommands, ['workflow-vision-plan', 'vision-scan-sample', 'index-vision', 'apply-vision-labels-dry-run', 'apply-vision-labels']],
     [t.maintenanceCommands, ['refresh-state', 'dedupe-organized-dry-run', 'dedupe-organized', 'clean-empty-dirs']],
   ];
   return (
@@ -1051,6 +1060,7 @@ function MediaGrid({ items, t }) {
 function MediaViewer({ item, detail, close, t }) {
   const data = detail || item;
   const tags = Array.isArray(data.tags) ? data.tags : String(data.tags || '').split(',').filter(Boolean).map(tag => ({ tag }));
+  const timeline = Array.isArray(data.timeline) ? data.timeline : [];
   return (
     <div className="viewerBackdrop" role="dialog" aria-modal="true">
       <div className="viewerPanel">
@@ -1069,11 +1079,32 @@ function MediaViewer({ item, detail, close, t }) {
             </div>
             <h3>{t.tags}</h3>
             <div className="tagCloud">{tags.map(tag => <span key={`${tag.tag}-${tag.source || ''}`}>{tag.tag}{tag.confidence ? ` ${Math.round(Number(tag.confidence) * 100)}%` : ''}</span>)}</div>
+            {timeline.length > 0 && (
+              <>
+                <h3>{t.timeline}</h3>
+                <div className="timelineList">
+                  {timeline.map((segment, index) => (
+                    <div className="timelineRow" key={`${segment.start_seconds}-${index}`}>
+                      <span>{formatSeconds(segment.start_seconds)} - {formatSeconds(segment.end_seconds)}</span>
+                      <strong>{segment.label}</strong>
+                      <em>{Math.round(Number(segment.confidence || 0) * 100)}%</em>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+function formatSeconds(value) {
+  const seconds = Math.max(0, Math.floor(Number(value || 0)));
+  const minutes = Math.floor(seconds / 60);
+  const remain = seconds % 60;
+  return `${minutes}:${String(remain).padStart(2, '0')}`;
 }
 
 function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, t }) {

@@ -300,6 +300,35 @@ select, input {
   background: var(--panel-2);
   font-size: 12px;
 }
+.timelineList {
+  display: grid;
+  gap: 7px;
+}
+.timelineRow {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 44px;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+.timelineRow span,
+.timelineRow em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+.timelineRow strong {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
 .guideGrid {
   display: grid;
   grid-template-columns: repeat(4, minmax(180px, 1fr));

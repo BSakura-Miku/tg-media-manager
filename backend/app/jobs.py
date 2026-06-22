@@ -6,14 +6,14 @@ import threading
 from pathlib import Path
 
 from .db import connect, get_settings
-from .metadata import rebuild_metadata_index
+from .metadata import import_vision_outputs, rebuild_metadata_index
 
 
 ALLOWED_COMMANDS = {
     "workflow-new-downloads": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["refresh-state"], ["__metadata_index__"]],
     "workflow-review-cleanup": [["normalize-organized"], ["classify-keywords"], ["organize-review"], ["refresh-state"], ["__metadata_index__"]],
     "workflow-face-balanced": [["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"]],
-    "workflow-vision-plan": [["extract-frames"], ["vision-scan"], ["apply-vision-labels"]],
+    "workflow-vision-plan": [["extract-frames"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"]],
     "scan": ["scan"],
     "analyze-filenames": ["analyze-filenames"],
     "classify-keywords": ["classify-keywords"],
@@ -32,6 +32,7 @@ ALLOWED_COMMANDS = {
     "face-scan": ["face-scan"],
     "vision-scan-sample": ["vision-scan", "--limit", "120"],
     "vision-scan": ["vision-scan"],
+    "index-vision": ["__vision_index__"],
     "face-cluster": ["face-cluster", "--threshold", "0.75"],
     "face-cluster-balanced": ["face-cluster", "--threshold", "0.80"],
     "face-cluster-relaxed": ["face-cluster", "--threshold", "0.90"],
@@ -80,7 +81,10 @@ def run_job(job_id: int, command: str) -> None:
     if source_dirs:
         base_args.extend(["--source-dirs", source_dirs])
     with connect() as conn:
-        message = " && ".join("index-metadata" if step == ["__metadata_index__"] else " ".join([*base_args, *step]) for step in steps)
+        message = " && ".join(
+            "index-metadata" if step == ["__metadata_index__"] else "index-vision" if step == ["__vision_index__"] else " ".join([*base_args, *step])
+            for step in steps
+        )
         conn.execute("UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP, message=? WHERE id=?", (message, job_id))
     try:
         stdout_parts = []
@@ -90,6 +94,10 @@ def run_job(job_id: int, command: str) -> None:
             if step == ["__metadata_index__"]:
                 result = rebuild_metadata_index(Path(output_root))
                 stdout_parts.append(f"$ index-metadata\n{result}")
+                returncode = 0
+            elif step == ["__vision_index__"]:
+                result = import_vision_outputs(Path(output_root))
+                stdout_parts.append(f"$ index-vision\n{result}")
                 returncode = 0
             else:
                 step_args = [*base_args, *step]
