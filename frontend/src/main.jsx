@@ -242,6 +242,13 @@ const i18n = {
     modelRuntimeCache: 'Runtime cache',
     modelFile: 'File model',
     modelHint: 'Models are not baked into the Docker image. They are downloaded into /models and survive container updates.',
+    modelSourceUrl: 'Source URL',
+    modelSha256: 'SHA256',
+    modelOfficialRef: 'Official reference',
+    modelManifestUrl: 'Manifest URL',
+    saveModelSource: 'Save source',
+    modelSourceSaved: 'Model source saved',
+    modelManifestHint: 'Future model packs can be installed from a JSON manifest. For now it is stored as the preferred pack source.',
     deleteModelConfirm: 'Delete this cached model from /models?',
     workflowConfirm: 'This will run several jobs in sequence. Continue?',
     libraryHelp: 'The Library page shows manifest search results. Pick a source above, search by actor, keyword, path, hash, FaceGroup, or scene label.',
@@ -379,8 +386,8 @@ const i18n = {
       'model-pull-openclip-vit-h': 'Download/cache the stronger OpenCLIP model.',
       'model-pull-insightface-buffalo-l': 'Download/cache the InsightFace buffalo_l model.',
       'model-pull-faster-whisper-small': 'Download/cache the faster-whisper small fallback model.',
-      'model-pull-sensevoice-small-gguf': 'Download the SenseVoice GGUF file from SENSEVOICE_GGUF_URL.',
-      'model-pull-custom-detector-onnx': 'Download the optional custom detector from CUSTOM_DETECTOR_ONNX_URL.',
+      'model-pull-sensevoice-small-gguf': 'Download the SenseVoice GGUF file from the Web-configured URL.',
+      'model-pull-custom-detector-onnx': 'Download the optional custom detector from the Web-configured URL.',
     },
   },
   'zh-CN': {
@@ -586,6 +593,13 @@ const i18n = {
     modelRuntimeCache: '运行时缓存',
     modelFile: '文件模型',
     modelHint: '模型不会打进 Docker 镜像，会下载到 /models；容器升级后缓存仍然保留。',
+    modelSourceUrl: '模型下载 URL',
+    modelSha256: 'SHA256 校验',
+    modelOfficialRef: '官方参考',
+    modelManifestUrl: '模型包 Manifest URL',
+    saveModelSource: '保存来源',
+    modelSourceSaved: '模型来源已保存',
+    modelManifestHint: '后续模型包会从 JSON Manifest 一键安装；当前先作为默认模型包来源保存。',
     deleteModelConfirm: '从 /models 删除这个模型缓存？',
     workflowConfirm: '这会连续运行多个任务，继续？',
     libraryHelp: '媒体库页是清单搜索结果页：在上方选择来源，可以按人物、关键词、路径、hash、人脸组、场景标签搜索。',
@@ -723,8 +737,8 @@ const i18n = {
       'model-pull-openclip-vit-h': '下载/缓存更强的 OpenCLIP 模型。',
       'model-pull-insightface-buffalo-l': '下载/缓存 InsightFace buffalo_l 人脸模型。',
       'model-pull-faster-whisper-small': '下载/缓存 faster-whisper small 回退模型。',
-      'model-pull-sensevoice-small-gguf': '从 SENSEVOICE_GGUF_URL 下载 SenseVoice GGUF 文件。',
-      'model-pull-custom-detector-onnx': '从 CUSTOM_DETECTOR_ONNX_URL 下载可选自定义检测模型。',
+      'model-pull-sensevoice-small-gguf': '从 Web 配置的 URL 下载 SenseVoice GGUF 文件。',
+      'model-pull-custom-detector-onnx': '从 Web 配置的 URL 下载可选自定义检测模型。',
     },
   },
 };
@@ -923,6 +937,8 @@ function App() {
   const [faceSuggestions, setFaceSuggestions] = useState([]);
   const [settings, setSettings] = useState(null);
   const [models, setModels] = useState({ root: '/models', models: [] });
+  const [modelDrafts, setModelDrafts] = useState({});
+  const [manifestDraft, setManifestDraft] = useState('');
   const [monitor, setMonitor] = useState(null);
   const [directories, setDirectories] = useState([]);
   const [browsePath, setBrowsePath] = useState('/media');
@@ -953,6 +969,8 @@ function App() {
     setFaceSuggestions(suggestions);
     setMonitor(mon);
     setModels(modelCatalog);
+    setManifestDraft(modelCatalog?.manifest_url || '');
+    setModelDrafts(Object.fromEntries((modelCatalog?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
     if (ver) setVersion(ver);
     if (cfg) {
       setSettings(cfg);
@@ -1103,6 +1121,8 @@ function App() {
   async function loadModels() {
     const data = await api('/api/models');
     setModels(data);
+    setManifestDraft(data?.manifest_url || '');
+    setModelDrafts(Object.fromEntries((data?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
     return data;
   }
 
@@ -1212,6 +1232,38 @@ function App() {
     await start(command);
   }
 
+  async function saveModelSource(modelId, draft) {
+    setError('');
+    try {
+      const data = await api('/api/models/source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_id: modelId, url: draft?.url || '', sha256: draft?.sha256 || '' }),
+      });
+      setModels(data);
+      setMessage(t.modelSourceSaved);
+      await loadModels();
+    } catch (exc) {
+      setError(exc.message);
+    }
+  }
+
+  async function saveManifestSource(url) {
+    setError('');
+    try {
+      const data = await api('/api/models/manifest-source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url || '' }),
+      });
+      setModels(data);
+      setManifestDraft(data?.manifest_url || '');
+      setMessage(t.modelSourceSaved);
+    } catch (exc) {
+      setError(exc.message);
+    }
+  }
+
   async function deleteModel(modelId) {
     const ok = window.confirm(t.deleteModelConfirm);
     if (!ok) return;
@@ -1303,7 +1355,7 @@ function App() {
         {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} t={t} />}
         {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} loadMedia={loadMedia} setActive={setActive} t={t} />}
         {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} t={t} />}
-        {active === 'models' && <ModelsPanel catalog={models} pullModel={pullModel} deleteModel={deleteModel} start={start} busy={busy || hasRunning} t={t} />}
+        {active === 'models' && <ModelsPanel catalog={models} drafts={modelDrafts} setDrafts={setModelDrafts} manifestDraft={manifestDraft} setManifestDraft={setManifestDraft} saveModelSource={saveModelSource} saveManifestSource={saveManifestSource} pullModel={pullModel} deleteModel={deleteModel} start={start} busy={busy || hasRunning} t={t} />}
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
@@ -2166,7 +2218,7 @@ function LogsPanel({ jobs, applied, openJob, setActive, t }) {
   return <section className="panel"><div className="panelHead"><h2>{t.recentLogs}</h2><span>{applied.rows} {t.moveLogRows}</span></div><div className="jobs">{jobs.map(job => <button className="job" key={job.id} onClick={() => { openJob(job.id); setActive('jobs'); }}><div><strong>#{job.id} {job.command}</strong><p>{job.stdout || job.stderr || job.message || job.created_at}</p></div><JobBadge status={job.status} /></button>)}</div></section>;
 }
 
-function ModelsPanel({ catalog, pullModel, deleteModel, start, busy, t }) {
+function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDraft, saveModelSource, saveManifestSource, pullModel, deleteModel, start, busy, t }) {
   const models = catalog?.models || [];
   const statusLabel = {
     ready: t.modelReady,
@@ -2174,6 +2226,9 @@ function ModelsPanel({ catalog, pullModel, deleteModel, start, busy, t }) {
     needs_url: t.modelNeedsUrl,
   };
   const recommended = models.filter(model => model.recommended && model.status !== 'ready').length;
+  function updateDraft(modelId, key, value) {
+    setDrafts(current => ({ ...current, [modelId]: { ...(current[modelId] || {}), [key]: value } }));
+  }
   return (
     <section className="panel modelPanel">
       <div className="panelHead">
@@ -2186,8 +2241,15 @@ function ModelsPanel({ catalog, pullModel, deleteModel, start, busy, t }) {
           <button className="panelButton" disabled={busy || recommended === 0} onClick={() => start('model-pull-recommended')}><Download size={16} />{t.downloadRecommended}</button>
         </div>
       </div>
+      <div className="modelManifestBox">
+        <label>{t.modelManifestUrl}<input value={manifestDraft || ''} onChange={event => setManifestDraft(event.target.value)} placeholder="https://github.com/.../tgmm-model-pack.json" /></label>
+        <button className="panelButton" onClick={() => saveManifestSource(manifestDraft)}><Save size={16} />{t.saveModelSource}</button>
+        <small>{t.modelManifestHint}</small>
+      </div>
       <div className="modelGrid">
-        {models.map(model => (
+        {models.map(model => {
+          const draft = drafts?.[model.id] || { url: model.source_url || '', sha256: model.sha256 || '' };
+          return (
           <article className={`modelCard ${model.status}`} key={model.id}>
             <div className="modelCardTop">
               <HardDrive size={20} />
@@ -2202,13 +2264,22 @@ function ModelsPanel({ catalog, pullModel, deleteModel, start, busy, t }) {
               <div><span>{t.modelSize}</span><strong>{prettyBytes(model.bytes)}</strong></div>
               <div><span>{t.modelPath}</span><strong title={model.path}>{model.path}</strong></div>
               {model.url_env && <div><span>URL env</span><strong>{model.url_env}{model.url_configured ? '' : ' unset'}</strong></div>}
+              {model.official_url && <div><span>{t.modelOfficialRef}</span><a href={model.official_url} target="_blank" rel="noreferrer">{model.official_url}</a></div>}
             </div>
+            {model.source_editable && (
+              <div className="modelSourceForm">
+                <label>{t.modelSourceUrl}<input value={draft.url || ''} onChange={event => updateDraft(model.id, 'url', event.target.value)} placeholder="https://github.com/.../model.gguf" /></label>
+                <label>{t.modelSha256}<input value={draft.sha256 || ''} onChange={event => updateDraft(model.id, 'sha256', event.target.value)} placeholder="optional 64-char checksum" /></label>
+                <button className="panelButton" onClick={() => saveModelSource(model.id, draft)}><Save size={16} />{t.saveModelSource}</button>
+              </div>
+            )}
             <div className="modelActions">
               <button className="panelButton" disabled={busy || model.status === 'needs_url'} onClick={() => pullModel(model.id)}><Download size={16} />{t.downloadModel}</button>
               <button className="panelButton dangerButton" disabled={!model.present || busy} onClick={() => deleteModel(model.id)}><Trash2 size={16} />{t.deleteModel}</button>
             </div>
           </article>
-        ))}
+        );
+        })}
       </div>
     </section>
   );

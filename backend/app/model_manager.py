@@ -10,6 +10,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from .db import get_settings
+
 
 def model_root() -> Path:
     return Path(os.environ.get("MODEL_ROOT", "/models"))
@@ -67,6 +69,7 @@ MODEL_REGISTRY = {
         "kind": "file",
         "description": "Preferred full-video speech recognition model for Mandarin/Japanese mixed media.",
         "path": "sensevoice/SenseVoiceSmall.gguf",
+        "official_url": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
         "url_env": "SENSEVOICE_GGUF_URL",
         "sha256_env": "SENSEVOICE_GGUF_SHA256",
         "recommended": True,
@@ -77,6 +80,7 @@ MODEL_REGISTRY = {
         "kind": "file",
         "description": "Optional future clothing/scene detector exported from your own labeled data.",
         "path": "detectors/custom.onnx",
+        "official_url": "",
         "url_env": "CUSTOM_DETECTOR_ONNX_URL",
         "sha256_env": "CUSTOM_DETECTOR_ONNX_SHA256",
         "recommended": False,
@@ -121,9 +125,37 @@ def _marker_path(model_id: str) -> Path:
     return _safe_path(f".tgmm-models/{model_id}.ready")
 
 
+def source_setting_key(model_id: str) -> str:
+    return f"model_url_{model_id}"
+
+
+def sha256_setting_key(model_id: str) -> str:
+    return f"model_sha256_{model_id}"
+
+
+def _configured_url(model_id: str, spec: dict, settings: dict | None = None) -> str:
+    settings = settings if settings is not None else get_settings()
+    return (
+        settings.get(source_setting_key(model_id), "").strip()
+        or _env(str(spec.get("url_env", "")))
+        or str(spec.get("default_url", "")).strip()
+    )
+
+
+def _configured_sha256(model_id: str, spec: dict, settings: dict | None = None) -> str:
+    settings = settings if settings is not None else get_settings()
+    return (
+        settings.get(sha256_setting_key(model_id), "").strip()
+        or _env(str(spec.get("sha256_env", "")))
+        or str(spec.get("sha256", "")).strip()
+    )
+
+
 def _model_status(model_id: str, spec: dict) -> dict:
+    settings = get_settings()
     path = _safe_path(str(spec["path"]))
-    url = _env(str(spec.get("url_env", ""))) if spec.get("url_env") else ""
+    url = _configured_url(model_id, spec, settings) if spec.get("kind") == "file" else ""
+    sha256 = _configured_sha256(model_id, spec, settings) if spec.get("kind") == "file" else ""
     present = _is_present(path, str(spec["kind"]))
     if spec["kind"] == "runtime-cache" and spec.get("command") in {"openclip", "faster-whisper"}:
         present = _marker_path(model_id).exists()
@@ -141,14 +173,20 @@ def _model_status(model_id: str, spec: dict) -> dict:
         "bytes": _dir_size(path),
         "url_env": spec.get("url_env", ""),
         "url_configured": bool(url),
+        "source_url": url,
+        "source_editable": spec.get("kind") == "file",
+        "official_url": spec.get("official_url", ""),
         "sha256_env": spec.get("sha256_env", ""),
+        "sha256": sha256,
     }
 
 
 def model_catalog() -> dict:
     root = model_root()
+    settings = get_settings()
     return {
         "root": str(root),
+        "manifest_url": settings.get("model_manifest_url", "").strip() or _env("MODEL_MANIFEST_URL"),
         "models": [_model_status(model_id, spec) for model_id, spec in MODEL_REGISTRY.items()],
     }
 
@@ -213,9 +251,10 @@ def _verify_sha256(path: Path, expected: str) -> None:
 
 
 def _download_file(model_id: str, spec: dict) -> dict:
-    url = _env(str(spec.get("url_env", "")))
+    settings = get_settings()
+    url = _configured_url(model_id, spec, settings)
     if not url:
-        raise RuntimeError(f"{spec['url_env']} is not configured; set it in compose/.env, then pull again")
+        raise RuntimeError(f"No source URL configured for {model_id}; set it in the Web Models page, then pull again")
     path = _safe_path(str(spec["path"]))
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_suffix(path.suffix + ".part")
@@ -236,7 +275,7 @@ def _download_file(model_id: str, spec: dict) -> dict:
             if total and now - last_emit > 1:
                 _progress("model-download", done, total, path.name)
                 last_emit = now
-    _verify_sha256(part, _env(str(spec.get("sha256_env", ""))))
+    _verify_sha256(part, _configured_sha256(model_id, spec, settings))
     part.replace(path)
     _progress("model-download", 1, 1, path.name)
     return {"ok": True, "model": model_id, "path": str(path), "bytes": path.stat().st_size}

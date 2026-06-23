@@ -33,7 +33,7 @@ from .metadata import (
     train_vision_calibrators,
     vision_calibrator_status,
 )
-from .model_manager import delete_model, model_catalog
+from .model_manager import MODEL_REGISTRY, delete_model, model_catalog, sha256_setting_key, source_setting_key
 
 try:
     from PIL import Image, ImageChops, ImageOps
@@ -114,6 +114,16 @@ class SettingsRequest(BaseModel):
     monitor_enabled: bool = False
     monitor_dirs: str = ""
     monitor_interval_minutes: int = 10
+
+
+class ModelSourceRequest(BaseModel):
+    model_id: str
+    url: str = ""
+    sha256: str = ""
+
+
+class ModelManifestRequest(BaseModel):
+    url: str = ""
 
 
 class AuthRequest(BaseModel):
@@ -296,6 +306,35 @@ def api_delete_model(model_id: str) -> dict:
         return delete_model(model_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/models/source")
+def api_save_model_source(req: ModelSourceRequest) -> dict:
+    spec = MODEL_REGISTRY.get(req.model_id)
+    if not spec:
+        raise HTTPException(status_code=404, detail="Unknown model")
+    if spec.get("kind") != "file":
+        raise HTTPException(status_code=400, detail="Only direct file models can use custom source URLs")
+    url = req.url.strip()
+    sha256 = req.sha256.strip()
+    if url and not (url.startswith("https://") or url.startswith("http://")):
+        raise HTTPException(status_code=400, detail="Model URL must start with http:// or https://")
+    if sha256 and (len(sha256) != 64 or any(char not in "0123456789abcdefABCDEF" for char in sha256)):
+        raise HTTPException(status_code=400, detail="SHA256 must be a 64-character hex string")
+    save_settings({
+        source_setting_key(req.model_id): url,
+        sha256_setting_key(req.model_id): sha256,
+    })
+    return model_catalog()
+
+
+@app.post("/api/models/manifest-source")
+def api_save_model_manifest_source(req: ModelManifestRequest) -> dict:
+    url = req.url.strip()
+    if url and not (url.startswith("https://") or url.startswith("http://")):
+        raise HTTPException(status_code=400, detail="Manifest URL must start with http:// or https://")
+    save_settings({"model_manifest_url": url})
+    return model_catalog()
 
 
 def read_csv(path: Path) -> list[dict]:
