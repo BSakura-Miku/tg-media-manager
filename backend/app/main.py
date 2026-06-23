@@ -283,7 +283,7 @@ def ffmpeg_hw_prefix() -> list[str]:
 
 
 THUMB_SIZE = (800, 520)
-MEDIA_THUMB_CACHE = "media_thumbs_v3"
+MEDIA_THUMB_CACHE = "media_thumbs_v4"
 
 
 def trim_near_black_border(image):
@@ -338,6 +338,45 @@ def trim_uniform_border(image):
     return trim_near_black_border(image.crop(bbox))
 
 
+def thumbnail_content_score(src: Path) -> float:
+    if Image is None or ImageOps is None:
+        return 0.0
+    try:
+        with Image.open(src) as opened:
+            image = ImageOps.exif_transpose(opened).convert("RGB")
+            gray = ImageOps.grayscale(image)
+            width, height = gray.size
+            pixels = gray.load()
+            rows = []
+            cols = []
+            for y in range(height):
+                values = [pixels[x, y] for x in range(width)]
+                if max(values) > 44 or (sum(values) / max(1, width)) > 18:
+                    rows.append(y)
+            for x in range(width):
+                values = [pixels[x, y] for y in range(height)]
+                if max(values) > 44 or (sum(values) / max(1, height)) > 18:
+                    cols.append(x)
+            if not rows or not cols:
+                return 0.0
+            crop_width = max(cols) - min(cols) + 1
+            crop_height = max(rows) - min(rows) + 1
+            area_ratio = (crop_width * crop_height) / max(1, width * height)
+            height_ratio = crop_height / max(1, height)
+            width_ratio = crop_width / max(1, width)
+            aspect_penalty = 1.0
+            aspect = crop_width / max(1, crop_height)
+            if aspect > 5.5 or aspect < 0.18:
+                aspect_penalty = 0.18
+            if height_ratio < 0.22 or width_ratio < 0.22:
+                aspect_penalty *= 0.22
+            center_y = (min(rows) + max(rows)) / 2
+            center_penalty = 1.0 - min(0.55, abs(center_y - height / 2) / max(1, height))
+            return area_ratio * height_ratio * width_ratio * aspect_penalty * center_penalty
+    except Exception:
+        return 0.0
+
+
 def write_smart_thumbnail(src: Path, dest: Path) -> bool:
     if Image is None or ImageOps is None:
         return False
@@ -354,38 +393,94 @@ def write_smart_thumbnail(src: Path, dest: Path) -> bool:
         return False
 
 
+def ffprobe_duration(src: Path, timeout: int = 10) -> float:
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(src),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+        return max(0.0, float(proc.stdout.strip() or "0"))
+    except (ValueError, subprocess.SubprocessError, OSError):
+        return 0.0
+
+
+def thumbnail_seek_points(src: Path) -> list[float]:
+    duration = ffprobe_duration(src)
+    if duration >= 12:
+        return sorted({2.0, min(duration - 1.0, duration * 0.18), min(duration - 1.0, duration * 0.38), min(duration - 1.0, duration * 0.62)})
+    if duration >= 4:
+        return [1.0, max(1.0, duration * 0.45), max(1.0, duration * 0.72)]
+    return [0.2]
+
+
 def run_ffmpeg_thumbnail(src: Path, dest: Path, width: int = 800, timeout: int = 30) -> bool:
     prefixes = []
     hw = ffmpeg_hw_prefix()
     if hw:
         prefixes.append(hw)
     prefixes.append([])
-    tmp = dest.with_name(f".{dest.stem}.raw.jpg")
-    base_cmd = ["-ss", "00:00:02", "-i", str(src), "-frames:v", "1", "-vf", f"thumbnail,scale='min({width},iw)':-2", "-q:v", "4", str(tmp)]
+    seek_points = thumbnail_seek_points(src)
+    candidates: list[tuple[float, Path]] = []
     for prefix in prefixes:
-        for candidate in (dest, tmp):
-            if candidate.exists():
+        for index, seek in enumerate(seek_points):
+            tmp = dest.with_name(f".{dest.stem}.{index}.raw.jpg")
+            if tmp.exists():
                 try:
-                    candidate.unlink()
+                    tmp.unlink()
                 except OSError:
                     pass
-        try:
-            proc = subprocess.run(
-                ["ffmpeg", "-y", *prefix, *base_cmd],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=timeout,
-            )
-        except (subprocess.SubprocessError, OSError):
-            continue
-        if proc.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0 and write_smart_thumbnail(tmp, dest):
+            cmd = [
+                "ffmpeg",
+                "-y",
+                *prefix,
+                "-ss",
+                str(max(0.0, seek)),
+                "-i",
+                str(src),
+                "-frames:v",
+                "1",
+                "-vf",
+                f"scale='min({width},iw)':-2",
+                "-q:v",
+                "4",
+                str(tmp),
+            ]
             try:
-                tmp.unlink()
-            except OSError:
-                pass
+                proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+            except (subprocess.SubprocessError, OSError):
+                continue
+            if proc.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+                candidates.append((thumbnail_content_score(tmp), tmp))
+        if candidates:
+            break
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    for _, tmp in candidates:
+        if write_smart_thumbnail(tmp, dest):
+            for _, cleanup in candidates:
+                try:
+                    cleanup.unlink()
+                except OSError:
+                    pass
             return True
+    for _, cleanup in candidates:
+        try:
+            cleanup.unlink()
+        except OSError:
+            pass
     try:
-        tmp.unlink()
+        dest.unlink()
     except OSError:
         pass
     return False
@@ -703,12 +798,12 @@ def api_media_thumbnail(media_id: int):
     thumb_dir = output_root() / "_MANIFESTS" / MEDIA_THUMB_CACHE
     thumb = thumb_dir / f"{media_id}.jpg"
     if thumb.exists():
-        return FileResponse(thumb, media_type="image/jpeg")
+        return FileResponse(thumb, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
     thumb_dir.mkdir(parents=True, exist_ok=True)
     if detail.get("media_type") == "photo" and write_smart_thumbnail(path, thumb):
-        return FileResponse(thumb, media_type="image/jpeg")
+        return FileResponse(thumb, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
     if detail.get("media_type") == "video" and run_ffmpeg_thumbnail(path, thumb, width=800, timeout=30):
-        return FileResponse(thumb, media_type="image/jpeg")
+        return FileResponse(thumb, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
     raise HTTPException(status_code=404, detail="Thumbnail not found")
 
 

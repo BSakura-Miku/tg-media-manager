@@ -374,8 +374,10 @@ def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str
         clauses.append("m.author LIKE ?")
         params.append(f"%{author}%")
     if tag:
-        clauses.append("EXISTS (SELECT 1 FROM media_tags t WHERE t.media_id=m.id AND t.tag LIKE ?)")
-        params.append(f"%{tag}%")
+        tag_terms = [item.strip() for item in tag.replace("，", ",").split(",") if item.strip()]
+        for tag_term in tag_terms[:6]:
+            clauses.append("EXISTS (SELECT 1 FROM media_tags t WHERE t.media_id=m.id AND t.state != 'rejected' AND t.tag LIKE ?)")
+            params.append(f"%{tag_term}%")
     if q:
         clauses.append("(m.filename LIKE ? OR m.original_name LIKE ? OR m.author LIKE ? OR m.person LIKE ? OR m.scene LIKE ? OR m.platform LIKE ? OR m.quality LIKE ? OR EXISTS (SELECT 1 FROM media_tags t WHERE t.media_id=m.id AND t.tag LIKE ?) OR EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=m.id AND tr.text LIKE ?))")
         like = f"%{q}%"

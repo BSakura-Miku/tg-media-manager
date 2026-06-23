@@ -476,12 +476,27 @@ select, input {
 .tagGraphCanvas line {
   stroke: color-mix(in srgb, var(--accent) 46%, var(--line));
   opacity: .62;
+  cursor: pointer;
+}
+.tagGraphCanvas line.isFocused {
+  stroke: var(--accent);
+  opacity: .96;
+}
+.tagGraphCanvas line.isDimmed {
+  opacity: .16;
 }
 .tagGraphCanvas circle {
   fill: color-mix(in srgb, var(--accent) 74%, var(--panel));
   stroke: var(--text);
   stroke-width: .18;
   cursor: pointer;
+}
+.tagGraphCanvas g.isFocused circle {
+  fill: var(--accent);
+  stroke-width: .36;
+}
+.tagGraphCanvas g.isDimmed {
+  opacity: .26;
 }
 .tagGraphCanvas text {
   fill: var(--soft);
@@ -491,12 +506,41 @@ select, input {
   stroke: var(--panel-2);
   stroke-width: .75px;
   cursor: pointer;
+  user-select: none;
+}
+.tagGraphCanvas g.isFocused text {
+  fill: var(--text);
 }
 .tagNodeList {
   max-height: 560px;
   overflow: auto;
   display: grid;
   gap: 7px;
+}
+.tagFocusCard {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
+}
+.tagFocusCard > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.tagFocusCard > strong {
+  color: var(--text);
+  font-size: 18px;
+}
+.focusActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+.focusActions button {
+  min-height: 34px;
 }
 .tagNodeList button,
 .edgeList button {
@@ -509,6 +553,10 @@ select, input {
   justify-content: stretch;
   padding: 8px 10px;
   background: var(--panel-2);
+}
+.tagNodeList button.isActive {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-2));
 }
 .tagNodeList span,
 .edgeList span {

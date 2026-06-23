@@ -178,6 +178,11 @@ const i18n = {
     randomMedia: 'Random media',
     randomize: 'Randomize',
     tagGraphHelp: 'Tags that often appear together are connected. Click a node or edge to search matching media.',
+    tagGraphFocusHelp: 'Click a node to focus, drag it to untangle the graph, or click an edge to search media that has both tags.',
+    selectedTag: 'Selected tag',
+    connectedTags: 'Connected tags',
+    clearFocus: 'Clear focus',
+    showMedia: 'Show media',
     tagGraphEmpty: 'No tag graph yet. Rebuild index and sync vision labels first.',
     refreshGraph: 'Refresh graph',
     relatedTags: 'Related tags',
@@ -423,6 +428,11 @@ const i18n = {
     randomMedia: '随机媒体',
     randomize: '随机刷新',
     tagGraphHelp: '经常一起出现的标签会连线。点击节点或连线可以按标签查媒体。',
+    tagGraphFocusHelp: '点击节点聚焦，拖动节点整理图谱；点击连线会搜索同时包含两个标签的媒体。',
+    selectedTag: '选中标签',
+    connectedTags: '关联标签',
+    clearFocus: '清除聚焦',
+    showMedia: '查看媒体',
     tagGraphEmpty: '还没有标签图谱。先重建索引并同步视觉标签。',
     refreshGraph: '刷新图谱',
     relatedTags: '关联标签',
@@ -1135,47 +1145,100 @@ function LogPanel({ selectedJob, jobLog, start, setActive, t }) {
 
 function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
   const [minEdge, setMinEdge] = useState(2);
+  const [focusedTag, setFocusedTag] = useState('');
+  const [draggingTag, setDraggingTag] = useState('');
+  const [manualPositions, setManualPositions] = useState({});
   const nodes = graph.nodes || [];
   const edges = graph.edges || [];
   const topNodes = nodes.slice(0, 48);
   const maxCount = Math.max(...topNodes.map(node => Number(node.media_count || 0)), 1);
-  const positions = new Map(topNodes.map((node, index) => {
+  const positions = useMemo(() => new Map(topNodes.map((node, index) => {
+    if (manualPositions[node.tag]) return [node.tag, manualPositions[node.tag]];
     const angle = (index / Math.max(1, topNodes.length)) * Math.PI * 2;
-    const radius = 38 + (index % 4) * 8;
-    return [node.tag, { x: 50 + Math.cos(angle) * radius, y: 50 + Math.sin(angle) * radius }];
-  }));
-  function openTag(tag) {
-    loadMedia({ tag, limit: 100 });
+    const radius = 16 + Math.sqrt(index + 1) * 5.8;
+    return [node.tag, {
+      x: Math.max(6, Math.min(94, 50 + Math.cos(angle) * radius)),
+      y: Math.max(8, Math.min(92, 50 + Math.sin(angle) * radius)),
+    }];
+  })), [topNodes, manualPositions]);
+  const neighborMap = useMemo(() => {
+    const map = new Map();
+    edges.forEach(edge => {
+      if (!map.has(edge.source)) map.set(edge.source, []);
+      if (!map.has(edge.target)) map.set(edge.target, []);
+      map.get(edge.source).push({ tag: edge.target, weight: edge.weight, edge });
+      map.get(edge.target).push({ tag: edge.source, weight: edge.weight, edge });
+    });
+    for (const values of map.values()) values.sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0));
+    return map;
+  }, [edges]);
+  const focusedNeighbors = focusedTag ? (neighborMap.get(focusedTag) || []) : [];
+  function openTag(tag, secondTag = '') {
+    loadMedia({ tag: secondTag ? `${tag},${secondTag}` : tag, limit: 100 });
     setActive('library');
+  }
+  function svgPoint(event) {
+    const rect = event.currentTarget.closest('svg').getBoundingClientRect();
+    return {
+      x: Math.max(4, Math.min(96, ((event.clientX - rect.left) / Math.max(1, rect.width)) * 100)),
+      y: Math.max(6, Math.min(94, ((event.clientY - rect.top) / Math.max(1, rect.height)) * 100)),
+    };
+  }
+  function moveNode(event) {
+    if (!draggingTag) return;
+    setManualPositions({ ...manualPositions, [draggingTag]: svgPoint(event) });
+  }
+  function edgeIsFocused(edge) {
+    return focusedTag && (edge.source === focusedTag || edge.target === focusedTag);
+  }
+  function nodeIsDimmed(tag) {
+    if (!focusedTag || tag === focusedTag) return false;
+    return !focusedNeighbors.some(item => item.tag === tag);
   }
   return (
     <>
       <section className="panel">
         <div className="panelHead"><h2>{t.tagGraph}</h2><div className="panelActions"><select value={minEdge} onChange={event => setMinEdge(Number(event.target.value))}><option value="1">1+</option><option value="2">2+</option><option value="4">4+</option><option value="8">8+</option></select><button className="panelButton" onClick={() => loadTagGraph({ min_edge: minEdge })}><RefreshCw size={16} />{t.refreshGraph}</button></div><span>{nodes.length}</span></div>
-        <div className="hintBox"><span>{t.tagGraphHelp}</span></div>
+        <div className="hintBox"><span>{t.tagGraphHelp} {t.tagGraphFocusHelp}</span></div>
         {!nodes.length ? <Empty label={t.tagGraphEmpty} /> : (
           <div className="graphLayout">
-            <svg className="tagGraphCanvas" viewBox="0 0 100 100" role="img">
+            <svg className="tagGraphCanvas" viewBox="0 0 100 100" role="img" onPointerMove={moveNode} onPointerUp={() => setDraggingTag('')} onPointerLeave={() => setDraggingTag('')}>
               {edges.filter(edge => positions.has(edge.source) && positions.has(edge.target)).slice(0, 180).map(edge => {
                 const left = positions.get(edge.source);
                 const right = positions.get(edge.target);
-                return <line key={`${edge.source}-${edge.target}`} x1={left.x} y1={left.y} x2={right.x} y2={right.y} strokeWidth={Math.min(1.8, 0.25 + Number(edge.weight || 1) / 18)} />;
+                return <line className={edgeIsFocused(edge) ? 'isFocused' : focusedTag ? 'isDimmed' : ''} key={`${edge.source}-${edge.target}`} x1={left.x} y1={left.y} x2={right.x} y2={right.y} strokeWidth={Math.min(2.2, 0.25 + Number(edge.weight || 1) / 18)} onClick={() => openTag(edge.source, edge.target)} />;
               })}
               {topNodes.map(node => {
                 const point = positions.get(node.tag);
                 const size = 1.8 + (Number(node.media_count || 0) / maxCount) * 4.2;
-                return <g key={node.tag} onClick={() => openTag(node.tag)}><circle cx={point.x} cy={point.y} r={size} /><text x={point.x} y={point.y - size - 1.2}>{node.tag}</text></g>;
+                const classes = [focusedTag === node.tag ? 'isFocused' : '', nodeIsDimmed(node.tag) ? 'isDimmed' : ''].filter(Boolean).join(' ');
+                return (
+                  <g className={classes} key={node.tag} onClick={() => setFocusedTag(node.tag)} onDoubleClick={() => openTag(node.tag)} onPointerDown={event => { event.currentTarget.setPointerCapture?.(event.pointerId); setDraggingTag(node.tag); }}>
+                    <circle cx={point.x} cy={point.y} r={size} />
+                    <text x={point.x} y={point.y - size - 1.2}>{node.tag}</text>
+                  </g>
+                );
               })}
             </svg>
             <div className="tagNodeList">
-              {nodes.slice(0, 60).map(node => <button key={`${node.category}-${node.tag}`} onClick={() => openTag(node.tag)}><span>{node.category || t.tags}</span><strong>{node.tag}</strong><em>{node.media_count}</em></button>)}
+              {focusedTag && (
+                <div className="tagFocusCard">
+                  <span>{t.selectedTag}</span>
+                  <strong>{focusedTag}</strong>
+                  <div className="focusActions">
+                    <button onClick={() => openTag(focusedTag)}>{t.showMedia}</button>
+                    <button onClick={() => setFocusedTag('')}>{t.clearFocus}</button>
+                  </div>
+                </div>
+              )}
+              {(focusedTag ? focusedNeighbors.map(item => ({ tag: item.tag, media_count: item.weight, category: t.connectedTags, pair: focusedTag })) : nodes.slice(0, 60)).map(node => <button className={focusedTag && node.tag === focusedTag ? 'isActive' : ''} key={`${node.category}-${node.tag}`} onClick={() => focusedTag && node.pair ? openTag(node.pair, node.tag) : setFocusedTag(node.tag)}><span>{node.category || t.tags}</span><strong>{node.tag}</strong><em>{node.media_count}</em></button>)}
             </div>
           </div>
         )}
       </section>
       <section className="panel">
         <div className="panelHead"><h2>{t.relatedTags}</h2><span>{edges.length}</span></div>
-        {!edges.length ? <Empty label={t.noRows} /> : <div className="edgeList">{edges.slice(0, 80).map(edge => <button key={`${edge.source}-${edge.target}`} onClick={() => openTag(edge.source)}><strong>{edge.source}</strong><span>{edge.target}</span><em>{edge.weight}</em></button>)}</div>}
+        {!edges.length ? <Empty label={t.noRows} /> : <div className="edgeList">{edges.slice(0, 80).map(edge => <button key={`${edge.source}-${edge.target}`} onClick={() => openTag(edge.source, edge.target)}><strong>{edge.source}</strong><span>{edge.target}</span><em>{edge.weight}</em></button>)}</div>}
       </section>
     </>
   );
