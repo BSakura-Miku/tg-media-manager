@@ -15,6 +15,7 @@ import {
   FolderOpen,
   Grid3X3,
   HardDrive,
+  Heart,
   HelpCircle,
   Image as ImageIcon,
   Languages,
@@ -309,6 +310,17 @@ const i18n = {
     tagCorrect: 'Correct',
     tagWrong: 'Wrong',
     tagFeedbackSaved: 'Feedback saved',
+    favorite: 'Favorite',
+    unfavorite: 'Unfavorite',
+    favoriteSaved: 'Favorite updated',
+    deleteMedia: 'Delete media',
+    deleteMediaConfirm: 'Move this media to _REVIEW/Deleted? It will not be physically destroyed.',
+    mediaDeleted: 'Moved to Deleted review folder',
+    manualTag: 'Manual tag',
+    addTag: 'Add tag',
+    tagCategory: 'Category',
+    saveAuthor: 'Save author',
+    manualEditSaved: 'Saved',
     trainVisionCalibrator: 'Train calibrator',
     timeline: 'Timeline',
     confidence: 'Confidence',
@@ -685,6 +697,17 @@ const i18n = {
     tagCorrect: '正确',
     tagWrong: '错误',
     tagFeedbackSaved: '反馈已保存',
+    favorite: '收藏',
+    unfavorite: '取消收藏',
+    favoriteSaved: '收藏已更新',
+    deleteMedia: '删除媒体',
+    deleteMediaConfirm: '把这个媒体移动到 _REVIEW/Deleted？不会物理销毁文件。',
+    mediaDeleted: '已移动到 Deleted 待审目录',
+    manualTag: '手动标签',
+    addTag: '添加标签',
+    tagCategory: '分类',
+    saveAuthor: '保存作者',
+    manualEditSaved: '已保存',
     trainVisionCalibrator: '训练校准器',
     timeline: '时间轴',
     confidence: '置信度',
@@ -2044,6 +2067,12 @@ function MediaGrid({ items, t }) {
     const data = await api(`/api/media/${item.id}`);
     setDetail(data);
   }
+  async function reloadSelected(mediaId) {
+    const data = await api(`/api/media/${mediaId}`);
+    setDetail(data);
+    setSelected(data);
+    return data;
+  }
   if (!items?.length) return <Empty label={t.noRows} />;
   return (
     <>
@@ -2063,7 +2092,7 @@ function MediaGrid({ items, t }) {
           </button>
         ))}
       </div>
-      {selected && <MediaViewer item={selected} detail={detail} close={() => { setSelected(null); setDetail(null); }} t={t} />}
+      {selected && <MediaViewer item={selected} detail={detail} reload={reloadSelected} close={() => { setSelected(null); setDetail(null); }} t={t} />}
     </>
   );
 }
@@ -2083,25 +2112,102 @@ function ModalPortal({ children }) {
   return createPortal(children, document.body);
 }
 
-function MediaViewer({ item, detail, close, t }) {
+function MediaViewer({ item, detail, reload, close, t }) {
   const data = detail || item;
   const tags = Array.isArray(data.tags) ? data.tags : String(data.tags || '').split(',').filter(Boolean).map(tag => ({ tag }));
   const timeline = Array.isArray(data.timeline) ? data.timeline : [];
   const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [manualTag, setManualTag] = useState('');
+  const [manualCategory, setManualCategory] = useState('');
+  const [authorDraft, setAuthorDraft] = useState(data.author || '');
+  const [busyAction, setBusyAction] = useState('');
+  const isFavorite = tags.some(tag => tag.tag === 'Favorite' && tag.state !== 'rejected');
+  useEffect(() => setAuthorDraft(data.author || ''), [data.id, data.author]);
+  async function refreshDetail() {
+    if (reload && data.id) await reload(data.id);
+  }
+  async function runViewerAction(name, action) {
+    setBusyAction(name);
+    try {
+      await action();
+    } catch (exc) {
+      setFeedbackMessage(exc.message || String(exc));
+    } finally {
+      setBusyAction('');
+    }
+  }
   async function sendTagFeedback(tag, verdict) {
     if (!data.id || !tag?.tag) return;
-    await api(`/api/media/${data.id}/tag-feedback`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tag: tag.tag, category: tag.category || '', verdict }),
+    await runViewerAction('tag-feedback', async () => {
+      await api(`/api/media/${data.id}/tag-feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag: tag.tag, category: tag.category || '', verdict }),
+      });
+      setFeedbackMessage(`${tag.tag}: ${t.tagFeedbackSaved}`);
+      await refreshDetail();
     });
-    setFeedbackMessage(`${tag.tag}: ${t.tagFeedbackSaved}`);
+  }
+  async function toggleFavorite() {
+    if (!data.id) return;
+    await runViewerAction('favorite', async () => {
+      await api(`/api/media/${data.id}/favorite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ favorite: !isFavorite }),
+      });
+      setFeedbackMessage(t.favoriteSaved);
+      await refreshDetail();
+    });
+  }
+  async function saveManualTag(event) {
+    event.preventDefault();
+    if (!manualTag.trim() || !data.id) return;
+    await runViewerAction('manual-tag', async () => {
+      await api(`/api/media/${data.id}/manual-tag`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag: manualTag.trim(), category: manualCategory.trim() }),
+      });
+      setManualTag('');
+      setManualCategory('');
+      setFeedbackMessage(t.manualEditSaved);
+      await refreshDetail();
+    });
+  }
+  async function saveAuthor(event) {
+    event.preventDefault();
+    if (!data.id) return;
+    await runViewerAction('author', async () => {
+      await api(`/api/media/${data.id}/author`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ author: authorDraft.trim() }),
+      });
+      setFeedbackMessage(t.manualEditSaved);
+      await refreshDetail();
+    });
+  }
+  async function deleteMedia() {
+    if (!data.id || !window.confirm(t.deleteMediaConfirm)) return;
+    await runViewerAction('delete', async () => {
+      await api(`/api/media/${data.id}`, { method: 'DELETE' });
+      setFeedbackMessage(t.mediaDeleted);
+      close();
+    });
   }
   return (
     <ModalPortal>
     <div className="viewerBackdrop" role="dialog" aria-modal="true">
       <div className="viewerPanel">
-        <div className="viewerHead"><h2>{t.mediaDetail}</h2><button className="iconButton" onClick={close}><XCircle size={18} /></button></div>
+        <div className="viewerHead">
+          <h2>{t.mediaDetail}</h2>
+          <div className="viewerActions">
+            <button className={`iconButton ${isFavorite ? 'isFavorite' : ''}`} onClick={toggleFavorite} disabled={!!busyAction} title={isFavorite ? t.unfavorite : t.favorite}><Heart size={18} /></button>
+            <button className="iconButton dangerIcon" onClick={deleteMedia} disabled={!!busyAction} title={t.deleteMedia}><Trash2 size={18} /></button>
+            <button className="iconButton" onClick={close}><XCircle size={18} /></button>
+          </div>
+        </div>
         <div className="viewerBody">
           <div className="viewerMedia">
             {data.media_type === 'video' ? (
@@ -2112,6 +2218,15 @@ function MediaViewer({ item, detail, close, t }) {
             ) : <img src={`/api/media/${data.id}/file`} alt={data.filename} />}
           </div>
           <div className="viewerInfo">
+            <form className="manualEditForm" onSubmit={saveAuthor}>
+              <label>{t.authorName}<input value={authorDraft} onChange={event => setAuthorDraft(event.target.value)} placeholder={t.authorName} /></label>
+              <button type="submit" disabled={busyAction === 'author'}><Save size={15} />{t.saveAuthor}</button>
+            </form>
+            <form className="manualEditForm tagEditForm" onSubmit={saveManualTag}>
+              <label>{t.manualTag}<input value={manualTag} onChange={event => setManualTag(event.target.value)} placeholder={t.tags} /></label>
+              <label>{t.tagCategory}<input value={manualCategory} onChange={event => setManualCategory(event.target.value)} placeholder="manual" /></label>
+              <button type="submit" disabled={busyAction === 'manual-tag' || !manualTag.trim()}><Tags size={15} />{t.addTag}</button>
+            </form>
             <div className="list">
               <div className="row"><span>{t.authorName}</span><strong>{data.author || '-'}</strong></div>
               <div className="row"><span>{t.originalName}</span><strong>{data.display_original_name || data.original_name || data.filename}</strong></div>

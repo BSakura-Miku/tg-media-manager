@@ -19,6 +19,7 @@ from .db import connect, get_settings, init_db, rows_to_dicts, save_settings
 from .jobs import ALLOWED_COMMANDS, create_job, mark_interrupted_jobs, request_job_cancel
 from .media_stats import summary
 from .metadata import (
+    add_manual_media_tag,
     media_by_relative_paths,
     media_detail,
     media_for_author,
@@ -28,6 +29,9 @@ from .metadata import (
     rebuild_similarity_index,
     risk_queue,
     set_tag_feedback,
+    set_manual_author,
+    set_media_favorite,
+    soft_delete_media,
     similarity_groups,
     subtitle_for_media,
     tag_graph,
@@ -86,6 +90,19 @@ class TagFeedbackRequest(BaseModel):
     category: str = ""
     verdict: str
     note: str = ""
+
+
+class FavoriteRequest(BaseModel):
+    favorite: bool = True
+
+
+class ManualTagRequest(BaseModel):
+    tag: str
+    category: str = ""
+
+
+class ManualAuthorRequest(BaseModel):
+    author: str = ""
 
 
 class SettingsRequest(BaseModel):
@@ -983,6 +1000,44 @@ def api_media_tag_feedback(media_id: int, req: TagFeedbackRequest) -> dict:
         return set_tag_feedback(media_id, req.tag, req.category, verdict, req.note)
     except KeyError:
         raise HTTPException(status_code=404, detail="Media not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/media/{media_id}/favorite")
+def api_media_favorite(media_id: int, req: FavoriteRequest) -> dict:
+    try:
+        return set_media_favorite(media_id, req.favorite)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Media not found")
+
+
+@app.post("/api/media/{media_id}/manual-tag")
+def api_media_manual_tag(media_id: int, req: ManualTagRequest) -> dict:
+    try:
+        return add_manual_media_tag(media_id, req.tag, req.category)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Media not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/media/{media_id}/author")
+def api_media_author(media_id: int, req: ManualAuthorRequest) -> dict:
+    try:
+        return set_manual_author(media_id, req.author)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Media not found")
+
+
+@app.delete("/api/media/{media_id}")
+def api_media_delete(media_id: int) -> dict:
+    try:
+        return soft_delete_media(media_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Media not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

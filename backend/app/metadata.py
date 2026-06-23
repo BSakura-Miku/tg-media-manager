@@ -564,6 +564,123 @@ def set_tag_feedback(media_id: int, tag: str, category: str, verdict: int, note:
     return {"ok": True, "media_id": media_id, "tag": tag, "category": category, "verdict": verdict}
 
 
+def set_media_favorite(media_id: int, favorite: bool) -> dict:
+    init_db()
+    with connect() as conn:
+        media = conn.execute("SELECT id FROM media_items WHERE id=?", (media_id,)).fetchone()
+        if media is None:
+            raise KeyError("media not found")
+        if favorite:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+                VALUES (?, 'Favorite', 'system', 1.0, 'manual', 'confirmed')
+                """,
+                (media_id,),
+            )
+        else:
+            conn.execute("UPDATE media_tags SET state='rejected' WHERE media_id=? AND tag='Favorite' AND source='manual'", (media_id,))
+        conn.execute(
+            "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'favorite', ?)",
+            (media_id, "on" if favorite else "off"),
+        )
+    return {"ok": True, "media_id": media_id, "favorite": favorite}
+
+
+def add_manual_media_tag(media_id: int, tag: str, category: str = "") -> dict:
+    init_db()
+    tag = tag.strip()
+    category = (category or category_for_tag(tag)).strip()
+    if not tag:
+        raise ValueError("tag is required")
+    with connect() as conn:
+        media = conn.execute("SELECT id FROM media_items WHERE id=?", (media_id,)).fetchone()
+        if media is None:
+            raise KeyError("media not found")
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+            VALUES (?, ?, ?, 1.0, 'manual', 'confirmed')
+            """,
+            (media_id, tag, category),
+        )
+        conn.execute(
+            "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'manual_tag', ?)",
+            (media_id, f"{category}:{tag}"),
+        )
+    return {"ok": True, "media_id": media_id, "tag": tag, "category": category}
+
+
+def set_manual_author(media_id: int, author: str) -> dict:
+    init_db()
+    author = author.strip()[:120]
+    with connect() as conn:
+        media = conn.execute("SELECT id, author FROM media_items WHERE id=?", (media_id,)).fetchone()
+        if media is None:
+            raise KeyError("media not found")
+        conn.execute("UPDATE media_items SET author=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (author, media_id))
+        conn.execute("UPDATE media_tags SET state='rejected' WHERE media_id=? AND category='author'", (media_id,))
+        if author:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+                VALUES (?, ?, 'author', 1.0, 'manual', 'confirmed')
+                """,
+                (media_id, author),
+            )
+        conn.execute(
+            "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'manual_author', ?)",
+            (media_id, author or "(clear)"),
+        )
+    return {"ok": True, "media_id": media_id, "author": author}
+
+
+def soft_delete_media(media_id: int) -> dict:
+    init_db()
+    root = output_root().resolve()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM media_items WHERE id=?", (media_id,)).fetchone()
+        if row is None:
+            raise KeyError("media not found")
+        media = dict(row)
+    source = Path(media["path"]).resolve()
+    try:
+        source.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("media path is outside library root") from exc
+    if not source.exists():
+        raise FileNotFoundError("media file missing")
+    type_dir = "Videos" if media.get("media_type") == "video" else "Photos" if media.get("media_type") == "photo" else "Other"
+    target_dir = root / "_REVIEW" / "Deleted" / type_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / source.name
+    if target.exists():
+        target = target_dir / f"{source.stem}_{media_id}{source.suffix}"
+    shutil.move(str(source), str(target))
+    relative_path = str(target.relative_to(root))
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE media_items
+            SET path=?, relative_path=?, filename=?, normalized_path=?, risk_state='deleted', updated_at=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (str(target), relative_path, target.name, relative_path, media_id),
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+            VALUES (?, 'Deleted', 'system', 1.0, 'manual', 'confirmed')
+            """,
+            (media_id,),
+        )
+        conn.execute(
+            "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'soft_delete', ?)",
+            (media_id, relative_path),
+        )
+    return {"ok": True, "media_id": media_id, "path": relative_path}
+
+
 def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str = "", limit: int = 100, offset: int = 0, include_risk: bool = False, randomize: bool = False) -> dict:
     clauses = []
     params: list[object] = []

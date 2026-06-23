@@ -361,6 +361,23 @@ select, input {
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
 }
+.viewerActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.iconButton.isFavorite {
+  color: #ffd166;
+  border-color: rgba(255, 209, 102, .44);
+  background: rgba(255, 209, 102, .14);
+}
+.iconButton.isFavorite svg {
+  fill: currentColor;
+}
+.dangerIcon {
+  color: #ff8a9a;
+  border-color: rgba(255, 138, 154, .36);
+}
 .viewerBody {
   min-height: 0;
   display: grid;
@@ -393,6 +410,33 @@ select, input {
   align-content: start;
   gap: 12px;
   min-width: 0;
+}
+.manualEditForm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-2) 72%, transparent);
+}
+.manualEditForm label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 680;
+}
+.manualEditForm input {
+  width: 100%;
+}
+.manualEditForm button {
+  height: 38px;
+  white-space: nowrap;
+}
+.tagEditForm {
+  grid-template-columns: minmax(0, 1.15fr) minmax(96px, .75fr) auto;
 }
 .tagCloud {
   display: flex;
