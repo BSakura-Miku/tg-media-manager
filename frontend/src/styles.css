@@ -1004,6 +1004,24 @@ tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); col
   font-size: 13px;
   font-weight: 650;
 }
+.fieldLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.fieldHelp {
+  color: var(--muted);
+  cursor: help;
+  opacity: .82;
+  transition: color .2s ease, opacity .2s ease, transform .2s ease;
+}
+.fieldHelp:hover,
+.fieldHelp:focus {
+  color: var(--accent);
+  opacity: 1;
+  transform: translateY(-1px);
+  outline: none;
+}
 .formGrid small {
   color: var(--muted);
   font-weight: 500;
@@ -1338,14 +1356,20 @@ aside {
 }
 
 .brandMark {
-  width: 42px;
-  height: 42px;
+  width: 46px;
+  height: 46px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #6e7dff, #56d8d1);
+  border-radius: 14px;
+  background: transparent;
   color: white;
-  box-shadow: 0 0 28px rgba(95, 128, 255, .48);
+  box-shadow: 0 0 34px rgba(95, 128, 255, .34);
+}
+
+.appLogo {
+  display: block;
+  width: 46px;
+  height: 46px;
 }
 
 .brand strong {
@@ -1354,7 +1378,7 @@ aside {
 }
 
 .brand span {
-  display: block;
+  display: none;
   color: var(--soft);
 }
 
@@ -2343,4 +2367,129 @@ button:active {
 
 :root[data-theme="light"] .tagGraphCanvas g.isFocused text {
   fill: #061225;
+}
+
+/* Product polish overrides */
+.brand {
+  align-items: center;
+}
+
+.brand strong {
+  font-size: 18px;
+  line-height: 1.12;
+}
+
+.brand small {
+  margin-top: 6px;
+  font-size: 13px;
+  letter-spacing: .01em;
+}
+
+.tagGraphCanvas {
+  min-height: 620px;
+}
+
+.tagGraphCanvas circle {
+  stroke: rgba(255, 255, 255, .72);
+  stroke-width: .22;
+  fill: color-mix(in srgb, var(--accent) 72%, #1c2740);
+}
+
+.tagGraphCanvas g.isFocused circle {
+  stroke: white;
+  filter: drop-shadow(0 0 12px rgba(132, 178, 255, .78));
+}
+
+.tagGraphCanvas text.nodeLabel,
+.tagGraphCanvas text.nodeCount,
+:root[data-theme="light"] .tagGraphCanvas text.nodeLabel,
+:root[data-theme="light"] .tagGraphCanvas text.nodeCount {
+  fill: #f8fbff;
+  stroke: rgba(4, 9, 16, .72);
+  stroke-width: .35px;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  font-weight: 820;
+  letter-spacing: 0;
+}
+
+.tagGraphCanvas text.nodeCount,
+:root[data-theme="light"] .tagGraphCanvas text.nodeCount {
+  fill: rgba(248, 251, 255, .78);
+  font-weight: 720;
+}
+
+:root[data-theme="light"] .tagGraphCanvas circle {
+  fill: #4f82d7;
+  stroke: rgba(255, 255, 255, .92);
+}
+
+:root[data-theme="light"] .tagGraphCanvas text.nodeLabel,
+:root[data-theme="light"] .tagGraphCanvas text.nodeCount {
+  fill: #ffffff;
+  stroke: rgba(15, 23, 42, .52);
+}
+
+.mediaCard,
+.recentCard {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  padding: 0;
+}
+
+.mediaCard .mediaThumb,
+.recentCard .recentThumb {
+  border-bottom: 0;
+}
+
+.mediaCard .mediaThumb:after,
+.recentCard .recentThumb:after {
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0) 34%, rgba(0, 0, 0, .22) 58%, rgba(0, 0, 0, .82) 100%),
+    linear-gradient(0deg, rgba(7, 12, 20, .22), transparent 44%);
+}
+
+.mediaMeta,
+.recentMeta {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(8, 13, 22, .42), rgba(8, 13, 22, .78));
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .28);
+  backdrop-filter: blur(12px) saturate(1.12);
+  text-align: left;
+}
+
+.mediaMeta strong,
+.mediaMeta p,
+.recentMeta strong,
+.recentMeta small {
+  color: #fff;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .72);
+}
+
+.mediaMeta p,
+.recentMeta small {
+  color: rgba(244, 248, 255, .76);
+}
+
+.mediaMeta .faceStats span,
+.recentMeta span {
+  color: rgba(255, 255, 255, .88);
+  background: rgba(5, 10, 18, .5);
+  border-color: rgba(255, 255, 255, .17);
+}
+
+.mediaThumb span,
+.recentThumb span {
+  top: 10px;
+  bottom: auto;
 }

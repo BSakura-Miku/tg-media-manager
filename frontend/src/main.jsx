@@ -5,7 +5,6 @@ import {
   Activity,
   Archive,
   Bell,
-  Bot,
   Camera,
   CheckCircle2,
   Database,
@@ -16,6 +15,7 @@ import {
   FolderOpen,
   Grid3X3,
   HardDrive,
+  HelpCircle,
   Image as ImageIcon,
   Languages,
   LockKeyhole,
@@ -44,6 +44,7 @@ const i18n = {
     locale: 'en',
     app: 'Private Library',
     manager: 'TG Media Manager',
+    lockAction: 'Privacy lock: hide details',
     version: 'Version',
     build: 'build',
     title: 'Library Console',
@@ -176,6 +177,21 @@ const i18n = {
     cpuOnly: 'CPU only',
     gpuPreferred: 'GPU preferred',
     gpuHint: 'These settings are passed to scan, face, vision, video decode, and speech jobs. Use CPU only if the GPU driver is unstable.',
+    settingHelp: {
+      computeDevice: 'Global preference for inference jobs. Auto will use GPU where supported and fall back to CPU.',
+      ffmpegHwaccel: 'Hardware video decoding for frame extraction. VAAPI is Intel iGPU on most Linux NAS devices; QSV is Intel Quick Sync.',
+      frameWorkers: 'How many videos are decoded in parallel. More workers can be faster, but heavy disks may become the bottleneck.',
+      framesPerVideo: 'How many still frames are sampled from each video for vision and face analysis.',
+      checkpointEvery: 'How often progress and frame indexes are saved. Smaller values resume more precisely; larger values write less often.',
+      openvinoDevice: 'Device used by OpenVINO models. GPU uses Intel iGPU/NPU when available; AUTO lets OpenVINO decide.',
+      openclipModel: 'OpenCLIP architecture for scene/tag recognition. ViT-L is balanced; ViT-H is slower but stronger.',
+      openclipPretrained: 'The pretrained weight set paired with the OpenCLIP architecture.',
+      openclipStrongThreshold: 'Confidence cutoff for second-pass vision tagging. Higher is stricter and sends more media to review.',
+      faceProviders: 'Runtime used by face models. OpenVINO can use Intel acceleration, then CPU is used as fallback.',
+      asrEngine: 'Speech-to-text backend. Auto prefers configured local models and falls back when needed.',
+      whisperDevice: 'Device for faster-whisper. Keep CPU on this NAS unless CUDA hardware is available.',
+      transcribeMaxSeconds: '0 means transcribe full video audio. Set a limit only for quick sampling.',
+    },
     auto: 'Auto',
     gpu: 'GPU',
     cpu: 'CPU',
@@ -404,6 +420,7 @@ const i18n = {
     locale: 'zh-CN',
     app: '私享影库',
     manager: 'TG Media Manager',
+    lockAction: '隐私锁：隐藏详情',
     version: '版本',
     build: '构建',
     title: '影库控制台',
@@ -536,6 +553,21 @@ const i18n = {
     cpuOnly: '仅 CPU',
     gpuPreferred: '优先 GPU',
     gpuHint: '这些设置会传给扫描、人脸、视觉、视频解码和语音识别任务。如果核显驱动不稳定，可以切到仅 CPU。',
+    settingHelp: {
+      computeDevice: '全局推理偏好。自动模式会优先使用可用 GPU，不支持时回退 CPU。',
+      ffmpegHwaccel: '视频抽帧时的硬件解码。VAAPI 通常对应 Linux NAS 的 Intel 核显；QSV 是 Intel Quick Sync。',
+      frameWorkers: '同时解码多少个视频。数值越高不一定越快，磁盘 IO 可能先被打满。',
+      framesPerVideo: '每个视频抽取多少张静帧用于视觉识别和人脸识别。',
+      checkpointEvery: '任务进度和抽帧索引的落盘频率。越小越利于断点续跑，越大写盘更少。',
+      openvinoDevice: 'OpenVINO 模型使用的设备。GPU 会走 Intel 核显/NPU；AUTO 由 OpenVINO 自行选择。',
+      openclipModel: 'OpenCLIP 视觉识别模型结构。ViT-L 比较均衡；ViT-H 更强但更慢。',
+      openclipPretrained: '与 OpenCLIP 模型结构配套的预训练权重。',
+      openclipStrongThreshold: '强扫二次识别的置信度阈值。越高越严格，也会让更多媒体进入待确认。',
+      faceProviders: '人脸模型运行后端。OpenVINO 可用 Intel 加速，CPU 作为兜底。',
+      asrEngine: '语音转文字引擎。自动会优先使用已配置的本地模型。',
+      whisperDevice: 'faster-whisper 使用的设备。NAS 没有 CUDA 时保持 CPU。',
+      transcribeMaxSeconds: '0 表示完整识别视频音频；只想快速抽样时再设置秒数上限。',
+    },
     auto: '自动',
     gpu: 'GPU',
     cpu: 'CPU',
@@ -847,6 +879,44 @@ function buildLabel(version, t) {
   return `${t.build} ${String(build).slice(0, 7)}`;
 }
 
+function AppLogo({ size = 42 }) {
+  return (
+    <svg className="appLogo" width={size} height={size} viewBox="0 0 48 48" role="img" aria-label="TG Media Manager logo">
+      <defs>
+        <linearGradient id="tgmmLogoGradient" x1="8" y1="7" x2="42" y2="42" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#7c8cff" />
+          <stop offset=".52" stopColor="#4fa9ff" />
+          <stop offset="1" stopColor="#5ee6cf" />
+        </linearGradient>
+        <filter id="tgmmLogoGlow" x="-35%" y="-35%" width="170%" height="170%" colorInterpolationFilters="sRGB">
+          <feGaussianBlur stdDeviation="3.2" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+      <rect x="4" y="4" width="40" height="40" rx="12" fill="url(#tgmmLogoGradient)" filter="url(#tgmmLogoGlow)" />
+      <path d="M15 18.5c0-2 1.6-3.5 3.5-3.5h11c1.9 0 3.5 1.5 3.5 3.5v11c0 2-1.6 3.5-3.5 3.5h-11c-1.9 0-3.5-1.5-3.5-3.5v-11Z" fill="none" stroke="white" strokeWidth="2.7" />
+      <path d="M20 24h8M24 20v8" stroke="white" strokeWidth="2.7" strokeLinecap="round" />
+      <path d="M14 23h-3.5M37.5 23H34M14 27h-3.5M37.5 27H34" stroke="white" strokeWidth="2.4" strokeLinecap="round" opacity=".82" />
+    </svg>
+  );
+}
+
+function Brand({ version, t, showBuild = false }) {
+  const build = buildLabel(version, t);
+  return (
+    <div className="brand">
+      <div className="brandMark"><AppLogo /></div>
+      <div>
+        <strong>TG Media Manager</strong>
+        <small title={build}>{displayVersion(version)}{showBuild && build ? ` ${build}` : ''}</small>
+      </div>
+    </div>
+  );
+}
+
 function prettyNumber(value) {
   const number = Number(value || 0);
   return Number.isFinite(number) ? number.toLocaleString() : '0';
@@ -862,6 +932,12 @@ function prettyBytes(value) {
     index += 1;
   }
   return `${size >= 10 || index === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[index]}`;
+}
+
+function shortenTagLabel(value, max = 8) {
+  const text = String(value || '');
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
 }
 
 function estimatedMediaTotal(summary, mediaResults) {
@@ -905,7 +981,7 @@ function LoginScreen({ login, error, theme, setTheme, t, version }) {
   return (
     <main className="loginShell">
       <section className="loginPanel">
-        <div className="brand"><Bot size={22} /><div><strong>{t.app}</strong><span>{t.manager}</span><small>{displayVersion(version)} {buildLabel(version, t)}</small></div></div>
+        <Brand version={version} t={t} showBuild />
         <h1>{t.login}</h1>
         <p>{t.privacyCopy}</p>
         {error && <div className="alert">{error}</div>}
@@ -1035,6 +1111,17 @@ function App() {
     await loadTagGraph();
     await loadSimilarity();
     await loadModels();
+  }
+
+  async function lockPrivacy() {
+    setSelectedJob(null);
+    setJobLog(null);
+    setQuery('');
+    setActive('dashboard');
+    if (!auth.enabled) return;
+    await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    const status = await api('/api/auth/status').catch(() => ({ enabled: true, authenticated: false, local_only: true }));
+    setAuth(status);
   }
 
   async function start(command) {
@@ -1322,7 +1409,7 @@ function App() {
   return (
     <main>
       <aside>
-        <div className="brand"><div className="brandMark"><Bot size={20} /></div><div><strong>{t.app}</strong><span>{t.manager}</span><small title={buildLabel(version, t)}>{displayVersion(version)}</small></div></div>
+        <Brand version={version} t={t} />
         <nav>{nav.map(([id, labelKey, Icon]) => <button className={active === id ? 'active' : ''} key={id} onClick={() => setActive(id)}><Icon size={16} /> {t[labelKey]}</button>)}</nav>
       </aside>
 
@@ -1338,7 +1425,7 @@ function App() {
               <button type="submit" title="Search"><Search size={16} /></button>
             </form>
             <button className="iconButton" title={t.recentLogs} onClick={() => setActive('logs')}><Bell size={18} /></button>
-            <button className="iconButton" title={t.privacyLocked}><LockKeyhole size={18} /></button>
+            <button className="iconButton" title={t.lockAction} onClick={lockPrivacy}><LockKeyhole size={18} /></button>
             <button className="iconButton" title={t.viewSwitcher} onClick={() => setActive('library')}><Grid3X3 size={18} /></button>
             <button className="iconButton" onClick={() => setLanguage(language === 'zh-CN' ? 'en' : 'zh-CN')} title={t.language}><Languages size={18} /></button>
             <button className="iconButton" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Theme">{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
@@ -1721,15 +1808,18 @@ function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
   const [zoom, setZoom] = useState(1);
   const nodes = graph.nodes || [];
   const edges = graph.edges || [];
-  const topNodes = nodes.slice(0, 48);
+  const topNodes = nodes.slice(0, 42);
   const maxCount = Math.max(...topNodes.map(node => Number(node.media_count || 0)), 1);
   const positions = useMemo(() => new Map(topNodes.map((node, index) => {
     if (manualPositions[node.tag]) return [node.tag, manualPositions[node.tag]];
-    const angle = (index / Math.max(1, topNodes.length)) * Math.PI * 2;
-    const radius = 16 + Math.sqrt(index + 1) * 5.8;
+    if (index === 0) return [node.tag, { x: 50, y: 50 }];
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    const ring = Math.ceil(Math.sqrt(index));
+    const angle = index * golden;
+    const radius = Math.min(39, 12 + ring * 6.2 + (index % 3) * 1.9);
     return [node.tag, {
-      x: Math.max(6, Math.min(94, 50 + Math.cos(angle) * radius)),
-      y: Math.max(8, Math.min(92, 50 + Math.sin(angle) * radius)),
+      x: Math.max(8, Math.min(92, 50 + Math.cos(angle) * radius)),
+      y: Math.max(10, Math.min(90, 50 + Math.sin(angle) * radius * .78)),
     }];
   })), [topNodes, manualPositions]);
   const neighborMap = useMemo(() => {
@@ -1807,12 +1897,19 @@ function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
               })}
               {topNodes.map(node => {
                 const point = drawnPositions.get(node.tag);
-                const size = 1.8 + (Number(node.media_count || 0) / maxCount) * 4.2;
+                const normalized = Math.sqrt(Number(node.media_count || 0) / maxCount);
+                const size = 3.2 + normalized * 7.2;
+                const fontSize = Math.max(1.25, Math.min(2.55, size * .28));
+                const countSize = Math.max(1, fontSize * .72);
                 const classes = [focusedTag === node.tag ? 'isFocused' : '', nodeIsDimmed(node.tag) ? 'isDimmed' : ''].filter(Boolean).join(' ');
                 return (
                   <g className={classes} key={node.tag} onClick={() => setFocusedTag(node.tag)} onDoubleClick={() => openTag(node.tag)} onPointerDown={event => { event.currentTarget.setPointerCapture?.(event.pointerId); setDraggingTag(node.tag); }}>
                     <circle cx={point.x} cy={point.y} r={size} />
-                    <text x={point.x} y={point.y - size - 1.2}>{node.tag}</text>
+                    <text className="nodeLabel" x={point.x} y={point.y - (Number(node.media_count || 0) ? countSize * .28 : 0)} style={{ fontSize: `${fontSize}px` }}>
+                      <title>{node.tag}</title>
+                      {shortenTagLabel(node.tag, size > 8 ? 9 : 7)}
+                    </text>
+                    {Number(node.media_count || 0) > 0 && <text className="nodeCount" x={point.x} y={point.y + fontSize * .92} style={{ fontSize: `${countSize}px` }}>{prettyNumber(node.media_count)}</text>}
                   </g>
                 );
               })}
@@ -2268,6 +2365,15 @@ function LogsPanel({ jobs, applied, openJob, setActive, t }) {
   return <section className="panel"><div className="panelHead"><h2>{t.recentLogs}</h2><span>{applied.rows} {t.moveLogRows}</span></div><div className="jobs">{jobs.map(job => <button className="job" key={job.id} onClick={() => { openJob(job.id); setActive('jobs'); }}><div className="jobMain"><strong>#{job.id} {job.command}</strong><p>{job.stdout || job.stderr || job.message || job.created_at}</p></div><JobBadge status={job.status} /></button>)}</div></section>;
 }
 
+function FieldLabel({ label, help }) {
+  return (
+    <span className="fieldLabel">
+      {label}
+      {help && <HelpCircle className="fieldHelp" size={15} tabIndex="0" aria-label={help}><title>{help}</title></HelpCircle>}
+    </span>
+  );
+}
+
 function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDraft, saveModelSource, saveManifestSource, pullModel, deleteModel, start, busy, t }) {
   const models = catalog?.models || [];
   const statusLabel = {
@@ -2390,25 +2496,25 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
           <label>{t.outputRoot}<input value={cfg.output_root || ''} onChange={event => update('output_root', event.target.value)} /></label>
           <label>{t.sourceDirs}<input value={cfg.source_dirs || ''} onChange={event => update('source_dirs', event.target.value)} placeholder="photos,photos2,videos,videos2" /><small>{t.sourceDirsHint}</small></label>
           <div className="formSectionTitle">{t.hardware}</div>
-          <label>{t.computeDevice}<select value={cfg.compute_device || 'auto'} onChange={event => update('compute_device', event.target.value)}><option value="auto">{t.auto}</option><option value="gpu">{t.gpuPreferred}</option><option value="cpu">{t.cpuOnly}</option></select><small>{t.gpuHint}</small></label>
-          <label>{t.ffmpegHwaccel}<select value={cfg.ffmpeg_hwaccel || 'auto'} onChange={event => update('ffmpeg_hwaccel', event.target.value)}><option value="auto">{t.auto}</option><option value="vaapi">VAAPI</option><option value="qsv">Intel QSV</option><option value="none">{t.ffmpegNone}</option></select></label>
-          <label>Frame workers<input type="number" min="1" max="16" value={cfg.frame_workers || 1} onChange={event => update('frame_workers', event.target.value)} /><small>NAS 建议 3-4；太高会打满磁盘 IO。</small></label>
-          <label>Frames per video<input type="number" min="1" max="12" value={cfg.frames_per_video || 3} onChange={event => update('frames_per_video', event.target.value)} /></label>
-          <label>Checkpoint every<input type="number" min="10" max="1000" value={cfg.frame_checkpoint_every || 100} onChange={event => update('frame_checkpoint_every', event.target.value)} /><small>抽帧索引和任务进度的落盘频率。</small></label>
-          <label>{t.openvinoDevice}<select value={cfg.openvino_device || 'GPU'} onChange={event => update('openvino_device', event.target.value)}><option value="GPU">{t.gpu}</option><option value="CPU">{t.cpu}</option><option value="AUTO">{t.openvinoAuto}</option></select></label>
-          <label>{t.openclipModel}<input value={cfg.openclip_model || 'ViT-L-14'} onChange={event => update('openclip_model', event.target.value)} placeholder="ViT-L-14" /><small>{t.openclipHint}</small></label>
-          <label>{t.openclipPretrained}<input value={cfg.openclip_pretrained || 'laion2b_s32b_b82k'} onChange={event => update('openclip_pretrained', event.target.value)} placeholder="laion2b_s32b_b82k" /></label>
-          <label>{t.openclipStrongModel}<input value={cfg.openclip_strong_model || 'ViT-H-14'} onChange={event => update('openclip_strong_model', event.target.value)} placeholder="ViT-H-14" /></label>
-          <label>{t.openclipStrongPretrained}<input value={cfg.openclip_strong_pretrained || 'laion2b_s32b_b79k'} onChange={event => update('openclip_strong_pretrained', event.target.value)} placeholder="laion2b_s32b_b79k" /></label>
-          <label>{t.openclipStrongThreshold}<input type="number" min="0.01" max="0.99" step="0.01" value={cfg.openclip_strong_threshold ?? 0.62} onChange={event => update('openclip_strong_threshold', event.target.value)} /></label>
+          <label><FieldLabel label={t.computeDevice} help={t.settingHelp?.computeDevice} /><select value={cfg.compute_device || 'auto'} onChange={event => update('compute_device', event.target.value)}><option value="auto">{t.auto}</option><option value="gpu">{t.gpuPreferred}</option><option value="cpu">{t.cpuOnly}</option></select><small>{t.gpuHint}</small></label>
+          <label><FieldLabel label={t.ffmpegHwaccel} help={t.settingHelp?.ffmpegHwaccel} /><select value={cfg.ffmpeg_hwaccel || 'auto'} onChange={event => update('ffmpeg_hwaccel', event.target.value)}><option value="auto">{t.auto}</option><option value="vaapi">VAAPI</option><option value="qsv">Intel QSV</option><option value="none">{t.ffmpegNone}</option></select></label>
+          <label><FieldLabel label="Frame workers" help={t.settingHelp?.frameWorkers} /><input type="number" min="1" max="16" value={cfg.frame_workers || 1} onChange={event => update('frame_workers', event.target.value)} /><small>NAS 建议 3-4；太高会打满磁盘 IO。</small></label>
+          <label><FieldLabel label="Frames per video" help={t.settingHelp?.framesPerVideo} /><input type="number" min="1" max="12" value={cfg.frames_per_video || 3} onChange={event => update('frames_per_video', event.target.value)} /></label>
+          <label><FieldLabel label="Checkpoint every" help={t.settingHelp?.checkpointEvery} /><input type="number" min="10" max="1000" value={cfg.frame_checkpoint_every || 100} onChange={event => update('frame_checkpoint_every', event.target.value)} /><small>抽帧索引和任务进度的落盘频率。</small></label>
+          <label><FieldLabel label={t.openvinoDevice} help={t.settingHelp?.openvinoDevice} /><select value={cfg.openvino_device || 'GPU'} onChange={event => update('openvino_device', event.target.value)}><option value="GPU">{t.gpu}</option><option value="CPU">{t.cpu}</option><option value="AUTO">{t.openvinoAuto}</option></select></label>
+          <label><FieldLabel label={t.openclipModel} help={t.settingHelp?.openclipModel} /><input value={cfg.openclip_model || 'ViT-L-14'} onChange={event => update('openclip_model', event.target.value)} placeholder="ViT-L-14" /><small>{t.openclipHint}</small></label>
+          <label><FieldLabel label={t.openclipPretrained} help={t.settingHelp?.openclipPretrained} /><input value={cfg.openclip_pretrained || 'laion2b_s32b_b82k'} onChange={event => update('openclip_pretrained', event.target.value)} placeholder="laion2b_s32b_b82k" /></label>
+          <label><FieldLabel label={t.openclipStrongModel} help={t.settingHelp?.openclipModel} /><input value={cfg.openclip_strong_model || 'ViT-H-14'} onChange={event => update('openclip_strong_model', event.target.value)} placeholder="ViT-H-14" /></label>
+          <label><FieldLabel label={t.openclipStrongPretrained} help={t.settingHelp?.openclipPretrained} /><input value={cfg.openclip_strong_pretrained || 'laion2b_s32b_b79k'} onChange={event => update('openclip_strong_pretrained', event.target.value)} placeholder="laion2b_s32b_b79k" /></label>
+          <label><FieldLabel label={t.openclipStrongThreshold} help={t.settingHelp?.openclipStrongThreshold} /><input type="number" min="0.01" max="0.99" step="0.01" value={cfg.openclip_strong_threshold ?? 0.62} onChange={event => update('openclip_strong_threshold', event.target.value)} /></label>
           <label className="checkLine"><input type="checkbox" checked={cfg.openclip_strong_low_conf_only !== false} onChange={event => update('openclip_strong_low_conf_only', event.target.checked)} />{t.openclipStrongLowOnly}</label>
-          <label>{t.faceProviders}<select value={cfg.face_providers || 'OpenVINOExecutionProvider,CPUExecutionProvider'} onChange={event => update('face_providers', event.target.value)}><option value="OpenVINOExecutionProvider,CPUExecutionProvider">OpenVINO + CPU fallback</option><option value="CPUExecutionProvider">CPUExecutionProvider</option></select></label>
-          <label>{t.asrEngine}<select value={cfg.asr_engine || 'auto'} onChange={event => update('asr_engine', event.target.value)}><option value="auto">{t.asrAuto}</option><option value="sensevoice-gguf">{t.asrSenseVoice}</option><option value="faster-whisper">{t.asrWhisper}</option></select></label>
+          <label><FieldLabel label={t.faceProviders} help={t.settingHelp?.faceProviders} /><select value={cfg.face_providers || 'OpenVINOExecutionProvider,CPUExecutionProvider'} onChange={event => update('face_providers', event.target.value)}><option value="OpenVINOExecutionProvider,CPUExecutionProvider">OpenVINO + CPU fallback</option><option value="CPUExecutionProvider">CPUExecutionProvider</option></select></label>
+          <label><FieldLabel label={t.asrEngine} help={t.settingHelp?.asrEngine} /><select value={cfg.asr_engine || 'auto'} onChange={event => update('asr_engine', event.target.value)}><option value="auto">{t.asrAuto}</option><option value="sensevoice-gguf">{t.asrSenseVoice}</option><option value="faster-whisper">{t.asrWhisper}</option></select></label>
           <label>{t.senseVoiceModel}<input value={cfg.sensevoice_gguf_model || '/models/sensevoice/SenseVoiceSmall.gguf'} onChange={event => update('sensevoice_gguf_model', event.target.value)} /></label>
           <label>{t.senseVoiceBin}<input value={cfg.sensevoice_gguf_bin || 'llama-sensevoice'} onChange={event => update('sensevoice_gguf_bin', event.target.value)} /></label>
           <label>{t.senseVoiceCommand}<input value={cfg.sensevoice_gguf_command || ''} onChange={event => update('sensevoice_gguf_command', event.target.value)} placeholder="{bin} -m {model} -f {audio} --language auto" /><small>{t.senseVoiceCommandHint}</small></label>
-          <label>{t.whisperDevice}<select value={cfg.whisper_device || 'cpu'} onChange={event => update('whisper_device', event.target.value)}><option value="cpu">{t.cpu}</option><option value="cuda">CUDA</option></select></label>
-          <label>{t.transcribeMaxSeconds}<input type="number" min="0" max="86400" value={cfg.transcribe_max_seconds ?? 0} onChange={event => update('transcribe_max_seconds', event.target.value)} /><small>{t.transcribeFullHint}</small></label>
+          <label><FieldLabel label={t.whisperDevice} help={t.settingHelp?.whisperDevice} /><select value={cfg.whisper_device || 'cpu'} onChange={event => update('whisper_device', event.target.value)}><option value="cpu">{t.cpu}</option><option value="cuda">CUDA</option></select></label>
+          <label><FieldLabel label={t.transcribeMaxSeconds} help={t.settingHelp?.transcribeMaxSeconds} /><input type="number" min="0" max="86400" value={cfg.transcribe_max_seconds ?? 0} onChange={event => update('transcribe_max_seconds', event.target.value)} /><small>{t.transcribeFullHint}</small></label>
           <div className="formSectionTitle">{t.monitor}</div>
           <label className="checkLine"><input type="checkbox" checked={!!cfg.monitor_enabled} onChange={event => update('monitor_enabled', event.target.checked)} />{t.monitorEnabled}</label>
           <label>{t.monitorDirs}<input value={cfg.monitor_dirs || ''} onChange={event => update('monitor_dirs', event.target.value)} placeholder={cfg.source_dirs || 'photos,photos2,videos,videos2'} /><small>{t.monitorDirsHint}</small></label>
