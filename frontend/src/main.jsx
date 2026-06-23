@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
@@ -1969,6 +1970,21 @@ function MediaGrid({ items, t }) {
   );
 }
 
+function ModalPortal({ children }) {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const previousPaddingRight = document.body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.overflow = 'hidden';
+    if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.body.style.paddingRight = previousPaddingRight;
+    };
+  }, []);
+  return createPortal(children, document.body);
+}
+
 function MediaViewer({ item, detail, close, t }) {
   const data = detail || item;
   const tags = Array.isArray(data.tags) ? data.tags : String(data.tags || '').split(',').filter(Boolean).map(tag => ({ tag }));
@@ -1984,6 +2000,7 @@ function MediaViewer({ item, detail, close, t }) {
     setFeedbackMessage(`${tag.tag}: ${t.tagFeedbackSaved}`);
   }
   return (
+    <ModalPortal>
     <div className="viewerBackdrop" role="dialog" aria-modal="true">
       <div className="viewerPanel">
         <div className="viewerHead"><h2>{t.mediaDetail}</h2><button className="iconButton" onClick={close}><XCircle size={18} /></button></div>
@@ -2038,6 +2055,7 @@ function MediaViewer({ item, detail, close, t }) {
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 
@@ -2232,6 +2250,7 @@ function FaceCard({ face, openFace, nameFace, t }) {
 
 function CollectionViewer({ title, subtitle, items, close, t }) {
   return (
+    <ModalPortal>
     <div className="viewerBackdrop" role="dialog" aria-modal="true">
       <div className="viewerPanel collectionPanel">
         <div className="viewerHead"><div><h2>{title}</h2><p>{subtitle}</p></div><button className="iconButton" onClick={close}><XCircle size={18} /></button></div>
@@ -2240,6 +2259,7 @@ function CollectionViewer({ title, subtitle, items, close, t }) {
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 
