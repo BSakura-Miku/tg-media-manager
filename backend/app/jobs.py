@@ -144,7 +144,7 @@ def run_job(job_id: int, command: str) -> None:
                 stdout_parts.append(f"$ transcribe-sample\n{result}")
                 returncode = 0 if result.get("ok") else 1
             elif step == ["__transcribe__"]:
-                result = transcribe_videos(Path(output_root), limit=200)
+                result = transcribe_videos(Path(output_root), limit=None)
                 stdout_parts.append(f"$ transcribe\n{result}")
                 returncode = 0 if result.get("ok") else 1
             else:

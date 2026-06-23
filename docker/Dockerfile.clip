@@ -17,10 +17,12 @@ RUN apt-get update \
 COPY backend/requirements.txt /app/backend/requirements.txt
 COPY backend/requirements-vision.txt /app/backend/requirements-vision.txt
 COPY backend/requirements-clip.txt /app/backend/requirements-clip.txt
+COPY backend/requirements-transcribe.txt /app/backend/requirements-transcribe.txt
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir -r /app/backend/requirements.txt \
     && /opt/venv/bin/pip install --no-cache-dir -r /app/backend/requirements-vision.txt \
     && /opt/venv/bin/pip install --no-cache-dir -r /app/backend/requirements-clip.txt \
+    && /opt/venv/bin/pip install --no-cache-dir -r /app/backend/requirements-transcribe.txt \
     && /opt/venv/bin/pip uninstall -y onnxruntime \
     && /opt/venv/bin/pip install --no-cache-dir --force-reinstall --no-deps "onnxruntime-openvino>=1.24"
 

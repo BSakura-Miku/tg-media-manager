@@ -552,7 +552,7 @@ def media_by_relative_paths(root: Path, relative_paths: list[str], limit: int = 
     return {"items": [dict(row) for row in rows], "total": len(rows)}
 
 
-def transcribe_videos(root: Path, limit: int = 12, model_size: str = "base") -> dict:
+def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "base") -> dict:
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except Exception as exc:
@@ -561,18 +561,19 @@ def transcribe_videos(root: Path, limit: int = 12, model_size: str = "base") -> 
             "error": "faster-whisper is not installed in this image. Install the transcribe extra or build a transcribe-enabled image.",
             "detail": repr(exc),
         }
+    query = """
+        SELECT id, path, filename
+        FROM media_items
+        WHERE media_type='video'
+          AND NOT EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=media_items.id)
+        ORDER BY mtime DESC
+    """
+    args: tuple[int, ...] = ()
+    if limit is not None:
+        query += " LIMIT ?"
+        args = (limit,)
     with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, path, filename
-            FROM media_items
-            WHERE media_type='video'
-              AND NOT EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=media_items.id)
-            ORDER BY mtime DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        rows = conn.execute(query, args).fetchall()
     if not rows:
         return {"ok": True, "processed": 0, "segments": 0}
     device = os.environ.get("WHISPER_DEVICE", "cpu")
