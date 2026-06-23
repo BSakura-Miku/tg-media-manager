@@ -81,6 +81,11 @@ def safe_relative(root: Path, path: Path) -> str:
         return str(path)
 
 
+def hash8_from_name(value: str) -> str:
+    match = re.search(r"(?i)([0-9a-f]{8})(?=\.[^.]+$|$)", Path(value or "").name)
+    return match.group(1).lower() if match else ""
+
+
 def normalized_text(value: str) -> str:
     return re.sub(r"[_\-.()[\]{}【】]+", " ", value).strip()
 
@@ -204,6 +209,7 @@ def movement_rows(manifests: Path) -> list[dict]:
 
 def trace_original_source(root: Path, rel_path: str, hash_value: str = "", hash8: str = "", fallback_name: str = "") -> dict:
     manifests = root / "_MANIFESTS"
+    hash8 = (hash8 or hash8_from_name(rel_path) or hash8_from_name(fallback_name)).lower()
     transitions = {}
     row_by_dest = {}
     for row in movement_rows(manifests):
@@ -225,9 +231,20 @@ def trace_original_source(root: Path, rel_path: str, hash_value: str = "", hash8
         source_name = Path(source_path).name or source_name
         source_kind = str(row_by_dest.get(current, {}).get("source_file") or "move_chain")
         current = source_path
+    if not source_path and hash8:
+        for row in movement_rows(manifests):
+            before = (row.get("hash_before") or row.get("hash") or "").lower()
+            if before.startswith(hash8) or hash8_from_name(row.get("new_path", "")) == hash8 or hash8_from_name(row.get("original_path", "")) == hash8:
+                source_path = row.get("original_path", "") or source_path
+                source_name = Path(source_path).name or source_name
+                source_kind = str(row.get("source_file") or "hash8_move_match")
+                current = source_path
+                break
     for manifest in read_csv(manifests / "manifest_all.csv"):
         original_path = manifest.get("original_path", "")
-        if (current and original_path == current) or (source_path and original_path == source_path) or (hash_value and manifest.get("hash") == hash_value) or (hash8 and manifest.get("hash8") == hash8):
+        manifest_hash = (manifest.get("hash") or "").lower()
+        manifest_hash8 = (manifest.get("hash8") or "").lower()
+        if (current and original_path == current) or (source_path and original_path == source_path) or (hash_value and manifest.get("hash") == hash_value) or (hash8 and (manifest_hash8 == hash8 or manifest_hash.startswith(hash8))):
             source_path = original_path or source_path
             source_name = manifest.get("original_name") or Path(source_path).name or source_name
             source_kind = "manifest_all"
