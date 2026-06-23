@@ -275,6 +275,7 @@ select, input {
   min-height: 276px;
   display: grid;
   grid-template-rows: 154px 1fr;
+  align-items: stretch;
   padding: 0;
   overflow: hidden;
   text-align: left;
@@ -285,6 +286,8 @@ select, input {
   position: relative;
   display: grid;
   place-items: center;
+  min-height: 154px;
+  height: 154px;
   overflow: hidden;
   background: color-mix(in srgb, var(--button) 36%, var(--panel));
   border-bottom: 1px solid var(--line);
