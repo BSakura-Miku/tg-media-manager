@@ -1382,15 +1382,15 @@ VISION_PROMPTS = [
 ]
 
 
-def load_open_clip_backend():
+def load_open_clip_backend(strong: bool = False):
     try:
         import torch  # type: ignore
         import open_clip  # type: ignore
         from PIL import Image as PILImage  # type: ignore
     except Exception as exc:
         raise RuntimeError("OpenCLIP backend unavailable. Install torch, open-clip-torch, and pillow.") from exc
-    model_name = os.environ.get("OPENCLIP_MODEL", "ViT-B-32")
-    pretrained = os.environ.get("OPENCLIP_PRETRAINED", "laion2b_s34b_b79k")
+    model_name = os.environ.get("OPENCLIP_STRONG_MODEL" if strong else "OPENCLIP_MODEL", "ViT-H-14" if strong else "ViT-L-14")
+    pretrained = os.environ.get("OPENCLIP_STRONG_PRETRAINED" if strong else "OPENCLIP_PRETRAINED", "laion2b_s32b_b79k" if strong else "laion2b_s32b_b82k")
     model, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained, device="cpu")
     tokenizer = open_clip.get_tokenizer(model_name)
     model.eval()
@@ -1411,16 +1411,48 @@ def vision_scan(config: Config, limit: int | None) -> None:
     frame_index = config.manifests / "frame_index.csv"
     if not frame_index.exists():
         raise SystemExit("frame_index.csv not found. Run extract-frames first.")
+    strong_mode = os.environ.get("OPENCLIP_STRONG_MODE", "").lower() in {"1", "true", "yes", "on"}
+    low_confidence_only = strong_mode and os.environ.get("OPENCLIP_STRONG_LOW_CONF_ONLY", "true").lower() not in {"0", "false", "no", "off"}
     try:
-        torch, PILImage, model, preprocess, labels, text_features, model_info = load_open_clip_backend()
+        low_confidence_threshold = float(os.environ.get("OPENCLIP_STRONG_THRESHOLD", "0.62"))
+    except ValueError:
+        low_confidence_threshold = 0.62
+    existing_labels = {}
+    preserved_rows = []
+    preserved_embedding_rows = []
+    if low_confidence_only:
+        for row in dict_rows_from_csv(config.manifests / "vision_labels.csv"):
+            try:
+                score = float(row.get("score") or 0)
+            except ValueError:
+                score = 0.0
+            existing_labels[row.get("media_path", "")] = score
+            if score >= low_confidence_threshold:
+                preserved_rows.append(row)
+        preserved_paths = {row.get("media_path", "") for row in preserved_rows}
+        embeddings_path = config.manifests / "vision_embeddings.jsonl"
+        if embeddings_path.exists():
+            with embeddings_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if row.get("media_path") in preserved_paths:
+                        preserved_embedding_rows.append(row)
+    try:
+        torch, PILImage, model, preprocess, labels, text_features, model_info = load_open_clip_backend(strong=strong_mode)
     except RuntimeError as exc:
         raise SystemExit(str(exc))
-    rows = []
-    embedding_rows = []
+    rows = list(preserved_rows)
+    embedding_rows = list(preserved_embedding_rows)
     scanned = 0
     for frame_row in dict_rows_from_csv(frame_index):
         frame_paths = [p for p in frame_row.get("frames", "").split("|") if p]
-        best = ("", 0.0, "", [])
+        if low_confidence_only and existing_labels.get(frame_row.get("media_path", ""), 0.0) >= low_confidence_threshold:
+            continue
+        label_scores: dict[str, list[float]] = defaultdict(list)
+        label_best: dict[str, tuple[float, str, list[float]]] = {}
         for frame_rel in frame_paths:
             frame_path = config.library_root / frame_rel
             if not frame_path.exists():
@@ -1431,12 +1463,25 @@ def vision_scan(config: Config, limit: int | None) -> None:
                     image_features = model.encode_image(image)
                     image_features /= image_features.norm(dim=-1, keepdim=True)
                     probs = (100.0 * image_features @ text_features.T).softmax(dim=-1)[0]
-                score, idx = torch.max(probs, dim=0)
-                category = labels[int(idx)]
-                if float(score) > best[1]:
-                    best = (category, float(score), frame_rel, [round(float(x), 7) for x in image_features[0].detach().cpu().tolist()])
+                top_k = min(4, len(labels))
+                scores, indices = torch.topk(probs, k=top_k)
+                vector = [round(float(x), 7) for x in image_features[0].detach().cpu().tolist()]
+                for score, idx in zip(scores, indices):
+                    category = labels[int(idx)]
+                    value = float(score)
+                    label_scores[category].append(value)
+                    current = label_best.get(category)
+                    if current is None or value > current[0]:
+                        label_best[category] = (value, frame_rel, vector)
             except Exception:
                 continue
+        best = ("", 0.0, "", [])
+        for category, values in label_scores.items():
+            stability = min(1.0, len(values) / max(1, min(3, len(frame_paths))))
+            score = (sum(values) / len(values)) * (0.75 + 0.25 * stability)
+            if score > best[1] and category in label_best:
+                frame_score, frame_rel, vector = label_best[category]
+                best = (category, float(score), frame_rel, vector)
         rows.append({
             "media_path": frame_row["media_path"],
             "category": best[0],
@@ -1449,6 +1494,7 @@ def vision_scan(config: Config, limit: int | None) -> None:
                 "representative_frame": best[2],
                 "model": model_info["model"],
                 "pretrained": model_info["pretrained"],
+                "mode": "strong" if strong_mode else "default",
                 "embedding": best[3],
             })
         scanned += 1

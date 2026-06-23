@@ -41,6 +41,7 @@ ALLOWED_COMMANDS = {
     "face-scan": ["face-scan"],
     "vision-scan-sample": ["vision-scan", "--limit", "120"],
     "vision-scan": ["vision-scan"],
+    "vision-scan-strong": ["vision-scan"],
     "index-vision": ["__vision_index__"],
     "train-vision-calibrator": ["__vision_calibrator_train__"],
     "face-cluster": ["face-cluster", "--threshold", "0.75"],
@@ -152,8 +153,12 @@ def hardware_env(settings: dict) -> dict[str, str]:
     env["FFMPEG_HW_DEVICE"] = settings.get("ffmpeg_hw_device") or os.environ.get("FFMPEG_HW_DEVICE", "/dev/dri/renderD128")
     env["FACE_PROVIDERS"] = face or "OpenVINOExecutionProvider,CPUExecutionProvider"
     env["OPENVINO_DEVICE"] = openvino or "GPU"
-    env["OPENCLIP_MODEL"] = settings.get("openclip_model") or os.environ.get("OPENCLIP_MODEL", "ViT-B-32")
-    env["OPENCLIP_PRETRAINED"] = settings.get("openclip_pretrained") or os.environ.get("OPENCLIP_PRETRAINED", "laion2b_s34b_b79k")
+    env["OPENCLIP_MODEL"] = settings.get("openclip_model") or os.environ.get("OPENCLIP_MODEL", "ViT-L-14")
+    env["OPENCLIP_PRETRAINED"] = settings.get("openclip_pretrained") or os.environ.get("OPENCLIP_PRETRAINED", "laion2b_s32b_b82k")
+    env["OPENCLIP_STRONG_MODEL"] = settings.get("openclip_strong_model") or os.environ.get("OPENCLIP_STRONG_MODEL", "ViT-H-14")
+    env["OPENCLIP_STRONG_PRETRAINED"] = settings.get("openclip_strong_pretrained") or os.environ.get("OPENCLIP_STRONG_PRETRAINED", "laion2b_s32b_b79k")
+    env["OPENCLIP_STRONG_THRESHOLD"] = str(settings.get("openclip_strong_threshold") or os.environ.get("OPENCLIP_STRONG_THRESHOLD", "0.62"))
+    env["OPENCLIP_STRONG_LOW_CONF_ONLY"] = str(settings.get("openclip_strong_low_conf_only") or os.environ.get("OPENCLIP_STRONG_LOW_CONF_ONLY", "true"))
     env["WHISPER_DEVICE"] = whisper
     env.setdefault("WHISPER_COMPUTE_TYPE", "int8")
     env["ASR_ENGINE"] = asr_engine
@@ -335,7 +340,8 @@ def run_job(job_id: int, command: str) -> None:
         key: value for key, value in env.items()
         if key in {
             "COMPUTE_DEVICE", "FFMPEG_HWACCEL", "FACE_PROVIDERS", "OPENVINO_DEVICE",
-            "OPENCLIP_MODEL", "OPENCLIP_PRETRAINED",
+            "OPENCLIP_MODEL", "OPENCLIP_PRETRAINED", "OPENCLIP_STRONG_MODEL",
+            "OPENCLIP_STRONG_PRETRAINED", "OPENCLIP_STRONG_THRESHOLD", "OPENCLIP_STRONG_LOW_CONF_ONLY",
             "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE", "ASR_ENGINE", "SENSEVOICE_GGUF_BIN",
             "SENSEVOICE_GGUF_MODEL", "SENSEVOICE_GGUF_COMMAND", "TRANSCRIBE_MAX_SECONDS",
         }
@@ -393,7 +399,10 @@ def run_job(job_id: int, command: str) -> None:
             else:
                 dynamic_step = apply_dynamic_step_args(step, settings)
                 step_args = [*base_args, *dynamic_step]
-                code, out, err = run_external_step(job_id, step_args, env, stage)
+                step_env = dict(env)
+                if command == "vision-scan-strong" and dynamic_step and dynamic_step[0] == "vision-scan":
+                    step_env["OPENCLIP_STRONG_MODE"] = "true"
+                code, out, err = run_external_step(job_id, step_args, step_env, stage)
                 stdout_parts.append(f"$ {' '.join(step_args)}\n{out}")
                 if err:
                     stderr_parts.append(f"$ {' '.join(step_args)}\n{err}")

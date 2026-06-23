@@ -149,7 +149,11 @@ const i18n = {
     openvinoDevice: 'OpenVINO device',
     openclipModel: 'Vision model',
     openclipPretrained: 'Vision weights',
-    openclipHint: 'ViT-B-32 is fast. ViT-L/H or SigLIP variants are stronger but slower and may download larger weights.',
+    openclipStrongModel: 'Strong rescan model',
+    openclipStrongPretrained: 'Strong rescan weights',
+    openclipStrongThreshold: 'Strong rescan threshold',
+    openclipStrongLowOnly: 'Only rescan low-confidence media',
+    openclipHint: 'Default is ViT-L-14. Use ViT-B-32 for speed; use strong rescan for low-confidence items.',
     faceProviders: 'Face inference provider',
     whisperDevice: 'Speech device',
     asrEngine: 'Speech engine',
@@ -288,6 +292,7 @@ const i18n = {
       'extract-frames-retry-failed': 'Retry Frames',
       'face-setup': 'Face Setup',
       'vision-scan-sample': 'Vision Sample',
+      'vision-scan-strong': 'Vision Strong Rescan',
       'index-vision': 'Sync Vision',
       'train-vision-calibrator': 'Train Calibrator',
       'face-scan-sample': 'Face Sample',
@@ -326,6 +331,7 @@ const i18n = {
       'extract-frames-retry-failed': 'Retry rows listed in frame_errors.csv.',
       'face-setup': 'Show face/vision dependency status.',
       'vision-scan-sample': 'Run OpenCLIP labels on a small sample.',
+      'vision-scan-strong': 'Use the stronger OpenCLIP model only for low-confidence media by default.',
       'index-vision': 'Import vision_labels.csv and frame_index.csv into tags and timeline segments.',
       'train-vision-calibrator': 'Train lightweight tag calibrators from manual correct/wrong feedback.',
       'face-scan-sample': 'Detect faces on a small sample only.',
@@ -457,7 +463,11 @@ const i18n = {
     openvinoDevice: 'OpenVINO 设备',
     openclipModel: '视觉模型',
     openclipPretrained: '视觉权重',
-    openclipHint: 'ViT-B-32 最快；ViT-L/H 或 SigLIP 更强但更慢，也可能需要下载更大的权重。',
+    openclipStrongModel: '强扫视觉模型',
+    openclipStrongPretrained: '强扫视觉权重',
+    openclipStrongThreshold: '强扫置信阈值',
+    openclipStrongLowOnly: '只复扫低置信媒体',
+    openclipHint: '默认使用 ViT-L-14。需要速度可改 ViT-B-32；强扫只处理低置信项。',
     faceProviders: '人脸推理后端',
     whisperDevice: '语音识别设备',
     asrEngine: '语音识别引擎',
@@ -596,6 +606,7 @@ const i18n = {
       'extract-frames-retry-failed': '重试抽帧失败',
       'face-setup': '检查人脸环境',
       'vision-scan-sample': '视觉样本',
+      'vision-scan-strong': '视觉强扫',
       'index-vision': '同步视觉索引',
       'train-vision-calibrator': '训练校准器',
       'face-scan-sample': '人脸样本',
@@ -634,6 +645,7 @@ const i18n = {
       'extract-frames-retry-failed': '重新处理 frame_errors.csv 里的失败项。',
       'face-setup': '检查人脸/视觉依赖是否可用。',
       'vision-scan-sample': '只对小样本跑场景识别。',
+      'vision-scan-strong': '默认只用更强 OpenCLIP 模型复扫低置信媒体。',
       'index-vision': '把 vision_labels.csv 和 frame_index.csv 导入标签和时间轴。',
       'train-vision-calibrator': '根据你手动确认/排除的标签训练轻量校准器。',
       'face-scan-sample': '只对小样本检测人脸。',
@@ -675,6 +687,7 @@ const commands = [
   ['extract-frames-retry-failed', 'Retry Frames', Camera, 'Retry failed frame extraction rows'],
   ['face-setup', 'Face Setup', ScanFace, 'Show local face dependency status'],
   ['vision-scan-sample', 'Vision Sample', Camera, 'Run OpenCLIP sample when CLIP image is used'],
+  ['vision-scan-strong', 'Vision Strong Rescan', Camera, 'Rescan low-confidence media with the strong model'],
   ['index-vision', 'Sync Vision', Camera, 'Import vision outputs into media tags and timelines'],
   ['train-vision-calibrator', 'Train Calibrator', Tags, 'Train lightweight tag calibrators from manual feedback'],
   ['face-scan-sample', 'Face Sample', ScanFace, 'Detect faces for a small sample'],
@@ -1405,7 +1418,7 @@ function CommandGuide({ t }) {
   const groups = [
     [t.commonCommands, ['workflow-full-library', 'workflow-new-downloads', 'workflow-review-cleanup', 'scan', 'apply']],
     [t.faceCommands, ['workflow-face-balanced', 'extract-frames-retry-failed', 'face-scan-sample', 'face-cluster-balanced', 'face-cluster-report', 'apply-face-groups-dry-run', 'apply-face-groups']],
-    [t.visionCommands, ['workflow-vision-plan', 'vision-scan-sample', 'index-vision', 'train-vision-calibrator', 'apply-vision-labels-dry-run', 'apply-vision-labels']],
+    [t.visionCommands, ['workflow-vision-plan', 'vision-scan-sample', 'vision-scan-strong', 'index-vision', 'train-vision-calibrator', 'apply-vision-labels-dry-run', 'apply-vision-labels']],
     [t.transcriptCommands, ['workflow-transcribe-sample', 'transcribe-sample', 'transcribe']],
     [t.maintenanceCommands, ['refresh-state', 'dedupe-organized-dry-run', 'dedupe-organized', 'clean-empty-dirs']],
   ];
@@ -2057,8 +2070,12 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
     compute_device: 'auto',
     ffmpeg_hwaccel: 'auto',
     openvino_device: 'GPU',
-    openclip_model: 'ViT-B-32',
-    openclip_pretrained: 'laion2b_s34b_b79k',
+    openclip_model: 'ViT-L-14',
+    openclip_pretrained: 'laion2b_s32b_b82k',
+    openclip_strong_model: 'ViT-H-14',
+    openclip_strong_pretrained: 'laion2b_s32b_b79k',
+    openclip_strong_threshold: 0.62,
+    openclip_strong_low_conf_only: true,
     face_providers: 'OpenVINOExecutionProvider,CPUExecutionProvider',
     whisper_device: 'cpu',
     asr_engine: 'auto',
@@ -2092,8 +2109,12 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
           <label>Frames per video<input type="number" min="1" max="12" value={cfg.frames_per_video || 3} onChange={event => update('frames_per_video', event.target.value)} /></label>
           <label>Checkpoint every<input type="number" min="10" max="1000" value={cfg.frame_checkpoint_every || 100} onChange={event => update('frame_checkpoint_every', event.target.value)} /><small>抽帧索引和任务进度的落盘频率。</small></label>
           <label>{t.openvinoDevice}<select value={cfg.openvino_device || 'GPU'} onChange={event => update('openvino_device', event.target.value)}><option value="GPU">{t.gpu}</option><option value="CPU">{t.cpu}</option><option value="AUTO">{t.openvinoAuto}</option></select></label>
-          <label>{t.openclipModel}<input value={cfg.openclip_model || 'ViT-B-32'} onChange={event => update('openclip_model', event.target.value)} placeholder="ViT-B-32" /><small>{t.openclipHint}</small></label>
-          <label>{t.openclipPretrained}<input value={cfg.openclip_pretrained || 'laion2b_s34b_b79k'} onChange={event => update('openclip_pretrained', event.target.value)} placeholder="laion2b_s34b_b79k" /></label>
+          <label>{t.openclipModel}<input value={cfg.openclip_model || 'ViT-L-14'} onChange={event => update('openclip_model', event.target.value)} placeholder="ViT-L-14" /><small>{t.openclipHint}</small></label>
+          <label>{t.openclipPretrained}<input value={cfg.openclip_pretrained || 'laion2b_s32b_b82k'} onChange={event => update('openclip_pretrained', event.target.value)} placeholder="laion2b_s32b_b82k" /></label>
+          <label>{t.openclipStrongModel}<input value={cfg.openclip_strong_model || 'ViT-H-14'} onChange={event => update('openclip_strong_model', event.target.value)} placeholder="ViT-H-14" /></label>
+          <label>{t.openclipStrongPretrained}<input value={cfg.openclip_strong_pretrained || 'laion2b_s32b_b79k'} onChange={event => update('openclip_strong_pretrained', event.target.value)} placeholder="laion2b_s32b_b79k" /></label>
+          <label>{t.openclipStrongThreshold}<input type="number" min="0.01" max="0.99" step="0.01" value={cfg.openclip_strong_threshold ?? 0.62} onChange={event => update('openclip_strong_threshold', event.target.value)} /></label>
+          <label className="checkLine"><input type="checkbox" checked={cfg.openclip_strong_low_conf_only !== false} onChange={event => update('openclip_strong_low_conf_only', event.target.checked)} />{t.openclipStrongLowOnly}</label>
           <label>{t.faceProviders}<select value={cfg.face_providers || 'OpenVINOExecutionProvider,CPUExecutionProvider'} onChange={event => update('face_providers', event.target.value)}><option value="OpenVINOExecutionProvider,CPUExecutionProvider">OpenVINO + CPU fallback</option><option value="CPUExecutionProvider">CPUExecutionProvider</option></select></label>
           <label>{t.asrEngine}<select value={cfg.asr_engine || 'auto'} onChange={event => update('asr_engine', event.target.value)}><option value="auto">{t.asrAuto}</option><option value="sensevoice-gguf">{t.asrSenseVoice}</option><option value="faster-whisper">{t.asrWhisper}</option></select></label>
           <label>{t.senseVoiceModel}<input value={cfg.sensevoice_gguf_model || '/models/sensevoice/SenseVoiceSmall.gguf'} onChange={event => update('sensevoice_gguf_model', event.target.value)} /></label>

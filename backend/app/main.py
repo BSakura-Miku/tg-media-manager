@@ -94,8 +94,12 @@ class SettingsRequest(BaseModel):
     compute_device: str = "auto"
     ffmpeg_hwaccel: str = "auto"
     openvino_device: str = "GPU"
-    openclip_model: str = "ViT-B-32"
-    openclip_pretrained: str = "laion2b_s34b_b79k"
+    openclip_model: str = "ViT-L-14"
+    openclip_pretrained: str = "laion2b_s32b_b82k"
+    openclip_strong_model: str = "ViT-H-14"
+    openclip_strong_pretrained: str = "laion2b_s32b_b79k"
+    openclip_strong_threshold: float = 0.62
+    openclip_strong_low_conf_only: bool = True
     face_providers: str = "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device: str = "cpu"
     asr_engine: str = "auto"
@@ -554,8 +558,12 @@ def default_settings() -> dict:
         "compute_device": settings.get("compute_device") or os.environ.get("COMPUTE_DEVICE", "auto"),
         "ffmpeg_hwaccel": settings.get("ffmpeg_hwaccel") or os.environ.get("FFMPEG_HWACCEL", "auto"),
         "openvino_device": settings.get("openvino_device") or os.environ.get("OPENVINO_DEVICE", "GPU"),
-        "openclip_model": settings.get("openclip_model") or os.environ.get("OPENCLIP_MODEL", "ViT-B-32"),
-        "openclip_pretrained": settings.get("openclip_pretrained") or os.environ.get("OPENCLIP_PRETRAINED", "laion2b_s34b_b79k"),
+        "openclip_model": settings.get("openclip_model") or os.environ.get("OPENCLIP_MODEL", "ViT-L-14"),
+        "openclip_pretrained": settings.get("openclip_pretrained") or os.environ.get("OPENCLIP_PRETRAINED", "laion2b_s32b_b82k"),
+        "openclip_strong_model": settings.get("openclip_strong_model") or os.environ.get("OPENCLIP_STRONG_MODEL", "ViT-H-14"),
+        "openclip_strong_pretrained": settings.get("openclip_strong_pretrained") or os.environ.get("OPENCLIP_STRONG_PRETRAINED", "laion2b_s32b_b79k"),
+        "openclip_strong_threshold": setting_int("openclip_strong_threshold_pct", "OPENCLIP_STRONG_THRESHOLD_PCT", 62, 1, 99) / 100,
+        "openclip_strong_low_conf_only": (settings.get("openclip_strong_low_conf_only") or os.environ.get("OPENCLIP_STRONG_LOW_CONF_ONLY", "true")).lower() in {"1", "true", "yes", "on"},
         "face_providers": settings.get("face_providers") or os.environ.get("FACE_PROVIDERS", "OpenVINOExecutionProvider,CPUExecutionProvider"),
         "whisper_device": settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", "cpu"),
         "asr_engine": settings.get("asr_engine") or os.environ.get("ASR_ENGINE", "auto"),
@@ -614,8 +622,14 @@ def api_save_settings(req: SettingsRequest) -> dict:
     compute_device = req.compute_device if req.compute_device in {"auto", "gpu", "cpu"} else "auto"
     ffmpeg_hwaccel = req.ffmpeg_hwaccel if req.ffmpeg_hwaccel in {"auto", "none", "vaapi", "qsv"} else "auto"
     openvino_device = req.openvino_device if req.openvino_device in {"AUTO", "GPU", "CPU"} else "GPU"
-    openclip_model = (req.openclip_model or "ViT-B-32").strip()
-    openclip_pretrained = (req.openclip_pretrained or "laion2b_s34b_b79k").strip()
+    openclip_model = (req.openclip_model or "ViT-L-14").strip()
+    openclip_pretrained = (req.openclip_pretrained or "laion2b_s32b_b82k").strip()
+    openclip_strong_model = (req.openclip_strong_model or "ViT-H-14").strip()
+    openclip_strong_pretrained = (req.openclip_strong_pretrained or "laion2b_s32b_b79k").strip()
+    try:
+        openclip_strong_threshold = max(0.01, min(0.99, float(req.openclip_strong_threshold or 0.62)))
+    except (TypeError, ValueError):
+        openclip_strong_threshold = 0.62
     face_providers = req.face_providers if req.face_providers in {"OpenVINOExecutionProvider,CPUExecutionProvider", "CPUExecutionProvider"} else "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device = req.whisper_device if req.whisper_device in {"cpu", "cuda"} else "cpu"
     asr_engine = req.asr_engine if req.asr_engine in {"auto", "sensevoice-gguf", "sensevoice", "faster-whisper", "whisper"} else "auto"
@@ -655,6 +669,11 @@ def api_save_settings(req: SettingsRequest) -> dict:
         "openvino_device": openvino_device,
         "openclip_model": openclip_model,
         "openclip_pretrained": openclip_pretrained,
+        "openclip_strong_model": openclip_strong_model,
+        "openclip_strong_pretrained": openclip_strong_pretrained,
+        "openclip_strong_threshold": f"{openclip_strong_threshold:.2f}",
+        "openclip_strong_threshold_pct": str(int(round(openclip_strong_threshold * 100))),
+        "openclip_strong_low_conf_only": "true" if req.openclip_strong_low_conf_only else "false",
         "face_providers": face_providers,
         "whisper_device": whisper_device,
         "asr_engine": asr_engine,
