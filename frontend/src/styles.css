@@ -333,7 +333,7 @@ select, input {
   background: rgba(0, 0, 0, .68);
 }
 .viewerPanel {
-  width: min(1180px, 96vw);
+  width: min(1180px, 100%);
   max-height: 92vh;
   display: grid;
   grid-template-rows: auto 1fr;
