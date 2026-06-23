@@ -355,7 +355,7 @@ select, input {
 .viewerBody {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(420px, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
   gap: 12px;
   padding: 12px;
   overflow: auto;
