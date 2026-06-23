@@ -154,10 +154,16 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
+    app_version = os.environ.get("APP_SEMVER", "1.0.0").lstrip("v") or "1.0.0"
+    build_commit = os.environ.get("APP_VERSION", "dev")
+    build_time = os.environ.get("APP_BUILT_AT", "")
     return {
-        "version": os.environ.get("APP_VERSION", "dev"),
+        "version": f"v{app_version}",
+        "app_version": app_version,
+        "build_commit": build_commit,
+        "build_time": build_time,
         "image": os.environ.get("APP_IMAGE", ""),
-        "built_at": os.environ.get("APP_BUILT_AT", ""),
+        "built_at": build_time,
     }
 
 
@@ -283,7 +289,7 @@ def ffmpeg_hw_prefix() -> list[str]:
 
 
 THUMB_SIZE = (800, 520)
-MEDIA_THUMB_CACHE = "media_thumbs_v4"
+MEDIA_THUMB_CACHE = "media_thumbs_v5"
 
 
 def trim_near_black_border(image):
@@ -308,9 +314,9 @@ def trim_near_black_border(image):
         return image
     crop_width = max(1, right - left)
     crop_height = max(1, bottom - top)
-    if crop_width < width * 0.12 or crop_height < height * 0.08:
+    if crop_width < width * 0.12 or crop_height < height * 0.04:
         return image
-    if crop_width * crop_height < width * height * 0.04:
+    if crop_width * crop_height < width * height * 0.02:
         return image
     if (left, top, right, bottom) == (0, 0, width, height):
         return image

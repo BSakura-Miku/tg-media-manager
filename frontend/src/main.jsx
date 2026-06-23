@@ -3,14 +3,20 @@ import { createRoot } from 'react-dom/client';
 import {
   Activity,
   Archive,
+  Bell,
   Bot,
   Camera,
   CheckCircle2,
   Database,
   FileSearch,
+  Film,
   Folder,
   FolderOpen,
+  Grid3X3,
+  HardDrive,
+  Image as ImageIcon,
   Languages,
+  LockKeyhole,
   Moon,
   Play,
   RefreshCw,
@@ -32,10 +38,11 @@ import './styles.css';
 
 const i18n = {
   en: {
-    app: 'TG Media',
-    manager: 'Manager',
+    app: 'Private Library',
+    manager: 'TG Media Manager',
     version: 'Version',
-    title: 'Media Operations',
+    build: 'build',
+    title: 'Library Console',
     dashboard: 'Dashboard',
     jobs: 'Jobs',
     library: 'Library',
@@ -59,6 +66,24 @@ const i18n = {
     filename_analysis: 'Name Signals',
     searchPlaceholder: 'Search manifests',
     actors: 'Actors',
+    totalMedia: 'Media total',
+    totalTags: 'Tags total',
+    totalAuthors: 'Authors total',
+    taskRunning: 'Running jobs',
+    recentAdded: 'Recently Added',
+    storageSpace: 'Storage Space',
+    taskList: 'Task List',
+    viewAll: 'View all',
+    viewAllTasks: 'View all jobs',
+    usedSpace: 'Used',
+    videoFiles: 'Video files',
+    imageFiles: 'Image files',
+    otherFiles: 'Other files',
+    availableSpace: 'Available',
+    dashboardGraphHint: 'Click a tag to browse matching media.',
+    recentEmpty: 'No indexed media yet',
+    privacyLocked: 'Privacy lock',
+    viewSwitcher: 'Views',
     keywords: 'Keywords',
     unknown: 'Unknown',
     duplicates: 'Duplicates',
@@ -282,10 +307,11 @@ const i18n = {
     },
   },
   'zh-CN': {
-    app: 'TG 媒体',
-    manager: '管理器',
+    app: '私享影库',
+    manager: 'TG Media Manager',
     version: '版本',
-    title: '媒体整理',
+    build: '构建',
+    title: '影库控制台',
     dashboard: '概览',
     jobs: '任务',
     library: '媒体库',
@@ -309,6 +335,24 @@ const i18n = {
     filename_analysis: '名称信号',
     searchPlaceholder: '搜索清单',
     actors: '人物',
+    totalMedia: '媒体总数',
+    totalTags: '标签总数',
+    totalAuthors: '作者总数',
+    taskRunning: '任务执行',
+    recentAdded: '最近添加',
+    storageSpace: '存储空间',
+    taskList: '任务列表',
+    viewAll: '查看全部',
+    viewAllTasks: '查看全部任务',
+    usedSpace: '已使用',
+    videoFiles: '视频文件',
+    imageFiles: '图片文件',
+    otherFiles: '其他文件',
+    availableSpace: '可用空间',
+    dashboardGraphHint: '点击标签可浏览对应媒体。',
+    recentEmpty: '还没有索引媒体',
+    privacyLocked: '隐私锁定',
+    viewSwitcher: '视图入口',
     keywords: '关键词',
     unknown: '未知',
     duplicates: '重复',
@@ -589,8 +633,8 @@ function api(path, options) {
   });
 }
 
-function Stat({ label, value, icon: Icon }) {
-  return <div className="stat"><div className="statIcon"><Icon size={18} /></div><div><div className="statValue">{value ?? 0}</div><div className="statLabel">{label}</div></div></div>;
+function Stat({ label, value, icon: Icon, tone = 'blue', sub = '' }) {
+  return <div className={`stat ${tone}`}><div className="statIcon"><Icon size={24} /></div><div><div className="statValue">{value ?? 0}</div><div className="statLabel">{label}</div>{sub && <div className="statSub">{sub}</div>}</div></div>;
 }
 
 function JobBadge({ status }) {
@@ -602,12 +646,34 @@ function Empty({ label }) {
   return <div className="empty">{label}</div>;
 }
 
+function displayVersion(version) {
+  return version?.version || 'v1.0.0';
+}
+
+function buildLabel(version, t) {
+  const build = version?.build_commit || '';
+  if (!build || build === 'dev') return '';
+  return `${t.build} ${String(build).slice(0, 7)}`;
+}
+
+function prettyNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number.toLocaleString() : '0';
+}
+
+function estimatedMediaTotal(summary, mediaResults) {
+  const top = summary?.top || {};
+  if (Number(mediaResults?.total || 0) > 0) return Number(mediaResults.total);
+  const known = Number(top.actors || 0) + Number(top.keywords || 0) + Number(top.unknown || 0) + Number(top.duplicates || 0);
+  return known || 0;
+}
+
 function LoginScreen({ login, error, theme, setTheme, t, version }) {
   const [password, setPassword] = useState('');
   return (
     <main className="loginShell">
       <section className="loginPanel">
-        <div className="brand"><Bot size={22} /><div><strong>{t.app}</strong><span>{t.manager}</span>{version?.version && <small>{t.version} {version.version}</small>}</div></div>
+        <div className="brand"><Bot size={22} /><div><strong>{t.app}</strong><span>{t.manager}</span><small>{displayVersion(version)} {buildLabel(version, t)}</small></div></div>
         <h1>{t.login}</h1>
         <p>{t.privacyCopy}</p>
         {error && <div className="alert">{error}</div>}
@@ -949,13 +1015,13 @@ function App() {
   return (
     <main>
       <aside>
-        <div className="brand"><Bot size={22} /><div><strong>{t.app}</strong><span>{t.manager}</span>{version?.version && <small>{t.version} {version.version}</small>}</div></div>
+        <div className="brand"><div className="brandMark"><Bot size={20} /></div><div><strong>{t.app}</strong><span>{t.manager}</span><small title={buildLabel(version, t)}>{displayVersion(version)}</small></div></div>
         <nav>{nav.map(([id, labelKey, Icon]) => <button className={active === id ? 'active' : ''} key={id} onClick={() => setActive(id)}><Icon size={16} /> {t[labelKey]}</button>)}</nav>
       </aside>
 
       <section className="content">
         <header>
-          <div><h1>{t.title}</h1><p>{summary?.root || '/media'} {summary?.output_root && summary.output_root !== summary.root ? `-> ${summary.output_root}` : ''}</p></div>
+          <div className="pageTitle"><h1>{t.title}</h1><p>{summary?.root || '/media'} {summary?.output_root && summary.output_root !== summary.root ? `-> ${summary.output_root}` : ''}</p></div>
           <div className="headerActions">
             <form className="searchForm" onSubmit={runSearch}>
               <select value={source} onChange={event => setSource(event.target.value)} title="Search source">
@@ -964,6 +1030,9 @@ function App() {
               <input value={query} onChange={event => setQuery(event.target.value)} placeholder={t.searchPlaceholder} />
               <button type="submit" title="Search"><Search size={16} /></button>
             </form>
+            <button className="iconButton" title={t.recentLogs} onClick={() => setActive('logs')}><Bell size={18} /></button>
+            <button className="iconButton" title={t.privacyLocked}><LockKeyhole size={18} /></button>
+            <button className="iconButton" title={t.viewSwitcher} onClick={() => setActive('library')}><Grid3X3 size={18} /></button>
             <button className="iconButton" onClick={() => setLanguage(language === 'zh-CN' ? 'en' : 'zh-CN')} title={t.language}><Languages size={18} /></button>
             <button className="iconButton" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Theme">{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
             <button className="iconButton" onClick={refresh} title="Refresh"><RefreshCw size={18} /></button>
@@ -975,22 +1044,15 @@ function App() {
 
         {active === 'dashboard' && (
           <>
-            <section className="statsGrid">
-              <Stat label={t.actors} value={top.actors} icon={Users} />
-              <Stat label={t.keywords} value={top.keywords} icon={Tags} />
-              <Stat label={t.unknown} value={top.unknown} icon={Folder} />
-              <Stat label={t.duplicates} value={top.duplicates} icon={Archive} />
-              <Stat label={t.frameCache} value={vision.cached_media} icon={Camera} />
-              <Stat label={t.faceRows} value={vision.face_index_rows} icon={ScanFace} />
-              <Stat label={t.faces} value={vision.face_report_rows || vision.face_group_rows} icon={Users} />
-              <Stat label={t.facePlan} value={vision.face_move_plan_rows} icon={Play} />
-              <Stat label={t.faceMergeSuggestions} value={vision.face_merge_suggestion_rows} icon={Users} />
-              <Stat label={t.visionPlan} value={vision.vision_move_plan_rows} icon={Camera} />
-              <Stat label={t.exactDuplicates} value={vision.organized_duplicate_rows} icon={Archive} />
-              <Stat label={t.filename_analysis} value={analysis.filename_analysis_rows} icon={Search} />
-              <Stat label={t.wordSignals} value={analysis.filename_words_rows} icon={Tags} />
-            </section>
-            <WorkbenchPanel summary={summary} leftovers={leftovers} vision={vision} start={start} setActive={setActive} busy={busy || hasRunning} t={t} />
+            <DashboardPanel
+              summary={summary}
+              jobs={jobs}
+              mediaResults={mediaResults}
+              tagGraph={tagGraph}
+              loadMedia={loadMedia}
+              setActive={setActive}
+              t={t}
+            />
             <WorkflowPanel t={t} start={start} busy={busy || hasRunning} />
             <details className="panel advancedPanel">
               <summary><span>{t.advancedCommands}</span><small>{t.commandGuide}</small></summary>
@@ -1017,6 +1079,152 @@ function App() {
 
 function BucketPanel({ title, rows }) {
   return <div className="panel"><div className="panelHead"><h2>{title}</h2><span>{rows.length}</span></div><div className="list">{rows.map(item => <div className="row" key={item.name}><span>{item.name}</span><strong>{item.files}</strong></div>)}</div></div>;
+}
+
+function DashboardPanel({ summary, jobs, mediaResults, tagGraph, loadMedia, setActive, t }) {
+  const top = summary?.top || {};
+  const keywords = summary?.keywords || [];
+  const actors = summary?.actors_sample || [];
+  const runningJobs = jobs.filter(job => job.status === 'running' || job.status === 'queued');
+  const items = (mediaResults.items || []).slice(0, 6);
+  const mediaTotal = estimatedMediaTotal(summary, mediaResults);
+  const stats = [
+    [t.totalMedia, mediaTotal, FolderOpen, 'blue', `${t.videos} ${prettyNumber(mediaResults.video_total || 0)} / ${t.photos} ${prettyNumber(mediaResults.photo_total || 0)}`],
+    [t.totalTags, keywords.length || top.keywords, Tags, 'purple', `${t.keywords} ${prettyNumber(top.keywords || 0)}`],
+    [t.totalAuthors, actors.length || top.actors, Users, 'green', `${t.actors} ${prettyNumber(top.actors || 0)}`],
+    [t.faces, top.faces || summary?.vision?.face_group_rows || 0, ScanFace, 'orange', `${t.faceRows} ${prettyNumber(summary?.vision?.face_index_rows || 0)}`],
+    [t.taskRunning, runningJobs.length, CheckCircle2, 'blue', `${t.jobs} ${prettyNumber(jobs.length)}`],
+  ];
+  return (
+    <>
+      <section className="dashboardStats">
+        {stats.map(([label, value, Icon, tone, sub]) => <Stat key={label} label={label} value={prettyNumber(value)} icon={Icon} tone={tone} sub={sub} />)}
+      </section>
+      <section className="dashboardMain">
+        <DashboardTagGraph graph={tagGraph} keywords={keywords} loadMedia={loadMedia} setActive={setActive} t={t} />
+        <RecentMediaPanel items={items} total={mediaResults.total || items.length} setActive={setActive} t={t} />
+      </section>
+      <section className="dashboardBottom">
+        <DashboardJobs jobs={jobs} setActive={setActive} t={t} />
+        <StoragePanel summary={summary} mediaTotal={mediaTotal} t={t} />
+      </section>
+    </>
+  );
+}
+
+function DashboardTagGraph({ graph, keywords, loadMedia, setActive, t }) {
+  const sourceNodes = (graph.nodes || []).length ? graph.nodes : keywords.map(item => ({ tag: item.name, media_count: item.files, category: t.keywords }));
+  const topNodes = sourceNodes.slice(0, 8);
+  const center = topNodes[0] || { tag: t.tagGraph, media_count: 0 };
+  const satellites = topNodes.slice(1, 8);
+  const colors = ['violet', 'blue', 'green', 'orange', 'pink', 'cyan', 'amber'];
+  function open(tag) {
+    if (!tag) return;
+    loadMedia({ tag, limit: 100 });
+    setActive('library');
+  }
+  return (
+    <section className="panel dashboardGraphPanel">
+      <div className="panelHead"><h2>{t.tagGraph}</h2><button className="softLink" onClick={() => setActive('tagGraph')}>{t.viewAll}</button></div>
+      <div className="orbitGraph">
+        <button className="orbitNode orbitCenter" onClick={() => open(center.tag)}>
+          <strong>{center.tag}</strong>
+          <span>{prettyNumber(center.media_count)}</span>
+        </button>
+        {satellites.map((node, index) => {
+          const angle = (index / Math.max(1, satellites.length)) * Math.PI * 2 - Math.PI / 2;
+          const x = 50 + Math.cos(angle) * 34;
+          const y = 50 + Math.sin(angle) * 31;
+          return (
+            <button
+              className={`orbitNode ${colors[index % colors.length]}`}
+              key={node.tag}
+              style={{ left: `${x}%`, top: `${y}%` }}
+              onClick={() => open(node.tag)}
+            >
+              <strong>{node.tag}</strong>
+              <span>{prettyNumber(node.media_count)}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="graphLegend">
+        {(keywords || []).slice(0, 5).map((item, index) => <span key={item.name}><i className={colors[index % colors.length]} />{item.name}</span>)}
+      </div>
+    </section>
+  );
+}
+
+function RecentMediaPanel({ items, total, setActive, t }) {
+  const [selected, setSelected] = useState(null);
+  const [detail, setDetail] = useState(null);
+  async function open(item) {
+    setSelected(item);
+    setDetail(await api(`/api/media/${item.id}`));
+  }
+  return (
+    <section className="panel recentPanel">
+      <div className="panelHead"><h2>{t.recentAdded}</h2><button className="softLink" onClick={() => setActive('library')}>{t.viewAll}</button></div>
+      {!items.length ? <Empty label={t.recentEmpty} /> : <div className="recentGrid">{items.map(item => <RecentMediaCard item={item} key={item.id} open={open} />)}</div>}
+      <div className="panelFoot">{prettyNumber(total)} {t.media}</div>
+      {selected && <MediaViewer item={selected} detail={detail} close={() => { setSelected(null); setDetail(null); }} t={t} />}
+    </section>
+  );
+}
+
+function RecentMediaCard({ item, open }) {
+  return (
+    <button className="recentCard" onClick={() => open(item)}>
+      <img src={`/api/media/${item.id}/thumbnail`} alt={item.filename} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} />
+      <span>{item.media_type === 'video' ? <Film size={14} /> : <ImageIcon size={14} />}{item.media_type}</span>
+      <strong>{item.author || item.scene || item.filename}</strong>
+      <small>{item.duration ? formatSeconds(item.duration) : item.quality || ''}</small>
+    </button>
+  );
+}
+
+function DashboardJobs({ jobs, setActive, t }) {
+  const rows = jobs.slice(0, 4);
+  return (
+    <section className="panel taskPanel">
+      <div className="panelHead"><h2>{t.taskList}</h2><button className="softLink" onClick={() => setActive('jobs')}>{t.viewAllTasks}</button></div>
+      {!rows.length ? <Empty label={t.noRows} /> : <div className="taskRows">{rows.map(job => {
+        const progress = job.status === 'done' ? 100 : job.status === 'running' ? 66 : job.status === 'queued' ? 28 : 0;
+        return (
+          <button className="taskRow" key={job.id} onClick={() => setActive('jobs')}>
+            <span>{job.command}</span>
+            <strong>{progress}%</strong>
+            <i><b style={{ width: `${progress}%` }} /></i>
+            <em>{job.status}</em>
+          </button>
+        );
+      })}</div>}
+    </section>
+  );
+}
+
+function StoragePanel({ summary, mediaTotal, t }) {
+  const top = summary?.top || {};
+  const videos = Number(summary?.media_types?.video || 0);
+  const photos = Number(summary?.media_types?.photo || 0);
+  const other = Math.max(0, Number(mediaTotal || 0) - videos - photos);
+  const used = Math.max(1, videos + photos + other || mediaTotal || 1);
+  const videoPct = Math.max(6, Math.round((videos / used) * 100));
+  const photoPct = Math.max(6, Math.round((photos / used) * 100));
+  return (
+    <section className="panel storagePanel">
+      <div className="panelHead"><h2>{t.storageSpace}</h2><span>{t.localOnly}</span></div>
+      <div className="storageBody">
+        <div className="storageRing" style={{ '--video': `${videoPct}%`, '--photo': `${photoPct}%` }}><HardDrive size={24} /><strong>{prettyNumber(mediaTotal)}</strong><span>{t.usedSpace}</span></div>
+        <div className="storageList">
+          <div><i className="violet" /><span>{t.videoFiles}</span><strong>{prettyNumber(videos)}</strong></div>
+          <div><i className="pink" /><span>{t.imageFiles}</span><strong>{prettyNumber(photos)}</strong></div>
+          <div><i className="blue" /><span>{t.otherFiles}</span><strong>{prettyNumber(other || top.unknown || 0)}</strong></div>
+          <div><i className="green" /><span>{t.availableSpace}</span><strong>{prettyNumber(top.duplicates || 0)}</strong></div>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function WorkbenchPanel({ summary, leftovers, vision, start, setActive, busy, t }) {

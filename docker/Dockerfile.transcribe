@@ -31,9 +31,11 @@ COPY backend/ /app/backend/
 COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
 
 ARG APP_VERSION=dev
+ARG APP_SEMVER=1.0.0
 ARG APP_IMAGE=tg-media-manager
 ARG APP_BUILT_AT=
 ENV APP_VERSION=$APP_VERSION
+ENV APP_SEMVER=$APP_SEMVER
 ENV APP_IMAGE=$APP_IMAGE
 ENV APP_BUILT_AT=$APP_BUILT_AT
 
