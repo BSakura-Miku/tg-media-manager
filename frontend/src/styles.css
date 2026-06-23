@@ -675,8 +675,15 @@ button:disabled { opacity: .55; cursor: wait; }
 .row strong { font-variant-numeric: tabular-nums; color: var(--text); font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jobs { display: grid; gap: 8px; }
 .job { min-height: 56px; width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px; background: var(--panel-2); border-color: var(--line); text-align: left; }
+.jobMain { min-width: 0; flex: 1; display: grid; gap: 4px; }
 .job strong { font-size: 13px; color: var(--text); }
 .job p { margin-top: 3px; max-width: 900px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job small { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.jobProgress { display: block; width: 100%; height: 6px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--line) 70%, transparent); }
+.jobProgress b { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #5ea2ff, #66e3d0); box-shadow: 0 0 18px rgba(94, 162, 255, .35); }
+.jobDetailHero { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; margin-bottom: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+.jobDetailHero strong { font-size: 22px; color: var(--text); }
+.jobDetailHero span { grid-column: 1 / -1; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line-strong); color: var(--soft); white-space: nowrap; }
 .badge.done { color: var(--good); border-color: color-mix(in srgb, var(--good) 55%, var(--line)); }
 .badge.failed { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }

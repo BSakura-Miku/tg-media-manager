@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 import argparse
@@ -1126,6 +1127,29 @@ def frame_cache_dir(config: Config) -> Path:
     return config.manifests / "vision_cache"
 
 
+def cancel_requested() -> bool:
+    cancel_file = os.environ.get("TGMM_CANCEL_FILE", "")
+    return bool(cancel_file and Path(cancel_file).exists())
+
+
+def progress_event(stage: str, processed: int, total: int, **extra) -> None:
+    payload = {
+        "stage": stage,
+        "processed": processed,
+        "total": total,
+        "progress": int((processed / total) * 100) if total else 0,
+        **extra,
+    }
+    print("TGMM_PROGRESS " + json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def valid_cache_file(path: Path) -> bool:
+    try:
+        return path.exists() and path.stat().st_size > 1024
+    except OSError:
+        return False
+
+
 def ffmpeg_hw_prefix() -> list[str]:
     mode = os.environ.get("FFMPEG_HWACCEL", "").strip().lower()
     if mode in {"", "none", "false", "0", "off"}:
@@ -1145,18 +1169,24 @@ def run_ffmpeg_with_fallback(base_cmd: list[str], out: Path, timeout: int) -> bo
         prefixes.append(hw)
     prefixes.append([])
     for prefix in prefixes:
-        if out.exists():
+        tmp = out.with_name(f".{out.stem}.tmp{out.suffix}")
+        if tmp.exists():
             try:
-                out.unlink()
+                tmp.unlink()
             except OSError:
                 pass
-        cmd = ["ffmpeg", "-y", *prefix, *base_cmd]
+        cmd = ["ffmpeg", "-y", *prefix, *base_cmd[:-1], "-update", "1", str(tmp)]
         try:
             proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
         except (subprocess.SubprocessError, OSError):
             continue
-        if proc.returncode == 0 and out.exists() and out.stat().st_size > 0:
+        if proc.returncode == 0 and valid_cache_file(tmp):
+            tmp.replace(out)
             return True
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
     return False
 
 
@@ -1165,12 +1195,17 @@ def extract_video_frames(src: Path, out_dir: Path, frames: int) -> list[Path]:
     outputs = []
     for i in range(frames):
         out = out_dir / f"frame_{i + 1:02d}.jpg"
-        if out.exists():
+        if valid_cache_file(out):
             outputs.append(out)
             continue
+        if out.exists():
+            try:
+                out.unlink()
+            except OSError:
+                pass
         # fps expression samples across the duration without needing metadata parsing.
-        vf = f"thumbnail,scale='min(640,iw)':-2"
-        ss = str(max(0, i * 7 + 1))
+        vf = "thumbnail,scale=min(640\\,iw):-2"
+        ss = "0" if i == 0 else str(max(0, i * 7 + 1))
         base_cmd = ["-ss", ss, "-i", str(src), "-frames:v", "1", "-vf", vf, "-q:v", "4", str(out)]
         if run_ffmpeg_with_fallback(base_cmd, out, 30):
             outputs.append(out)
@@ -1180,45 +1215,142 @@ def extract_video_frames(src: Path, out_dir: Path, frames: int) -> list[Path]:
 def extract_image_thumb(src: Path, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / "frame_01.jpg"
-    if out.exists():
+    if valid_cache_file(out):
         return [out]
-    base_cmd = ["-i", str(src), "-frames:v", "1", "-vf", "scale='min(640,iw)':-2", "-q:v", "4", str(out)]
-    run_ffmpeg_with_fallback(base_cmd, out, 20)
-    return [out] if out.exists() else []
-
-
-def extract_frames(config: Config, limit: int | None, frames: int) -> None:
-    cache = frame_cache_dir(config)
-    rows = []
-    processed = 0
-    for path in all_organized_media_files(config):
-        key = media_cache_key(path)
-        out_dir = cache / key
+    if out.exists():
         try:
-            outputs = extract_video_frames(path, out_dir, frames) if media_kind(path) == "video" else extract_image_thumb(path, out_dir)
-        except Exception as exc:
-            outputs = []
-            error = type(exc).__name__
-        else:
-            error = ""
-        rows.append({
-            "media_path": rel(config.library_root, path),
-            "cache_key": key,
-            "kind": media_kind(path),
-            "frames": "|".join(str(p.relative_to(config.library_root)) for p in outputs),
-            "error": error,
-        })
-        processed += 1
-        if processed % 100 == 0:
-            print(f"extracted {processed} media", flush=True)
-        if limit and processed >= limit:
-            break
+            out.unlink()
+        except OSError:
+            pass
+    if Image is not None:
+        tmp = out.with_name(f".{out.stem}.tmp{out.suffix}")
+        try:
+            with Image.open(src) as img:
+                img = img.convert("RGB")
+                width, height = img.size
+                if width > 640:
+                    height = max(1, int(height * (640 / width)))
+                    width = 640
+                    img = img.resize((width, height))
+                img.save(tmp, "JPEG", quality=82)
+            if valid_cache_file(tmp):
+                tmp.replace(out)
+                return [out]
+        except Exception:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    base_cmd = ["-i", str(src), "-frames:v", "1", "-vf", "scale=min(640\\,iw):-2", "-q:v", "4", str(out)]
+    run_ffmpeg_with_fallback(base_cmd, out, 20)
+    return [out] if valid_cache_file(out) else []
+
+
+def write_frame_index(config: Config, rows: list[dict]) -> None:
     out = config.manifests / "frame_index.csv"
     with out.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=["media_path", "cache_key", "kind", "frames", "error"])
         writer.writeheader()
         writer.writerows(rows)
+
+
+def extract_one_media_frame_job(config: Config, path: Path, frames: int) -> dict:
+    key = media_cache_key(path)
+    out_dir = frame_cache_dir(config) / key
+    error = ""
+    try:
+        outputs = extract_video_frames(path, out_dir, frames) if media_kind(path) == "video" else extract_image_thumb(path, out_dir)
+        if not outputs:
+            error = "no_frames"
+    except Exception as exc:
+        outputs = []
+        error = type(exc).__name__
+    return {
+        "media_path": rel(config.library_root, path),
+        "cache_key": key,
+        "kind": media_kind(path),
+        "frames": "|".join(str(p.relative_to(config.library_root)) for p in outputs),
+        "error": error,
+    }
+
+
+def extract_frames(config: Config, limit: int | None, frames: int, workers: int, checkpoint_every: int, retry_failed: bool) -> None:
+    cache = frame_cache_dir(config)
+    cache.mkdir(parents=True, exist_ok=True)
+    rows = []
+    errors = []
+    if retry_failed and (config.manifests / "frame_errors.csv").exists():
+        retry_paths = []
+        for row in dict_rows_from_csv(config.manifests / "frame_errors.csv"):
+            media_path = row.get("media_path", "")
+            if media_path:
+                path = config.library_root / media_path
+                if path.exists():
+                    retry_paths.append(path)
+        paths = retry_paths
+    else:
+        paths = list(all_organized_media_files(config))
+    if limit:
+        paths = paths[:limit]
+    total = len(paths)
+    workers = max(1, min(16, workers))
+    checkpoint_every = max(10, checkpoint_every)
+    processed = skipped = failed = 0
+    progress_event("extract-frames", 0, total, workers=workers, frames_per_video=frames, message="starting")
+    executor = ThreadPoolExecutor(max_workers=workers)
+    fast_cancel = False
+    try:
+        futures = {executor.submit(extract_one_media_frame_job, config, path, frames): path for path in paths}
+        for future in as_completed(futures):
+            path = futures[future]
+            if cancel_requested():
+                progress_event("extract-frames", processed, total, message="cancel requested")
+                fast_cancel = True
+                executor.shutdown(wait=False, cancel_futures=True)
+                write_frame_index(config, rows)
+                return
+            try:
+                row = future.result()
+            except Exception as exc:
+                row = {
+                    "media_path": rel(config.library_root, path),
+                    "cache_key": media_cache_key(path),
+                    "kind": media_kind(path),
+                    "frames": "",
+                    "error": type(exc).__name__,
+                }
+            rows.append(row)
+            processed += 1
+            if row.get("error"):
+                failed += 1
+                errors.append(row)
+            else:
+                frame_paths = [item for item in row.get("frames", "").split("|") if item]
+                if frame_paths and all(valid_cache_file(config.library_root / item) for item in frame_paths):
+                    skipped += 1
+            if processed % checkpoint_every == 0 or processed == total:
+                write_frame_index(config, rows)
+                progress_event(
+                    "extract-frames",
+                    processed,
+                    total,
+                    failed=failed,
+                    cached_or_done=skipped,
+                    current=str(path.relative_to(config.library_root)) if path.is_relative_to(config.library_root) else str(path),
+                )
+    finally:
+        if not fast_cancel:
+            executor.shutdown(wait=True, cancel_futures=False)
+    write_frame_index(config, rows)
+    if errors:
+        error_out = config.manifests / "frame_errors.csv"
+        with error_out.open("w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["media_path", "cache_key", "kind", "frames", "error"])
+            writer.writeheader()
+            writer.writerows(errors)
     print(f"frame_index {len(rows)} rows")
+    if errors:
+        print(f"frame_errors {len(errors)} rows", flush=True)
 
 
 def face_setup() -> None:
@@ -2048,6 +2180,9 @@ def parse_args() -> argparse.Namespace:
     frames_cmd = sub.add_parser("extract-frames")
     frames_cmd.add_argument("--limit", type=int)
     frames_cmd.add_argument("--frames", type=int, default=3)
+    frames_cmd.add_argument("--workers", type=int, default=int(os.environ.get("FRAME_WORKERS", "1")))
+    frames_cmd.add_argument("--checkpoint-every", type=int, default=int(os.environ.get("FRAME_CHECKPOINT_EVERY", "100")))
+    frames_cmd.add_argument("--retry-failed", action="store_true", help="Reserved for retrying rows listed in frame_errors.csv.")
 
     face_scan_cmd = sub.add_parser("face-scan")
     face_scan_cmd.add_argument("--limit", type=int)
@@ -2116,7 +2251,7 @@ def main() -> None:
     elif args.command == "refresh-state":
         refresh_state(config)
     elif args.command == "extract-frames":
-        extract_frames(config, args.limit, args.frames)
+        extract_frames(config, args.limit, args.frames, args.workers, args.checkpoint_every, args.retry_failed)
     elif args.command == "face-setup":
         face_setup()
     elif args.command == "face-scan":

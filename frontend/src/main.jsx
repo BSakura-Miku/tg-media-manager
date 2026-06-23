@@ -256,6 +256,7 @@ const i18n = {
       'workflow-review-cleanup': 'Review Cleanup',
       'workflow-face-balanced': 'Rebuild Faces',
       'workflow-vision-plan': 'Scene Plan',
+      'workflow-full-library': 'Full Library',
       'workflow-transcribe-sample': 'Speech Sample',
       'index-metadata': 'Rebuild Index',
       'index-similarity': 'Similarity Index',
@@ -267,6 +268,7 @@ const i18n = {
       'normalize-organized': 'Normalize',
       'refresh-state': 'Refresh State',
       'extract-frames-sample': 'Frames Sample',
+      'extract-frames-retry-failed': 'Retry Frames',
       'face-setup': 'Face Setup',
       'vision-scan-sample': 'Vision Sample',
       'index-vision': 'Sync Vision',
@@ -291,6 +293,7 @@ const i18n = {
       'workflow-review-cleanup': 'Revisit Unknown/NeedsManualCheck and exact duplicates.',
       'workflow-face-balanced': 'Rebuild face index and same-face groups conservatively.',
       'workflow-vision-plan': 'Run local image scene labels and create a dry-run plan.',
+      'workflow-full-library': 'Run scan, organize, frames, faces, scene labels, dedupe, transcription, and indexes.',
       'workflow-transcribe-sample': 'Transcribe a small sample of videos and index the text.',
       'index-metadata': 'Import organized files and manifests into the virtual SQLite library.',
       'index-similarity': 'Build exact duplicate, image perceptual hash, and video keyframe similarity groups.',
@@ -302,6 +305,7 @@ const i18n = {
       'normalize-organized': 'Flatten actor folders and move weak actor names back to review.',
       'refresh-state': 'Recount dashboard numbers.',
       'extract-frames-sample': 'Cache thumbnails/frames for a small sample.',
+      'extract-frames-retry-failed': 'Retry rows listed in frame_errors.csv.',
       'face-setup': 'Show face/vision dependency status.',
       'vision-scan-sample': 'Run OpenCLIP labels on a small sample.',
       'index-vision': 'Import vision_labels.csv and frame_index.csv into tags and timeline segments.',
@@ -541,6 +545,7 @@ const i18n = {
       'workflow-review-cleanup': '清理 Review',
       'workflow-face-balanced': '重建人脸组',
       'workflow-vision-plan': '场景识别计划',
+      'workflow-full-library': '全量智能整理',
       'workflow-transcribe-sample': '语音样本',
       'index-metadata': '重建索引',
       'index-similarity': '相似索引',
@@ -552,6 +557,7 @@ const i18n = {
       'normalize-organized': '规范目录',
       'refresh-state': '刷新统计',
       'extract-frames-sample': '抽帧样本',
+      'extract-frames-retry-failed': '重试抽帧失败',
       'face-setup': '检查人脸环境',
       'vision-scan-sample': '视觉样本',
       'index-vision': '同步视觉索引',
@@ -576,6 +582,7 @@ const i18n = {
       'workflow-review-cleanup': '重新整理 Unknown/NeedsManualCheck，并做精确去重。',
       'workflow-face-balanced': '重新抽帧、人脸扫描、保守聚类，生成新的人脸计划。',
       'workflow-vision-plan': '本地识别画面场景/标签，只生成预览计划。',
+      'workflow-full-library': '完整跑扫描、整理、抽帧、人脸、场景、去重、转写和索引。',
       'workflow-transcribe-sample': '抽样转写视频语音，并把文字导入搜索。',
       'index-metadata': '把已整理文件和清单导入 SQLite 虚拟媒体库。',
       'index-similarity': '生成精确重复、图片感知 hash、视频关键帧相似组。',
@@ -587,6 +594,7 @@ const i18n = {
       'normalize-organized': '整理已有演员目录，把不靠谱的人名移回 review。',
       'refresh-state': '重新统计首页数字。',
       'extract-frames-sample': '只抽一小批缩略图/视频帧，供测试。',
+      'extract-frames-retry-failed': '重新处理 frame_errors.csv 里的失败项。',
       'face-setup': '检查人脸/视觉依赖是否可用。',
       'vision-scan-sample': '只对小样本跑场景识别。',
       'index-vision': '把 vision_labels.csv 和 frame_index.csv 导入标签和时间轴。',
@@ -610,6 +618,7 @@ const i18n = {
 };
 
 const commands = [
+  ['workflow-full-library', 'Full Library', Play, 'Run the full resumable pipeline'],
   ['workflow-new-downloads', 'New Downloads', Play, 'Recommended: scan, analyze, classify, apply, refresh'],
   ['workflow-review-cleanup', 'Review Cleanup', Archive, 'Recommended: normalize, classify review, dedupe, refresh'],
   ['workflow-face-balanced', 'Rebuild Faces', Users, 'Recommended: full frames, face scan, balanced cluster, report, plan'],
@@ -625,6 +634,7 @@ const commands = [
   ['normalize-organized', 'Normalize', Archive, 'Flatten actor folders and move weak actor names to review'],
   ['refresh-state', 'Refresh State', RefreshCw, 'Recount library state snapshot'],
   ['extract-frames-sample', 'Frames Sample', Camera, 'Cache frames for a small sample'],
+  ['extract-frames-retry-failed', 'Retry Frames', Camera, 'Retry failed frame extraction rows'],
   ['face-setup', 'Face Setup', ScanFace, 'Show local face dependency status'],
   ['vision-scan-sample', 'Vision Sample', Camera, 'Run OpenCLIP sample when CLIP image is used'],
   ['index-vision', 'Sync Vision', Camera, 'Import vision outputs into media tags and timelines'],
@@ -887,6 +897,14 @@ function App() {
     setJobLog(log);
   }
 
+  async function cancelJob(id) {
+    const ok = window.confirm(language === 'zh-CN' ? '停止当前任务？已写入的缓存会保留，下次可以继续。' : 'Stop this job? Completed cache files will be kept and can be resumed later.');
+    if (!ok) return;
+    await api(`/api/jobs/${id}/cancel`, { method: 'POST' });
+    await refresh();
+    await openJob(id);
+  }
+
   async function runSearch(event) {
     event?.preventDefault();
     return performSearch(query, source);
@@ -1125,7 +1143,7 @@ function App() {
           </>
         )}
 
-        {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} setActive={setActive} t={t} /></section>}
+        {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} cancelJob={cancelJob} setActive={setActive} t={t} /></section>}
         {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} t={t} />}
         {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} loadMedia={loadMedia} setActive={setActive} t={t} />}
         {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} t={t} />}
@@ -1321,6 +1339,7 @@ function WorkbenchPanel({ summary, leftovers, vision, start, setActive, busy, t 
 
 function WorkflowPanel({ t, start, busy }) {
   const workflows = [
+    ['workflow-full-library', t.commandNames?.['workflow-full-library'] || 'Full Library', t.commandHelp?.['workflow-full-library'] || '', Play],
     ['workflow-new-downloads', t.newDownloadsWorkflow, t.newDownloadsHint, Search],
     ['workflow-review-cleanup', t.reviewCleanupWorkflow, t.reviewCleanupHint, Archive],
     ['workflow-face-balanced', t.faceWorkflow, t.faceWorkflowHint, Users],
@@ -1345,8 +1364,8 @@ function WorkflowPanel({ t, start, busy }) {
 
 function CommandGuide({ t }) {
   const groups = [
-    [t.commonCommands, ['workflow-new-downloads', 'workflow-review-cleanup', 'scan', 'apply']],
-    [t.faceCommands, ['workflow-face-balanced', 'face-scan-sample', 'face-cluster-balanced', 'face-cluster-report', 'apply-face-groups-dry-run', 'apply-face-groups']],
+    [t.commonCommands, ['workflow-full-library', 'workflow-new-downloads', 'workflow-review-cleanup', 'scan', 'apply']],
+    [t.faceCommands, ['workflow-face-balanced', 'extract-frames-retry-failed', 'face-scan-sample', 'face-cluster-balanced', 'face-cluster-report', 'apply-face-groups-dry-run', 'apply-face-groups']],
     [t.visionCommands, ['workflow-vision-plan', 'vision-scan-sample', 'index-vision', 'apply-vision-labels-dry-run', 'apply-vision-labels']],
     [t.transcriptCommands, ['workflow-transcribe-sample', 'transcribe-sample', 'transcribe']],
     [t.maintenanceCommands, ['refresh-state', 'dedupe-organized-dry-run', 'dedupe-organized', 'clean-empty-dirs']],
@@ -1374,8 +1393,30 @@ function SourcePanel({ leftovers, title }) {
   return <div className="panel"><div className="panelHead"><h2>{title}</h2><span>{Object.values(leftovers).reduce((a, b) => a + b, 0)}</span></div><div className="list">{Object.entries(leftovers).map(([name, files]) => <div className="row" key={name}><span>{name}</span><strong>{files}</strong></div>)}</div></div>;
 }
 
+function jobPercent(job) {
+  const value = Number(job.progress || 0);
+  if (job.status === 'done') return 100;
+  return Math.max(0, Math.min(100, value));
+}
+
 function JobsPanel({ jobs, openJob, t }) {
-  return <div className="panel"><div className="panelHead"><h2>{t.jobs}</h2><span>{jobs.length}</span></div><div className="jobs">{jobs.map(job => <button className="job" key={job.id} onClick={() => openJob(job.id)}><div><strong>#{job.id} {job.command}</strong><p>{job.message || job.created_at}</p></div><JobBadge status={job.status} /></button>)}</div></div>;
+  return <div className="panel"><div className="panelHead"><h2>{t.jobs}</h2><span>{jobs.length}</span></div><div className="jobs">{jobs.map(job => {
+    const pct = jobPercent(job);
+    const processed = Number(job.processed || 0);
+    const total = Number(job.total || 0);
+    return (
+      <button className="job" key={job.id} onClick={() => openJob(job.id)}>
+        <div className="jobMain">
+          <strong>#{job.id} {t.commandNames?.[job.command] || job.command}</strong>
+          <p>{job.stage || job.message || job.created_at}</p>
+          {job.current_item && <small>{job.current_item}</small>}
+          <i className="jobProgress"><b style={{ width: `${pct}%` }} /></i>
+          <small>{pct}% {total ? `${processed}/${total}` : ''} {Number(job.failed_count || 0) ? ` failed ${job.failed_count}` : ''}</small>
+        </div>
+        <JobBadge status={job.status} />
+      </button>
+    );
+  })}</div></div>;
 }
 
 function jobNextStep(command, t) {
@@ -1408,10 +1449,35 @@ function jobNextActions(command, t, start, setActive) {
   return [];
 }
 
-function LogPanel({ selectedJob, jobLog, start, setActive, t }) {
+function LogPanel({ selectedJob, jobLog, start, cancelJob, setActive, t }) {
   const next = selectedJob ? jobNextStep(selectedJob.command, t) : '';
   const actions = selectedJob ? jobNextActions(selectedJob.command, t, start, setActive) : [];
-  return <div className="panel"><div className="panelHead"><h2>{selectedJob ? `Job #${selectedJob.id}` : t.jobLog}</h2><span>{selectedJob?.status || t.selectJob}</span></div>{!selectedJob ? <Empty label={t.selectJobHint} /> : <div className="logBlock"><div className="list"><div className="row"><span>{t.command}</span><strong>{selectedJob.command}</strong></div><div className="row"><span>{t.started}</span><strong>{selectedJob.started_at || '-'}</strong></div><div className="row"><span>{t.finished}</span><strong>{selectedJob.finished_at || '-'}</strong></div></div>{next && <div className="hintBox"><strong>{t.jobNextStep}</strong><span>{next}</span>{actions.length > 0 && <div className="nextActions">{actions.map(([label, action]) => <button key={label} onClick={action}><Play size={15} />{label}</button>)}</div>}</div>}<h3>stdout</h3><pre>{jobLog?.stdout || '(empty)'}</pre><h3>stderr</h3><pre>{jobLog?.stderr || '(empty)'}</pre></div>}</div>;
+  const canStop = selectedJob && ['queued', 'running'].includes(selectedJob.status);
+  const canResume = selectedJob && ['cancelled', 'failed'].includes(selectedJob.status);
+  const pct = selectedJob ? jobPercent(selectedJob) : 0;
+  return <div className="panel"><div className="panelHead"><h2>{selectedJob ? `Job #${selectedJob.id}` : t.jobLog}</h2><span>{selectedJob?.status || t.selectJob}</span></div>{!selectedJob ? <Empty label={t.selectJobHint} /> : <div className="logBlock">
+    <div className="jobDetailHero">
+      <strong>{pct}%</strong>
+      <i className="jobProgress"><b style={{ width: `${pct}%` }} /></i>
+      <span>{selectedJob.stage || selectedJob.message || '-'}</span>
+    </div>
+    <div className="nextActions">
+      {canStop && <button onClick={() => cancelJob(selectedJob.id)}><Archive size={15} />{t.stopJob || 'Stop'}</button>}
+      {canResume && <button onClick={() => start(selectedJob.command)}><Play size={15} />{t.resumeJob || 'Resume'}</button>}
+      <button onClick={() => start('extract-frames-retry-failed')}><RefreshCw size={15} />{t.commandNames?.['extract-frames-retry-failed'] || 'Retry Frames'}</button>
+    </div>
+    <div className="list">
+      <div className="row"><span>{t.command}</span><strong>{selectedJob.command}</strong></div>
+      <div className="row"><span>stage</span><strong>{selectedJob.stage || '-'}</strong></div>
+      <div className="row"><span>processed</span><strong>{selectedJob.processed || 0}/{selectedJob.total || 0}</strong></div>
+      <div className="row"><span>current</span><strong>{selectedJob.current_item || '-'}</strong></div>
+      <div className="row"><span>failed/skipped</span><strong>{selectedJob.failed_count || 0}/{selectedJob.skipped_count || 0}</strong></div>
+      <div className="row"><span>heartbeat</span><strong>{selectedJob.heartbeat_at || '-'}</strong></div>
+      <div className="row"><span>{t.started}</span><strong>{selectedJob.started_at || '-'}</strong></div>
+      <div className="row"><span>{t.finished}</span><strong>{selectedJob.finished_at || '-'}</strong></div>
+    </div>
+    {next && <div className="hintBox"><strong>{t.jobNextStep}</strong><span>{next}</span>{actions.length > 0 && <div className="nextActions">{actions.map(([label, action]) => <button key={label} onClick={action}><Play size={15} />{label}</button>)}</div>}</div>}
+    <h3>stdout</h3><pre>{jobLog?.stdout || '(empty)'}</pre><h3>stderr</h3><pre>{jobLog?.stderr || '(empty)'}</pre></div>}</div>;
 }
 
 function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
@@ -1935,6 +2001,10 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
     openvino_device: 'GPU',
     face_providers: 'OpenVINOExecutionProvider,CPUExecutionProvider',
     whisper_device: 'cpu',
+    frame_workers: 1,
+    frames_per_video: 3,
+    frame_checkpoint_every: 100,
+    transcribe_max_seconds: 900,
     monitor_enabled: false,
     monitor_dirs: '',
     monitor_interval_minutes: 10,
@@ -1954,9 +2024,13 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
           <div className="formSectionTitle">{t.hardware}</div>
           <label>{t.computeDevice}<select value={cfg.compute_device || 'auto'} onChange={event => update('compute_device', event.target.value)}><option value="auto">{t.auto}</option><option value="gpu">{t.gpuPreferred}</option><option value="cpu">{t.cpuOnly}</option></select><small>{t.gpuHint}</small></label>
           <label>{t.ffmpegHwaccel}<select value={cfg.ffmpeg_hwaccel || 'auto'} onChange={event => update('ffmpeg_hwaccel', event.target.value)}><option value="auto">{t.auto}</option><option value="vaapi">VAAPI</option><option value="qsv">Intel QSV</option><option value="none">{t.ffmpegNone}</option></select></label>
+          <label>Frame workers<input type="number" min="1" max="16" value={cfg.frame_workers || 1} onChange={event => update('frame_workers', event.target.value)} /><small>NAS 建议 3-4；太高会打满磁盘 IO。</small></label>
+          <label>Frames per video<input type="number" min="1" max="12" value={cfg.frames_per_video || 3} onChange={event => update('frames_per_video', event.target.value)} /></label>
+          <label>Checkpoint every<input type="number" min="10" max="1000" value={cfg.frame_checkpoint_every || 100} onChange={event => update('frame_checkpoint_every', event.target.value)} /><small>抽帧索引和任务进度的落盘频率。</small></label>
           <label>{t.openvinoDevice}<select value={cfg.openvino_device || 'GPU'} onChange={event => update('openvino_device', event.target.value)}><option value="GPU">{t.gpu}</option><option value="CPU">{t.cpu}</option><option value="AUTO">{t.openvinoAuto}</option></select></label>
           <label>{t.faceProviders}<select value={cfg.face_providers || 'OpenVINOExecutionProvider,CPUExecutionProvider'} onChange={event => update('face_providers', event.target.value)}><option value="OpenVINOExecutionProvider,CPUExecutionProvider">OpenVINO + CPU fallback</option><option value="CPUExecutionProvider">CPUExecutionProvider</option></select></label>
           <label>{t.whisperDevice}<select value={cfg.whisper_device || 'cpu'} onChange={event => update('whisper_device', event.target.value)}><option value="cpu">{t.cpu}</option><option value="cuda">CUDA</option></select></label>
+          <label>Transcribe max seconds<input type="number" min="30" max="86400" value={cfg.transcribe_max_seconds || 900} onChange={event => update('transcribe_max_seconds', event.target.value)} /><small>每个视频最多识别多少秒。</small></label>
           <div className="formSectionTitle">{t.monitor}</div>
           <label className="checkLine"><input type="checkbox" checked={!!cfg.monitor_enabled} onChange={event => update('monitor_enabled', event.target.checked)} />{t.monitorEnabled}</label>
           <label>{t.monitorDirs}<input value={cfg.monitor_dirs || ''} onChange={event => update('monitor_dirs', event.target.value)} placeholder={cfg.source_dirs || 'photos,photos2,videos,videos2'} /><small>{t.monitorDirsHint}</small></label>

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import os
+import json
+import signal
+import select
 import subprocess
+import sys
 import threading
+import time
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from .db import connect, get_settings
@@ -14,6 +20,7 @@ ALLOWED_COMMANDS = {
     "workflow-review-cleanup": [["normalize-organized"], ["classify-keywords"], ["organize-review"], ["refresh-state"], ["__metadata_index__"]],
     "workflow-face-balanced": [["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"]],
     "workflow-vision-plan": [["extract-frames"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"]],
+    "workflow-full-library": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["normalize-organized"], ["organize-review"], ["refresh-state"], ["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"], ["dedupe-organized", "--apply"], ["__similarity_index__"], ["__transcribe__"], ["__metadata_index__"]],
     "workflow-transcribe-sample": [["__transcribe_sample__"], ["__metadata_index__"]],
     "scan": ["scan"],
     "analyze-filenames": ["analyze-filenames"],
@@ -28,6 +35,7 @@ ALLOWED_COMMANDS = {
     "dedupe-organized": ["dedupe-organized", "--apply"],
     "extract-frames-sample": ["extract-frames", "--limit", "120"],
     "extract-frames": ["extract-frames"],
+    "extract-frames-retry-failed": ["extract-frames", "--retry-failed"],
     "face-setup": ["face-setup"],
     "face-scan-sample": ["face-scan", "--limit", "120"],
     "face-scan": ["face-scan"],
@@ -49,6 +57,30 @@ ALLOWED_COMMANDS = {
 }
 
 
+PIPELINE_STAGES = {
+    "scan": "scan",
+    "analyze-filenames": "filename-analysis",
+    "classify-keywords": "keyword-classification",
+    "apply": "apply-move-plan",
+    "normalize-organized": "normalize",
+    "organize-review": "review-cleanup",
+    "refresh-state": "refresh-state",
+    "extract-frames": "extract-frames",
+    "face-scan": "face-scan",
+    "face-cluster": "face-cluster",
+    "face-cluster-report": "face-report",
+    "apply-face-groups": "apply-face-groups",
+    "vision-scan": "vision-scan",
+    "apply-vision-labels": "apply-vision-labels",
+    "dedupe-organized": "dedupe",
+    "__vision_index__": "index-vision",
+    "__metadata_index__": "index-metadata",
+    "__similarity_index__": "index-similarity",
+    "__transcribe_sample__": "transcribe",
+    "__transcribe__": "transcribe",
+}
+
+
 def core_script() -> Path:
     configured = os.environ.get("CORE_SCRIPT")
     if configured:
@@ -66,11 +98,34 @@ def create_job(command: str) -> int:
         active = conn.execute("SELECT id, command, status FROM jobs WHERE status IN ('queued', 'running') ORDER BY id DESC LIMIT 1").fetchone()
         if active is not None:
             raise RuntimeError(f"Job #{active['id']} ({active['command']}) is still {active['status']}")
-        cur = conn.execute("INSERT INTO jobs (command, status, message) VALUES (?, 'queued', '')", (command,))
+        cur = conn.execute("INSERT INTO jobs (command, status, message, progress) VALUES (?, 'queued', '', 0)", (command,))
         job_id = int(cur.lastrowid)
     thread = threading.Thread(target=run_job, args=(job_id, command), daemon=True)
     thread.start()
     return job_id
+
+
+def cancel_file(job_id: int) -> Path:
+    return Path(os.environ.get("JOB_CANCEL_DIR", "/tmp/tgmm-jobs")) / f"{job_id}.cancel"
+
+
+def request_job_cancel(job_id: int) -> None:
+    with connect() as conn:
+        row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            raise ValueError("Job not found")
+        conn.execute("UPDATE jobs SET cancel_requested=1, message='cancel requested', heartbeat_at=CURRENT_TIMESTAMP WHERE id=?", (job_id,))
+    path = cancel_file(job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("cancel requested\n", encoding="utf-8")
+
+
+def is_cancel_requested(job_id: int) -> bool:
+    if cancel_file(job_id).exists():
+        return True
+    with connect() as conn:
+        row = conn.execute("SELECT cancel_requested FROM jobs WHERE id=?", (job_id,)).fetchone()
+    return bool(row and row["cancel_requested"])
 
 
 def hardware_env(settings: dict) -> dict[str, str]:
@@ -91,11 +146,164 @@ def hardware_env(settings: dict) -> dict[str, str]:
         openvino = openvino or "GPU"
     env["COMPUTE_DEVICE"] = compute
     env["FFMPEG_HWACCEL"] = ffmpeg
+    env["FFMPEG_HW_DEVICE"] = settings.get("ffmpeg_hw_device") or os.environ.get("FFMPEG_HW_DEVICE", "/dev/dri/renderD128")
     env["FACE_PROVIDERS"] = face or "OpenVINOExecutionProvider,CPUExecutionProvider"
     env["OPENVINO_DEVICE"] = openvino or "GPU"
     env["WHISPER_DEVICE"] = whisper
     env.setdefault("WHISPER_COMPUTE_TYPE", "int8")
+    env["FRAME_WORKERS"] = str(settings.get("frame_workers") or os.environ.get("FRAME_WORKERS", "1"))
+    env["FRAME_CHECKPOINT_EVERY"] = str(settings.get("frame_checkpoint_every") or os.environ.get("FRAME_CHECKPOINT_EVERY", "100"))
+    env["TRANSCRIBE_MAX_SECONDS"] = str(settings.get("transcribe_max_seconds") or os.environ.get("TRANSCRIBE_MAX_SECONDS", "900"))
     return env
+
+
+def update_job_progress(job_id: int, **values) -> None:
+    allowed = {
+        "stage", "current_item", "processed", "total", "success_count", "failed_count",
+        "skipped_count", "progress", "message", "stdout", "stderr",
+    }
+    fields = []
+    params = []
+    for key, value in values.items():
+        if key in allowed:
+            fields.append(f"{key}=?")
+            params.append(value)
+    fields.append("heartbeat_at=CURRENT_TIMESTAMP")
+    params.append(job_id)
+    with connect() as conn:
+        conn.execute(f"UPDATE jobs SET {', '.join(fields)} WHERE id=?", params)
+
+
+def step_stage(step: list[str]) -> str:
+    return PIPELINE_STAGES.get(step[0], step[0] if step else "job")
+
+
+def apply_dynamic_step_args(step: list[str], settings: dict) -> list[str]:
+    if not step:
+        return step
+    out = list(step)
+    if step[0] == "extract-frames":
+        if "--workers" not in out:
+            out.extend(["--workers", str(settings.get("frame_workers") or os.environ.get("FRAME_WORKERS", "1"))])
+        if "--checkpoint-every" not in out:
+            out.extend(["--checkpoint-every", str(settings.get("frame_checkpoint_every") or os.environ.get("FRAME_CHECKPOINT_EVERY", "100"))])
+        frames = str(settings.get("frames_per_video") or os.environ.get("FRAMES_PER_VIDEO", "3"))
+        if "--frames" not in out:
+            out.extend(["--frames", frames])
+    return out
+
+
+def record_progress_line(job_id: int, line: str, stage: str, stdout_tail: list[str]) -> None:
+    if not line.startswith("TGMM_PROGRESS "):
+        return
+    try:
+        payload = json.loads(line.removeprefix("TGMM_PROGRESS ").strip())
+    except json.JSONDecodeError:
+        return
+    processed = int(payload.get("processed") or 0)
+    total = int(payload.get("total") or 0)
+    progress = int(payload.get("progress") or (processed / total * 100 if total else 0))
+    update_job_progress(
+        job_id,
+        stage=str(payload.get("stage") or stage),
+        processed=processed,
+        total=total,
+        progress=max(0, min(99, progress)),
+        current_item=str(payload.get("current") or payload.get("current_item") or ""),
+        failed_count=int(payload.get("failed") or payload.get("failed_count") or 0),
+        skipped_count=int(payload.get("cached_or_done") or payload.get("skipped") or 0),
+        message=str(payload.get("message") or f"{stage}: {processed}/{total}"),
+        stdout="\n".join(stdout_tail)[-20000:],
+    )
+
+
+def run_external_step(job_id: int, step_args: list[str], env: dict, stage: str) -> tuple[int, str, str]:
+    stdout_lines: list[str] = []
+    stderr_text = ""
+    proc = subprocess.Popen(
+        step_args,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**env, "TGMM_CANCEL_FILE": str(cancel_file(job_id))},
+        start_new_session=True,
+    )
+    last_heartbeat = time.time()
+    while True:
+        if proc.stdout is not None:
+            ready, _, _ = select.select([proc.stdout], [], [], 0.2)
+            if ready:
+                line = proc.stdout.readline()
+                if line:
+                    line = line.rstrip("\n")
+                    stdout_lines.append(line)
+                    stdout_lines = stdout_lines[-400:]
+                    record_progress_line(job_id, line, stage, stdout_lines)
+        if proc.poll() is not None:
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    stdout_lines.append(line)
+                    stdout_lines = stdout_lines[-400:]
+                    record_progress_line(job_id, line, stage, stdout_lines)
+            break
+        if is_cancel_requested(job_id):
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    proc.kill()
+            return 130, "\n".join(stdout_lines), "cancelled"
+        if time.time() - last_heartbeat > 5:
+            update_job_progress(job_id, stage=stage, message=f"{stage} running", stdout="\n".join(stdout_lines)[-20000:])
+            last_heartbeat = time.time()
+        time.sleep(0.05)
+    if proc.stderr is not None:
+        stderr_text = proc.stderr.read()
+    return proc.wait(), "\n".join(stdout_lines), stderr_text
+
+
+class ProgressCapture:
+    def __init__(self, job_id: int, stage: str):
+        self.job_id = job_id
+        self.stage = stage
+        self.lines: list[str] = []
+        self._buffer = ""
+
+    def write(self, text: str) -> int:
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line:
+                self.lines.append(line)
+                self.lines = self.lines[-400:]
+                record_progress_line(self.job_id, line, self.stage, self.lines)
+        return len(text)
+
+    def flush(self) -> None:
+        if self._buffer:
+            line = self._buffer
+            self._buffer = ""
+            self.lines.append(line)
+            self.lines = self.lines[-400:]
+            record_progress_line(self.job_id, line, self.stage, self.lines)
+
+    def text(self) -> str:
+        self.flush()
+        return "\n".join(self.lines)
+
+
+def run_internal_with_progress(job_id: int, stage: str, fn):
+    capture = ProgressCapture(job_id, stage)
+    with redirect_stdout(capture):
+        result = fn()
+    return result, capture.text()
 
 
 def run_job(job_id: int, command: str) -> None:
@@ -106,8 +314,13 @@ def run_job(job_id: int, command: str) -> None:
     steps = ALLOWED_COMMANDS[command]
     if steps and isinstance(steps[0], str):
         steps = [steps]
-    base_args = ["python", str(core_script()), "--root", media_root, "--output-root", output_root]
+    base_args = [sys.executable, str(core_script()), "--root", media_root, "--output-root", output_root]
     env = hardware_env(settings)
+    cancel = cancel_file(job_id)
+    try:
+        cancel.unlink()
+    except OSError:
+        pass
     os.environ.update({key: value for key, value in env.items() if key in {"COMPUTE_DEVICE", "FFMPEG_HWACCEL", "FACE_PROVIDERS", "OPENVINO_DEVICE", "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE"}})
     if source_dirs:
         base_args.extend(["--source-dirs", source_dirs])
@@ -126,7 +339,13 @@ def run_job(job_id: int, command: str) -> None:
         stdout_parts = []
         stderr_parts = []
         returncode = 0
-        for step in steps:
+        total_steps = len(steps)
+        for index, step in enumerate(steps, start=1):
+            if is_cancel_requested(job_id):
+                returncode = 130
+                break
+            stage = step_stage(step)
+            update_job_progress(job_id, stage=stage, progress=int((index - 1) / max(1, total_steps) * 100), message=f"{stage} ({index}/{total_steps})")
             if step == ["__metadata_index__"]:
                 result = rebuild_metadata_index(Path(output_root))
                 stdout_parts.append(f"$ index-metadata\n{result}")
@@ -140,28 +359,38 @@ def run_job(job_id: int, command: str) -> None:
                 stdout_parts.append(f"$ index-similarity\n{result}")
                 returncode = 0
             elif step == ["__transcribe_sample__"]:
-                result = transcribe_videos(Path(output_root), limit=5)
-                stdout_parts.append(f"$ transcribe-sample\n{result}")
+                update_job_progress(job_id, stage="transcribe", message="transcribe sample running")
+                result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=5))
+                stdout_parts.append(f"$ transcribe-sample\n{captured}\n{result}")
                 returncode = 0 if result.get("ok") else 1
             elif step == ["__transcribe__"]:
-                result = transcribe_videos(Path(output_root), limit=None)
-                stdout_parts.append(f"$ transcribe\n{result}")
+                update_job_progress(job_id, stage="transcribe", message="full transcribe running")
+                result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=None))
+                stdout_parts.append(f"$ transcribe\n{captured}\n{result}")
                 returncode = 0 if result.get("ok") else 1
             else:
-                step_args = [*base_args, *step]
-                proc = subprocess.run(step_args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None, env=env)
-                stdout_parts.append(f"$ {' '.join(step_args)}\n{proc.stdout}")
-                if proc.stderr:
-                    stderr_parts.append(f"$ {' '.join(step_args)}\n{proc.stderr}")
-                returncode = proc.returncode
-                if proc.returncode != 0:
+                dynamic_step = apply_dynamic_step_args(step, settings)
+                step_args = [*base_args, *dynamic_step]
+                code, out, err = run_external_step(job_id, step_args, env, stage)
+                stdout_parts.append(f"$ {' '.join(step_args)}\n{out}")
+                if err:
+                    stderr_parts.append(f"$ {' '.join(step_args)}\n{err}")
+                returncode = code
+                if code != 0:
                     break
-        status = "done" if returncode == 0 else "failed"
+            update_job_progress(job_id, progress=int(index / max(1, total_steps) * 100), message=f"{stage} done")
+        status = "done" if returncode == 0 else ("cancelled" if returncode == 130 else "failed")
         with connect() as conn:
-            conn.execute(
-                "UPDATE jobs SET status=?, progress=100, finished_at=CURRENT_TIMESTAMP, stdout=?, stderr=?, message=? WHERE id=?",
-                (status, "\n".join(stdout_parts)[-20000:], "\n".join(stderr_parts)[-20000:], f"exit {returncode}", job_id),
-            )
+            if status == "done":
+                conn.execute(
+                    "UPDATE jobs SET status=?, progress=100, finished_at=CURRENT_TIMESTAMP, stdout=?, stderr=?, message=?, heartbeat_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (status, "\n".join(stdout_parts)[-20000:], "\n".join(stderr_parts)[-20000:], f"exit {returncode}", job_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE jobs SET status=?, finished_at=CURRENT_TIMESTAMP, stdout=?, stderr=?, message=?, heartbeat_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (status, "\n".join(stdout_parts)[-20000:], "\n".join(stderr_parts)[-20000:], f"exit {returncode}", job_id),
+                )
     except Exception as exc:
         with connect() as conn:
             conn.execute(

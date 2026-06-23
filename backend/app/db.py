@@ -164,6 +164,21 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_media_transcripts_text ON media_transcripts(text);
             """
         )
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        migrations = {
+            "stage": "ALTER TABLE jobs ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
+            "current_item": "ALTER TABLE jobs ADD COLUMN current_item TEXT NOT NULL DEFAULT ''",
+            "processed": "ALTER TABLE jobs ADD COLUMN processed INTEGER NOT NULL DEFAULT 0",
+            "total": "ALTER TABLE jobs ADD COLUMN total INTEGER NOT NULL DEFAULT 0",
+            "success_count": "ALTER TABLE jobs ADD COLUMN success_count INTEGER NOT NULL DEFAULT 0",
+            "failed_count": "ALTER TABLE jobs ADD COLUMN failed_count INTEGER NOT NULL DEFAULT 0",
+            "skipped_count": "ALTER TABLE jobs ADD COLUMN skipped_count INTEGER NOT NULL DEFAULT 0",
+            "cancel_requested": "ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0",
+            "heartbeat_at": "ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT",
+        }
+        for column, statement in migrations.items():
+            if column not in existing:
+                conn.execute(statement)
 
 
 def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict]:

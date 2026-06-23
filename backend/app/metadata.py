@@ -576,6 +576,8 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
         rows = conn.execute(query, args).fetchall()
     if not rows:
         return {"ok": True, "processed": 0, "segments": 0}
+    total = len(rows)
+    print("TGMM_PROGRESS " + json.dumps({"stage": "transcribe", "processed": 0, "total": total, "progress": 0, "message": "loading model"}, ensure_ascii=False), flush=True)
     device = os.environ.get("WHISPER_DEVICE", "cpu")
     compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
     model_name = os.environ.get("WHISPER_MODEL", model_size)
@@ -586,7 +588,10 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
     with TemporaryDirectory(prefix="tgmm_audio_") as tmpdir:
         tmp_root = Path(tmpdir)
         with connect() as conn:
-            for row in rows:
+            for index, row in enumerate(rows, start=1):
+                cancel_file = os.environ.get("TGMM_CANCEL_FILE", "")
+                if cancel_file and Path(cancel_file).exists():
+                    return {"ok": False, "processed": processed, "segments": segment_count, "cancelled": True, "errors": errors[:20]}
                 path = Path(row["path"])
                 if not path.exists():
                     continue
@@ -631,6 +636,22 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                     segment_count += len(segments)
                 except Exception as exc:
                     errors.append({"id": row["id"], "error": repr(exc)})
+                print(
+                    "TGMM_PROGRESS "
+                    + json.dumps(
+                        {
+                            "stage": "transcribe",
+                            "processed": index,
+                            "total": total,
+                            "progress": int(index / total * 100) if total else 0,
+                            "failed": len(errors),
+                            "current": str(path),
+                            "message": f"transcribed {processed}/{total}",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
     return {"ok": True, "processed": processed, "segments": segment_count, "errors": errors[:20]}
 
 

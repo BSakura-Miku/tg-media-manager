@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .db import connect, get_settings, init_db, rows_to_dicts, save_settings
-from .jobs import ALLOWED_COMMANDS, create_job
+from .jobs import ALLOWED_COMMANDS, create_job, request_job_cancel
 from .media_stats import summary
 from .metadata import (
     media_by_relative_paths,
@@ -86,6 +86,10 @@ class SettingsRequest(BaseModel):
     openvino_device: str = "GPU"
     face_providers: str = "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device: str = "cpu"
+    frame_workers: int = 1
+    frames_per_video: int = 3
+    frame_checkpoint_every: int = 100
+    transcribe_max_seconds: int = 900
     monitor_enabled: bool = False
     monitor_dirs: str = ""
     monitor_interval_minutes: int = 10
@@ -233,6 +237,15 @@ def api_job_log(job_id: int) -> dict:
         "stdout": data["stdout"],
         "stderr": data["stderr"],
     }
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def api_cancel_job(job_id: int) -> dict:
+    try:
+        request_job_cancel(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True, "id": job_id}
 
 
 @app.post("/api/jobs")
@@ -511,6 +524,12 @@ def default_settings() -> dict:
         monitor_interval_value = max(1, min(1440, int(monitor_interval)))
     except ValueError:
         monitor_interval_value = 10
+    def setting_int(key: str, env_key: str, default: int, low: int, high: int) -> int:
+        try:
+            value = int(settings.get(key) or os.environ.get(env_key, str(default)))
+        except (TypeError, ValueError):
+            value = default
+        return max(low, min(high, value))
     return {
         "media_root": media,
         "output_root": output,
@@ -521,6 +540,10 @@ def default_settings() -> dict:
         "openvino_device": settings.get("openvino_device") or os.environ.get("OPENVINO_DEVICE", "GPU"),
         "face_providers": settings.get("face_providers") or os.environ.get("FACE_PROVIDERS", "OpenVINOExecutionProvider,CPUExecutionProvider"),
         "whisper_device": settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", "cpu"),
+        "frame_workers": setting_int("frame_workers", "FRAME_WORKERS", 1, 1, 16),
+        "frames_per_video": setting_int("frames_per_video", "FRAMES_PER_VIDEO", 3, 1, 12),
+        "frame_checkpoint_every": setting_int("frame_checkpoint_every", "FRAME_CHECKPOINT_EVERY", 100, 10, 1000),
+        "transcribe_max_seconds": setting_int("transcribe_max_seconds", "TRANSCRIBE_MAX_SECONDS", 900, 30, 86400),
         "monitor_enabled": (settings.get("monitor_enabled") or os.environ.get("MONITOR_ENABLED", "false")).lower() in {"1", "true", "yes", "on"},
         "monitor_dirs": settings.get("monitor_dirs") or os.environ.get("MONITOR_DIRS", ""),
         "monitor_interval_minutes": monitor_interval_value,
@@ -571,6 +594,16 @@ def api_save_settings(req: SettingsRequest) -> dict:
     openvino_device = req.openvino_device if req.openvino_device in {"AUTO", "GPU", "CPU"} else "GPU"
     face_providers = req.face_providers if req.face_providers in {"OpenVINOExecutionProvider,CPUExecutionProvider", "CPUExecutionProvider"} else "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device = req.whisper_device if req.whisper_device in {"cpu", "cuda"} else "cpu"
+    def clamp_int(value, default: int, low: int, high: int) -> str:
+        try:
+            parsed = int(value or default)
+        except (TypeError, ValueError):
+            parsed = default
+        return str(max(low, min(high, parsed)))
+    frame_workers = clamp_int(req.frame_workers, 1, 1, 16)
+    frames_per_video = clamp_int(req.frames_per_video, 3, 1, 12)
+    frame_checkpoint_every = clamp_int(req.frame_checkpoint_every, 100, 10, 1000)
+    transcribe_max_seconds = clamp_int(req.transcribe_max_seconds, 900, 30, 86400)
     source_dirs = ",".join(part.strip().strip("/") for part in req.source_dirs.split(",") if part.strip())
     monitor_dirs = ",".join(part.strip().strip("/") for part in req.monitor_dirs.split(",") if part.strip())
     try:
@@ -588,6 +621,10 @@ def api_save_settings(req: SettingsRequest) -> dict:
         "openvino_device": openvino_device,
         "face_providers": face_providers,
         "whisper_device": whisper_device,
+        "frame_workers": frame_workers,
+        "frames_per_video": frames_per_video,
+        "frame_checkpoint_every": frame_checkpoint_every,
+        "transcribe_max_seconds": transcribe_max_seconds,
         "monitor_enabled": "true" if req.monitor_enabled else "false",
         "monitor_dirs": monitor_dirs,
         "monitor_interval_minutes": interval,
