@@ -1357,6 +1357,7 @@ function App() {
               mediaResults={mediaResults}
               tagGraph={tagGraph}
               loadMedia={loadMedia}
+              openJob={openJob}
               setActive={setActive}
               t={t}
             />
@@ -1389,7 +1390,7 @@ function BucketPanel({ title, rows }) {
   return <div className="panel"><div className="panelHead"><h2>{title}</h2><span>{rows.length}</span></div><div className="list">{rows.map(item => <div className="row" key={item.name}><span>{item.name}</span><strong>{item.files}</strong></div>)}</div></div>;
 }
 
-function DashboardPanel({ summary, jobs, mediaResults, tagGraph, loadMedia, setActive, t }) {
+function DashboardPanel({ summary, jobs, mediaResults, tagGraph, loadMedia, openJob, setActive, t }) {
   const top = summary?.top || {};
   const keywords = summary?.keywords || [];
   const actors = summary?.actors_sample || [];
@@ -1415,7 +1416,7 @@ function DashboardPanel({ summary, jobs, mediaResults, tagGraph, loadMedia, setA
         <RecentMediaPanel items={items} total={mediaResults.total || items.length} setActive={setActive} t={t} />
       </section>
       <section className="dashboardBottom">
-        <DashboardJobs jobs={jobs} setActive={setActive} t={t} />
+        <DashboardJobs jobs={jobs} openJob={openJob} setActive={setActive} t={t} />
         <StoragePanel summary={summary} mediaTotal={mediaTotal} t={t} />
       </section>
     </>
@@ -1495,7 +1496,7 @@ function RecentMediaCard({ item, open }) {
   );
 }
 
-function DashboardJobs({ jobs, setActive, t }) {
+function DashboardJobs({ jobs, openJob, setActive, t }) {
   const rows = jobs.slice(0, 4);
   return (
     <section className="panel taskPanel">
@@ -1503,7 +1504,7 @@ function DashboardJobs({ jobs, setActive, t }) {
       {!rows.length ? <Empty label={t.noRows} /> : <div className="taskRows">{rows.map(job => {
         const progress = job.status === 'done' ? 100 : job.status === 'running' ? 66 : job.status === 'queued' ? 28 : 0;
         return (
-          <button className="taskRow" key={job.id} onClick={() => setActive('jobs')}>
+          <button className="taskRow" key={job.id} onClick={() => { openJob(job.id); setActive('jobs'); }}>
             <span>{job.command}</span>
             <strong>{progress}%</strong>
             <i><b style={{ width: `${progress}%` }} /></i>
