@@ -315,33 +315,33 @@ def _run_cache_command(model_id: str, spec: dict) -> dict:
     if command == "openclip":
         code = (
             "import open_clip\n"
-            f"print('downloading {spec['model']} {spec['pretrained']}')\n"
+            f"print('downloading {spec['model']} {spec['pretrained']}', flush=True)\n"
             f"open_clip.create_model_and_transforms({spec['model']!r}, pretrained={spec['pretrained']!r}, device='cpu')\n"
-            "print('ok')\n"
+            "print('ok', flush=True)\n"
         )
     elif command == "insightface":
         code = (
             "from insightface.app import FaceAnalysis\n"
             "import os\n"
             "root=os.environ.get('INSIGHTFACE_HOME','/models/insightface')\n"
-            "print('downloading insightface buffalo_l')\n"
+            "print('downloading insightface buffalo_l', flush=True)\n"
             "app=FaceAnalysis(name='buffalo_l', root=root, providers=['CPUExecutionProvider'])\n"
             "app.prepare(ctx_id=-1, det_size=(640,640))\n"
-            "print('ok')\n"
+            "print('ok', flush=True)\n"
         )
     elif command == "faster-whisper":
         code = (
             "from faster_whisper import WhisperModel\n"
             "import os\n"
             "root=os.path.join(os.environ.get('MODEL_ROOT','/models'),'whisper')\n"
-            f"print('downloading faster-whisper {spec['model']}')\n"
+            f"print('downloading faster-whisper {spec['model']}', flush=True)\n"
             f"WhisperModel({spec['model']!r}, device='cpu', compute_type='int8', download_root=root)\n"
-            "print('ok')\n"
+            "print('ok', flush=True)\n"
         )
     else:
         raise RuntimeError(f"Unsupported model cache command: {command}")
     _progress("model-download", 0, 1, model_id)
-    proc = subprocess.run([sys.executable, "-c", code], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=3600)
+    proc = subprocess.run([sys.executable, "-u", "-c", code], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=3600)
     print(proc.stdout, end="", flush=True)
     if proc.returncode != 0:
         print(proc.stderr, end="", flush=True)

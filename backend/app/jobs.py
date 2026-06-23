@@ -345,11 +345,39 @@ class ProgressCapture:
         self.flush()
         return "\n".join(self.lines)
 
+    def snapshot(self) -> str:
+        lines = list(self.lines)
+        if self._buffer:
+            lines.append(self._buffer)
+        return "\n".join(lines)
 
-def run_internal_with_progress(job_id: int, stage: str, fn):
+
+def run_internal_with_progress(job_id: int, stage: str, fn, heartbeat_message: str | None = None):
     capture = ProgressCapture(job_id, stage)
-    with redirect_stdout(capture):
-        result = fn()
+    state: dict[str, object] = {}
+
+    def target() -> None:
+        try:
+            with redirect_stdout(capture):
+                state["result"] = fn()
+        except BaseException as exc:
+            state["error"] = exc
+
+    thread = threading.Thread(target=target, daemon=True)
+    started = time.time()
+    thread.start()
+    while thread.is_alive():
+        elapsed = int(time.time() - started)
+        update_job_progress(
+            job_id,
+            stage=stage,
+            message=heartbeat_message or f"{stage} running ({elapsed}s)",
+            stdout=capture.snapshot()[-20000:],
+        )
+        thread.join(timeout=5)
+    if state.get("error"):
+        raise state["error"]  # type: ignore[misc]
+    result = state.get("result")
     return result, capture.text()
 
 
@@ -421,19 +449,19 @@ def run_job(job_id: int, command: str) -> None:
                 returncode = 0
             elif step == ["__transcribe_sample__"]:
                 update_job_progress(job_id, stage="transcribe", message="transcribe sample running")
-                result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=5))
+                result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=5), "transcribe sample still running")
                 stdout_parts.append(f"$ transcribe-sample\n{captured}\n{result}")
                 returncode = 0 if result.get("ok") else 1
             elif step == ["__transcribe__"]:
                 update_job_progress(job_id, stage="transcribe", message="full transcribe running")
-                result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=None))
+                result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=None), "full transcribe still running")
                 stdout_parts.append(f"$ transcribe\n{captured}\n{result}")
                 returncode = 0 if result.get("ok") else 1
             elif step and step[0] == "__model_pull__":
                 model_id = step[1]
                 update_job_progress(job_id, stage="model-download", message=f"pulling {model_id}")
                 os.environ["TGMM_CANCEL_FILE"] = str(cancel_file(job_id))
-                result, captured = run_internal_with_progress(job_id, "model-download", lambda: pull_model(model_id))
+                result, captured = run_internal_with_progress(job_id, "model-download", lambda: pull_model(model_id), f"pulling {model_id}; third-party download may report only when finished")
                 stdout_parts.append(f"$ model-pull {model_id}\n{captured}\n{result}")
                 returncode = 0 if result.get("ok") else 1
             else:
