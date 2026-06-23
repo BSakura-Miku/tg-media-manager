@@ -508,7 +508,7 @@ select, input {
   paint-order: stroke;
   stroke: var(--panel-2);
   stroke-width: .75px;
-  cursor: pointer;
+  pointer-events: none;
   user-select: none;
 }
 .tagGraphCanvas g.isFocused text {
