@@ -703,7 +703,7 @@ function estimatedMediaTotal(summary, mediaResults) {
 function initialAspect(item) {
   const width = Number(item?.width || 0);
   const height = Number(item?.height || 0);
-  if (width > 0 && height > 0) return Math.max(0.55, Math.min(1.9, width / height));
+  if (width > 0 && height > 0) return Math.max(0.38, Math.min(3.2, width / height));
   return item?.media_type === 'video' ? 16 / 9 : 4 / 5;
 }
 
@@ -719,7 +719,7 @@ function MediaThumbImage({ item, className = 'mediaThumb', label = '' }) {
         onLoad={event => {
           const img = event.currentTarget;
           if (img.naturalWidth && img.naturalHeight) {
-            setAspect(Math.max(0.48, Math.min(2.1, img.naturalWidth / img.naturalHeight)));
+            setAspect(Math.max(0.38, Math.min(3.2, img.naturalWidth / img.naturalHeight)));
           }
         }}
         onError={event => { event.currentTarget.style.display = 'none'; }}

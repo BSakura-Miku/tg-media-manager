@@ -298,7 +298,7 @@ def ffmpeg_hw_prefix() -> list[str]:
 
 
 THUMB_SIZE = (900, 900)
-MEDIA_THUMB_CACHE = "media_thumbs_v6"
+MEDIA_THUMB_CACHE = "media_thumbs_v7"
 
 
 def trim_near_black_border(image):
@@ -392,13 +392,14 @@ def thumbnail_content_score(src: Path) -> float:
         return 0.0
 
 
-def write_smart_thumbnail(src: Path, dest: Path) -> bool:
+def write_smart_thumbnail(src: Path, dest: Path, trim_borders: bool = False) -> bool:
     if Image is None or ImageOps is None:
         return False
     try:
         with Image.open(src) as opened:
             image = ImageOps.exif_transpose(opened).convert("RGB")
-            image = trim_uniform_border(image)
+            if trim_borders:
+                image = trim_uniform_border(image)
             resampling = getattr(Image, "Resampling", Image).LANCZOS
             image.thumbnail(THUMB_SIZE, resampling)
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -482,7 +483,7 @@ def run_ffmpeg_thumbnail(src: Path, dest: Path, width: int = 800, timeout: int =
             break
     candidates.sort(key=lambda item: item[0], reverse=True)
     for _, tmp in candidates:
-        if write_smart_thumbnail(tmp, dest):
+        if write_smart_thumbnail(tmp, dest, trim_borders=False):
             for _, cleanup in candidates:
                 try:
                     cleanup.unlink()
