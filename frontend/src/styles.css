@@ -1740,6 +1740,18 @@ i.blue { background: var(--accent); }
   background: rgba(255, 255, 255, .96);
 }
 
+.viewerInfo .row {
+  align-items: flex-start;
+  padding: 8px;
+}
+
+.viewerInfo .row strong {
+  max-width: min(100%, 420px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 @media (max-width: 1220px) {
   main { grid-template-columns: 240px minmax(0, 1fr); padding: 16px; gap: 16px; }
   header { grid-template-columns: 1fr; }
