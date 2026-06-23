@@ -832,6 +832,8 @@ def media_detail(media_id: int) -> dict | None:
         transcript = conn.execute("SELECT language, text, segments_json, model, source, updated_at FROM media_transcripts WHERE media_id=?", (media_id,)).fetchone()
     data = dict(row)
     data.update(original_source_for_media(data))
+    if data.get("display_original_name"):
+        data["original_name"] = data["display_original_name"]
     data["tags"] = [dict(item) for item in tags]
     data["timeline"] = [dict(item) for item in timeline]
     data["operations"] = [dict(item) for item in ops]
