@@ -27,8 +27,11 @@ from .metadata import (
     rebuild_metadata_index,
     rebuild_similarity_index,
     risk_queue,
+    set_tag_feedback,
     similarity_groups,
     tag_graph,
+    train_vision_calibrators,
+    vision_calibrator_status,
 )
 
 try:
@@ -76,6 +79,13 @@ class ActorExcludeRequest(BaseModel):
     actor_name: str
 
 
+class TagFeedbackRequest(BaseModel):
+    tag: str
+    category: str = ""
+    verdict: str
+    note: str = ""
+
+
 class SettingsRequest(BaseModel):
     media_root: str
     output_root: str = ""
@@ -84,6 +94,8 @@ class SettingsRequest(BaseModel):
     compute_device: str = "auto"
     ffmpeg_hwaccel: str = "auto"
     openvino_device: str = "GPU"
+    openclip_model: str = "ViT-B-32"
+    openclip_pretrained: str = "laion2b_s34b_b79k"
     face_providers: str = "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device: str = "cpu"
     asr_engine: str = "auto"
@@ -542,6 +554,8 @@ def default_settings() -> dict:
         "compute_device": settings.get("compute_device") or os.environ.get("COMPUTE_DEVICE", "auto"),
         "ffmpeg_hwaccel": settings.get("ffmpeg_hwaccel") or os.environ.get("FFMPEG_HWACCEL", "auto"),
         "openvino_device": settings.get("openvino_device") or os.environ.get("OPENVINO_DEVICE", "GPU"),
+        "openclip_model": settings.get("openclip_model") or os.environ.get("OPENCLIP_MODEL", "ViT-B-32"),
+        "openclip_pretrained": settings.get("openclip_pretrained") or os.environ.get("OPENCLIP_PRETRAINED", "laion2b_s34b_b79k"),
         "face_providers": settings.get("face_providers") or os.environ.get("FACE_PROVIDERS", "OpenVINOExecutionProvider,CPUExecutionProvider"),
         "whisper_device": settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", "cpu"),
         "asr_engine": settings.get("asr_engine") or os.environ.get("ASR_ENGINE", "auto"),
@@ -600,6 +614,8 @@ def api_save_settings(req: SettingsRequest) -> dict:
     compute_device = req.compute_device if req.compute_device in {"auto", "gpu", "cpu"} else "auto"
     ffmpeg_hwaccel = req.ffmpeg_hwaccel if req.ffmpeg_hwaccel in {"auto", "none", "vaapi", "qsv"} else "auto"
     openvino_device = req.openvino_device if req.openvino_device in {"AUTO", "GPU", "CPU"} else "GPU"
+    openclip_model = (req.openclip_model or "ViT-B-32").strip()
+    openclip_pretrained = (req.openclip_pretrained or "laion2b_s34b_b79k").strip()
     face_providers = req.face_providers if req.face_providers in {"OpenVINOExecutionProvider,CPUExecutionProvider", "CPUExecutionProvider"} else "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device = req.whisper_device if req.whisper_device in {"cpu", "cuda"} else "cpu"
     asr_engine = req.asr_engine if req.asr_engine in {"auto", "sensevoice-gguf", "sensevoice", "faster-whisper", "whisper"} else "auto"
@@ -637,6 +653,8 @@ def api_save_settings(req: SettingsRequest) -> dict:
         "compute_device": compute_device,
         "ffmpeg_hwaccel": ffmpeg_hwaccel,
         "openvino_device": openvino_device,
+        "openclip_model": openclip_model,
+        "openclip_pretrained": openclip_pretrained,
         "face_providers": face_providers,
         "whisper_device": whisper_device,
         "asr_engine": asr_engine,
@@ -834,6 +852,16 @@ def api_tag_graph(
     return tag_graph(limit_nodes=limit_nodes, limit_edges=limit_edges, min_edge=min_edge)
 
 
+@app.get("/api/vision/calibrator/status")
+def api_vision_calibrator_status() -> dict:
+    return vision_calibrator_status(output_root())
+
+
+@app.post("/api/vision/calibrator/train")
+def api_train_vision_calibrator() -> dict:
+    return train_vision_calibrators(output_root())
+
+
 @app.get("/api/risk")
 def api_risk(limit: int = Query(100, ge=1, le=300)) -> dict:
     return risk_queue(limit=limit)
@@ -872,6 +900,17 @@ def checked_media_detail(media_id: int) -> dict:
 @app.get("/api/media/{media_id}")
 def api_media_detail(media_id: int) -> dict:
     return checked_media_detail(media_id)
+
+
+@app.post("/api/media/{media_id}/tag-feedback")
+def api_media_tag_feedback(media_id: int, req: TagFeedbackRequest) -> dict:
+    verdict = 1 if req.verdict in {"approve", "positive", "yes", "1", "true"} else -1
+    try:
+        return set_tag_feedback(media_id, req.tag, req.category, verdict, req.note)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Media not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/media/{media_id}/file")

@@ -147,6 +147,9 @@ const i18n = {
     computeDevice: 'Compute mode',
     ffmpegHwaccel: 'Video decode',
     openvinoDevice: 'OpenVINO device',
+    openclipModel: 'Vision model',
+    openclipPretrained: 'Vision weights',
+    openclipHint: 'ViT-B-32 is fast. ViT-L/H or SigLIP variants are stronger but slower and may download larger weights.',
     faceProviders: 'Face inference provider',
     whisperDevice: 'Speech device',
     asrEngine: 'Speech engine',
@@ -248,6 +251,10 @@ const i18n = {
     indexedName: 'Library filename',
     filePath: 'File path',
     tags: 'Tags',
+    tagCorrect: 'Correct',
+    tagWrong: 'Wrong',
+    tagFeedbackSaved: 'Feedback saved',
+    trainVisionCalibrator: 'Train calibrator',
     timeline: 'Timeline',
     confidence: 'Confidence',
     noIndexHint: 'No indexed media yet. Run Rebuild index after scan/apply.',
@@ -282,6 +289,7 @@ const i18n = {
       'face-setup': 'Face Setup',
       'vision-scan-sample': 'Vision Sample',
       'index-vision': 'Sync Vision',
+      'train-vision-calibrator': 'Train Calibrator',
       'face-scan-sample': 'Face Sample',
       'face-cluster': 'Cluster Faces',
       'face-cluster-balanced': 'Cluster Balanced',
@@ -319,6 +327,7 @@ const i18n = {
       'face-setup': 'Show face/vision dependency status.',
       'vision-scan-sample': 'Run OpenCLIP labels on a small sample.',
       'index-vision': 'Import vision_labels.csv and frame_index.csv into tags and timeline segments.',
+      'train-vision-calibrator': 'Train lightweight tag calibrators from manual correct/wrong feedback.',
       'face-scan-sample': 'Detect faces on a small sample only.',
       'face-cluster': 'Cluster existing face embeddings with normal threshold.',
       'face-cluster-balanced': 'Recommended face clustering threshold.',
@@ -446,6 +455,9 @@ const i18n = {
     computeDevice: '计算模式',
     ffmpegHwaccel: '视频解码',
     openvinoDevice: 'OpenVINO 设备',
+    openclipModel: '视觉模型',
+    openclipPretrained: '视觉权重',
+    openclipHint: 'ViT-B-32 最快；ViT-L/H 或 SigLIP 更强但更慢，也可能需要下载更大的权重。',
     faceProviders: '人脸推理后端',
     whisperDevice: '语音识别设备',
     asrEngine: '语音识别引擎',
@@ -547,6 +559,10 @@ const i18n = {
     indexedName: '库内文件名',
     filePath: '文件路径',
     tags: '标签',
+    tagCorrect: '正确',
+    tagWrong: '错误',
+    tagFeedbackSaved: '反馈已保存',
+    trainVisionCalibrator: '训练校准器',
     timeline: '时间轴',
     confidence: '置信度',
     noIndexHint: '还没有索引媒体。扫描/整理后先点重建索引。',
@@ -581,6 +597,7 @@ const i18n = {
       'face-setup': '检查人脸环境',
       'vision-scan-sample': '视觉样本',
       'index-vision': '同步视觉索引',
+      'train-vision-calibrator': '训练校准器',
       'face-scan-sample': '人脸样本',
       'face-cluster': '人脸聚类',
       'face-cluster-balanced': '均衡聚类',
@@ -618,6 +635,7 @@ const i18n = {
       'face-setup': '检查人脸/视觉依赖是否可用。',
       'vision-scan-sample': '只对小样本跑场景识别。',
       'index-vision': '把 vision_labels.csv 和 frame_index.csv 导入标签和时间轴。',
+      'train-vision-calibrator': '根据你手动确认/排除的标签训练轻量校准器。',
       'face-scan-sample': '只对小样本检测人脸。',
       'face-cluster': '用普通阈值聚类已有的人脸特征。',
       'face-cluster-balanced': '推荐阈值，比较稳，不容易乱合。',
@@ -658,6 +676,7 @@ const commands = [
   ['face-setup', 'Face Setup', ScanFace, 'Show local face dependency status'],
   ['vision-scan-sample', 'Vision Sample', Camera, 'Run OpenCLIP sample when CLIP image is used'],
   ['index-vision', 'Sync Vision', Camera, 'Import vision outputs into media tags and timelines'],
+  ['train-vision-calibrator', 'Train Calibrator', Tags, 'Train lightweight tag calibrators from manual feedback'],
   ['face-scan-sample', 'Face Sample', ScanFace, 'Detect faces for a small sample'],
   ['face-cluster', 'Cluster Faces', Users, 'Group similar local face embeddings'],
   ['face-cluster-balanced', 'Cluster Balanced', Users, 'Balanced same-face clustering'],
@@ -1386,7 +1405,7 @@ function CommandGuide({ t }) {
   const groups = [
     [t.commonCommands, ['workflow-full-library', 'workflow-new-downloads', 'workflow-review-cleanup', 'scan', 'apply']],
     [t.faceCommands, ['workflow-face-balanced', 'extract-frames-retry-failed', 'face-scan-sample', 'face-cluster-balanced', 'face-cluster-report', 'apply-face-groups-dry-run', 'apply-face-groups']],
-    [t.visionCommands, ['workflow-vision-plan', 'vision-scan-sample', 'index-vision', 'apply-vision-labels-dry-run', 'apply-vision-labels']],
+    [t.visionCommands, ['workflow-vision-plan', 'vision-scan-sample', 'index-vision', 'train-vision-calibrator', 'apply-vision-labels-dry-run', 'apply-vision-labels']],
     [t.transcriptCommands, ['workflow-transcribe-sample', 'transcribe-sample', 'transcribe']],
     [t.maintenanceCommands, ['refresh-state', 'dedupe-organized-dry-run', 'dedupe-organized', 'clean-empty-dirs']],
   ];
@@ -1406,7 +1425,7 @@ function CommandGuide({ t }) {
 }
 
 function VisionPanel({ vision, t }) {
-  return <div className="panel"><div className="panelHead"><h2>{t.visionPipeline}</h2><span>{t.localOnly}</span></div><div className="list">{['frame_index_rows', 'face_index_rows', 'face_group_rows', 'vision_label_rows', 'face_move_plan_rows'].map(key => <div className="row" key={key}><span>{key.replace('_rows', '.csv')}</span><strong>{vision[key] || 0}</strong></div>)}</div></div>;
+  return <div className="panel"><div className="panelHead"><h2>{t.visionPipeline}</h2><span>{t.localOnly}</span></div><div className="list">{['frame_index_rows', 'face_index_rows', 'face_group_rows', 'vision_label_rows', 'vision_embedding_rows', 'face_move_plan_rows'].map(key => <div className="row" key={key}><span>{key.replace('_rows', '.csv')}</span><strong>{vision[key] || 0}</strong></div>)}</div></div>;
 }
 
 function SourcePanel({ leftovers, title }) {
@@ -1761,6 +1780,16 @@ function MediaViewer({ item, detail, close, t }) {
   const data = detail || item;
   const tags = Array.isArray(data.tags) ? data.tags : String(data.tags || '').split(',').filter(Boolean).map(tag => ({ tag }));
   const timeline = Array.isArray(data.timeline) ? data.timeline : [];
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  async function sendTagFeedback(tag, verdict) {
+    if (!data.id || !tag?.tag) return;
+    await api(`/api/media/${data.id}/tag-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag: tag.tag, category: tag.category || '', verdict }),
+    });
+    setFeedbackMessage(`${tag.tag}: ${t.tagFeedbackSaved}`);
+  }
   return (
     <div className="viewerBackdrop" role="dialog" aria-modal="true">
       <div className="viewerPanel">
@@ -1780,7 +1809,16 @@ function MediaViewer({ item, detail, close, t }) {
               <div className="row"><span>{t.media}</span><strong>{data.media_type}</strong></div>
             </div>
             <h3>{t.tags}</h3>
-            <div className="tagCloud">{tags.map(tag => <span key={`${tag.tag}-${tag.source || ''}`}>{tag.tag}{tag.confidence ? ` ${Math.round(Number(tag.confidence) * 100)}%` : ''}</span>)}</div>
+            <div className="tagCloud tagFeedbackCloud">
+              {tags.map(tag => (
+                <span key={`${tag.tag}-${tag.source || ''}`} className={tag.state === 'rejected' ? 'rejectedTag' : ''}>
+                  <b>{tag.tag}</b>{tag.confidence ? ` ${Math.round(Number(tag.confidence) * 100)}%` : ''}
+                  <button title={t.tagCorrect} onClick={() => sendTagFeedback(tag, 'approve')}><CheckCircle2 size={13} /></button>
+                  <button title={t.tagWrong} onClick={() => sendTagFeedback(tag, 'reject')}><XCircle size={13} /></button>
+                </span>
+              ))}
+            </div>
+            {feedbackMessage && <div className="hintBox smallHint"><span>{feedbackMessage}</span></div>}
             {timeline.length > 0 && (
               <>
                 <h3>{t.timeline}</h3>
@@ -2019,6 +2057,8 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
     compute_device: 'auto',
     ffmpeg_hwaccel: 'auto',
     openvino_device: 'GPU',
+    openclip_model: 'ViT-B-32',
+    openclip_pretrained: 'laion2b_s34b_b79k',
     face_providers: 'OpenVINOExecutionProvider,CPUExecutionProvider',
     whisper_device: 'cpu',
     asr_engine: 'auto',
@@ -2052,6 +2092,8 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
           <label>Frames per video<input type="number" min="1" max="12" value={cfg.frames_per_video || 3} onChange={event => update('frames_per_video', event.target.value)} /></label>
           <label>Checkpoint every<input type="number" min="10" max="1000" value={cfg.frame_checkpoint_every || 100} onChange={event => update('frame_checkpoint_every', event.target.value)} /><small>抽帧索引和任务进度的落盘频率。</small></label>
           <label>{t.openvinoDevice}<select value={cfg.openvino_device || 'GPU'} onChange={event => update('openvino_device', event.target.value)}><option value="GPU">{t.gpu}</option><option value="CPU">{t.cpu}</option><option value="AUTO">{t.openvinoAuto}</option></select></label>
+          <label>{t.openclipModel}<input value={cfg.openclip_model || 'ViT-B-32'} onChange={event => update('openclip_model', event.target.value)} placeholder="ViT-B-32" /><small>{t.openclipHint}</small></label>
+          <label>{t.openclipPretrained}<input value={cfg.openclip_pretrained || 'laion2b_s34b_b79k'} onChange={event => update('openclip_pretrained', event.target.value)} placeholder="laion2b_s34b_b79k" /></label>
           <label>{t.faceProviders}<select value={cfg.face_providers || 'OpenVINOExecutionProvider,CPUExecutionProvider'} onChange={event => update('face_providers', event.target.value)}><option value="OpenVINOExecutionProvider,CPUExecutionProvider">OpenVINO + CPU fallback</option><option value="CPUExecutionProvider">CPUExecutionProvider</option></select></label>
           <label>{t.asrEngine}<select value={cfg.asr_engine || 'auto'} onChange={event => update('asr_engine', event.target.value)}><option value="auto">{t.asrAuto}</option><option value="sensevoice-gguf">{t.asrSenseVoice}</option><option value="faster-whisper">{t.asrWhisper}</option></select></label>
           <label>{t.senseVoiceModel}<input value={cfg.sensevoice_gguf_model || '/models/sensevoice/SenseVoiceSmall.gguf'} onChange={event => update('sensevoice_gguf_model', event.target.value)} /></label>

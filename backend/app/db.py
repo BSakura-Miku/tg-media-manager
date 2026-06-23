@@ -162,6 +162,32 @@ def init_db() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_media_transcripts_text ON media_transcripts(text);
+
+            CREATE TABLE IF NOT EXISTS tag_feedback (
+                media_id INTEGER NOT NULL,
+                tag TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '',
+                verdict INTEGER NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (media_id, tag, category),
+                FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tag_feedback_tag ON tag_feedback(tag);
+            CREATE INDEX IF NOT EXISTS idx_tag_feedback_verdict ON tag_feedback(verdict);
+
+            CREATE TABLE IF NOT EXISTS vision_calibrators (
+                tag TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '',
+                model_json TEXT NOT NULL,
+                positive_count INTEGER NOT NULL DEFAULT 0,
+                negative_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tag, category)
+            );
             """
         )
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}

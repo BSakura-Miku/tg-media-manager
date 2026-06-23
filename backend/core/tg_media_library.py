@@ -1404,7 +1404,7 @@ def load_open_clip_backend():
         text = tokenizer(prompts)
         text_features = model.encode_text(text)
         text_features /= text_features.norm(dim=-1, keepdim=True)
-    return torch, PILImage, model, preprocess, labels, text_features
+    return torch, PILImage, model, preprocess, labels, text_features, {"model": model_name, "pretrained": pretrained}
 
 
 def vision_scan(config: Config, limit: int | None) -> None:
@@ -1412,14 +1412,15 @@ def vision_scan(config: Config, limit: int | None) -> None:
     if not frame_index.exists():
         raise SystemExit("frame_index.csv not found. Run extract-frames first.")
     try:
-        torch, PILImage, model, preprocess, labels, text_features = load_open_clip_backend()
+        torch, PILImage, model, preprocess, labels, text_features, model_info = load_open_clip_backend()
     except RuntimeError as exc:
         raise SystemExit(str(exc))
     rows = []
+    embedding_rows = []
     scanned = 0
     for frame_row in dict_rows_from_csv(frame_index):
         frame_paths = [p for p in frame_row.get("frames", "").split("|") if p]
-        best = ("", 0.0, "")
+        best = ("", 0.0, "", [])
         for frame_rel in frame_paths:
             frame_path = config.library_root / frame_rel
             if not frame_path.exists():
@@ -1433,7 +1434,7 @@ def vision_scan(config: Config, limit: int | None) -> None:
                 score, idx = torch.max(probs, dim=0)
                 category = labels[int(idx)]
                 if float(score) > best[1]:
-                    best = (category, float(score), frame_rel)
+                    best = (category, float(score), frame_rel, [round(float(x), 7) for x in image_features[0].detach().cpu().tolist()])
             except Exception:
                 continue
         rows.append({
@@ -1442,6 +1443,14 @@ def vision_scan(config: Config, limit: int | None) -> None:
             "score": f"{best[1]:.6f}",
             "representative_frame": best[2],
         })
+        if best[3]:
+            embedding_rows.append({
+                "media_path": frame_row["media_path"],
+                "representative_frame": best[2],
+                "model": model_info["model"],
+                "pretrained": model_info["pretrained"],
+                "embedding": best[3],
+            })
         scanned += 1
         if scanned % 100 == 0:
             print(f"vision scanned {scanned} media", flush=True)
@@ -1453,6 +1462,11 @@ def vision_scan(config: Config, limit: int | None) -> None:
         writer.writeheader()
         writer.writerows(rows)
     print(f"vision_labels {len(rows)} rows")
+    embeddings_out = config.manifests / "vision_embeddings.jsonl"
+    with embeddings_out.open("w", encoding="utf-8") as handle:
+        for row in embedding_rows:
+            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    print(f"vision_embeddings {len(embedding_rows)} rows")
 
 
 def load_face_backend():

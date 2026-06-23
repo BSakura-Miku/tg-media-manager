@@ -12,7 +12,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from .db import connect, get_settings
-from .metadata import import_vision_outputs, rebuild_metadata_index, rebuild_similarity_index, transcribe_videos
+from .metadata import import_vision_outputs, rebuild_metadata_index, rebuild_similarity_index, train_vision_calibrators, transcribe_videos
 
 
 ALLOWED_COMMANDS = {
@@ -42,6 +42,7 @@ ALLOWED_COMMANDS = {
     "vision-scan-sample": ["vision-scan", "--limit", "120"],
     "vision-scan": ["vision-scan"],
     "index-vision": ["__vision_index__"],
+    "train-vision-calibrator": ["__vision_calibrator_train__"],
     "face-cluster": ["face-cluster", "--threshold", "0.75"],
     "face-cluster-balanced": ["face-cluster", "--threshold", "0.80"],
     "face-cluster-relaxed": ["face-cluster", "--threshold", "0.90"],
@@ -74,6 +75,7 @@ PIPELINE_STAGES = {
     "apply-vision-labels": "apply-vision-labels",
     "dedupe-organized": "dedupe",
     "__vision_index__": "index-vision",
+    "__vision_calibrator_train__": "train-vision-calibrator",
     "__metadata_index__": "index-metadata",
     "__similarity_index__": "index-similarity",
     "__transcribe_sample__": "transcribe",
@@ -150,6 +152,8 @@ def hardware_env(settings: dict) -> dict[str, str]:
     env["FFMPEG_HW_DEVICE"] = settings.get("ffmpeg_hw_device") or os.environ.get("FFMPEG_HW_DEVICE", "/dev/dri/renderD128")
     env["FACE_PROVIDERS"] = face or "OpenVINOExecutionProvider,CPUExecutionProvider"
     env["OPENVINO_DEVICE"] = openvino or "GPU"
+    env["OPENCLIP_MODEL"] = settings.get("openclip_model") or os.environ.get("OPENCLIP_MODEL", "ViT-B-32")
+    env["OPENCLIP_PRETRAINED"] = settings.get("openclip_pretrained") or os.environ.get("OPENCLIP_PRETRAINED", "laion2b_s34b_b79k")
     env["WHISPER_DEVICE"] = whisper
     env.setdefault("WHISPER_COMPUTE_TYPE", "int8")
     env["ASR_ENGINE"] = asr_engine
@@ -331,6 +335,7 @@ def run_job(job_id: int, command: str) -> None:
         key: value for key, value in env.items()
         if key in {
             "COMPUTE_DEVICE", "FFMPEG_HWACCEL", "FACE_PROVIDERS", "OPENVINO_DEVICE",
+            "OPENCLIP_MODEL", "OPENCLIP_PRETRAINED",
             "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE", "ASR_ENGINE", "SENSEVOICE_GGUF_BIN",
             "SENSEVOICE_GGUF_MODEL", "SENSEVOICE_GGUF_COMMAND", "TRANSCRIBE_MAX_SECONDS",
         }
@@ -341,6 +346,7 @@ def run_job(job_id: int, command: str) -> None:
         message = " && ".join(
             "index-metadata" if step == ["__metadata_index__"] else
             "index-vision" if step == ["__vision_index__"] else
+            "train-vision-calibrator" if step == ["__vision_calibrator_train__"] else
             "index-similarity" if step == ["__similarity_index__"] else
             "transcribe-sample" if step == ["__transcribe_sample__"] else
             "transcribe" if step == ["__transcribe__"] else
@@ -366,6 +372,9 @@ def run_job(job_id: int, command: str) -> None:
             elif step == ["__vision_index__"]:
                 result = import_vision_outputs(Path(output_root))
                 stdout_parts.append(f"$ index-vision\n{result}")
+            elif step == ["__vision_calibrator_train__"]:
+                result = train_vision_calibrators(Path(output_root))
+                stdout_parts.append(f"$ train-vision-calibrator\n{result}")
                 returncode = 0
             elif step == ["__similarity_index__"]:
                 result = rebuild_similarity_index(Path(output_root))

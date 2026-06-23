@@ -123,6 +123,16 @@ def csv_count(path: Path) -> int:
         return 0
 
 
+def jsonl_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            return sum(1 for line in handle if line.strip())
+    except Exception:
+        return 0
+
+
 def summary() -> dict:
     global _SUMMARY_CACHE
     now = time.time()
@@ -170,6 +180,7 @@ def summary() -> dict:
             "face_report_rows": csv_count(manifests / "face_cluster_report.csv"),
             "face_merge_suggestion_rows": csv_count(manifests / "face_merge_suggestions.csv"),
             "vision_label_rows": csv_count(manifests / "vision_labels.csv"),
+            "vision_embedding_rows": jsonl_count(manifests / "vision_embeddings.jsonl"),
             "vision_move_plan_rows": csv_count(manifests / "vision_move_plan.csv"),
             "organized_duplicate_rows": csv_count(manifests / "organized_duplicates.csv"),
         },

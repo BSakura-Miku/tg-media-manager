@@ -193,6 +193,11 @@ select, input {
   line-height: 1.45;
 }
 .hintBox strong { color: var(--text); }
+.smallHint {
+  margin-top: 8px;
+  padding: 7px 9px;
+  font-size: 12px;
+}
 .quickGrid {
   display: flex;
   flex-wrap: wrap;
@@ -399,6 +404,31 @@ select, input {
   color: var(--soft);
   background: var(--panel-2);
   font-size: 12px;
+}
+.tagFeedbackCloud span {
+  gap: 5px;
+  padding-right: 5px;
+}
+.tagFeedbackCloud b {
+  font-weight: 650;
+  color: var(--text);
+}
+.tagFeedbackCloud button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--soft);
+}
+.tagFeedbackCloud button:hover {
+  color: var(--accent);
+  background: var(--panel);
+}
+.tagCloud .rejectedTag {
+  opacity: .5;
+  text-decoration: line-through;
 }
 .timelineList {
   display: grid;

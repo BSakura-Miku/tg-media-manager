@@ -364,6 +364,206 @@ def import_vision_outputs(root: Path | None = None) -> dict:
     return {"vision_tags": imported_tags, "timeline_segments": timeline_segments}
 
 
+def read_vision_embeddings(root: Path | None = None) -> dict[str, dict]:
+    root = root or output_root()
+    path = root / "_MANIFESTS" / "vision_embeddings.jsonl"
+    embeddings: dict[str, dict] = {}
+    if not path.exists():
+        return embeddings
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            media_path = str(row.get("media_path") or "")
+            embedding = row.get("embedding")
+            if media_path and isinstance(embedding, list) and embedding:
+                embeddings[media_path] = row
+    return embeddings
+
+
+def dot_score(left: list[float], right: list[float]) -> float:
+    return sum(a * b for a, b in zip(left, right))
+
+
+def mean_vector(vectors: list[list[float]]) -> list[float]:
+    if not vectors:
+        return []
+    size = len(vectors[0])
+    totals = [0.0] * size
+    for vector in vectors:
+        for idx, value in enumerate(vector[:size]):
+            totals[idx] += float(value)
+    mean = [value / len(vectors) for value in totals]
+    norm = sum(value * value for value in mean) ** 0.5
+    return [value / norm for value in mean] if norm else mean
+
+
+def calibrated_probability(embedding: list[float], positive: list[float], negative: list[float], bias: float = 0.0) -> float:
+    pos = dot_score(embedding, positive)
+    neg = dot_score(embedding, negative) if negative else 0.0
+    raw = (pos - neg) * 8.0 + bias
+    if raw > 60:
+        return 1.0
+    if raw < -60:
+        return 0.0
+    return 1.0 / (1.0 + pow(2.718281828, -raw))
+
+
+def train_vision_calibrators(root: Path | None = None, min_positive: int = 2) -> dict:
+    init_db()
+    root = root or output_root()
+    embeddings = read_vision_embeddings(root)
+    if not embeddings:
+        return {"ok": False, "error": "vision_embeddings.jsonl not found. Run vision-scan first.", "trained": 0}
+    trained = 0
+    applied = 0
+    skipped: list[dict] = []
+    with connect() as conn:
+        media_rows = conn.execute("SELECT id, relative_path FROM media_items").fetchall()
+        path_by_id = {int(row["id"]): row["relative_path"] for row in media_rows}
+        media_id_by_path = {row["relative_path"]: int(row["id"]) for row in media_rows}
+        feedback = conn.execute(
+            """
+            SELECT media_id, tag, category, verdict
+            FROM tag_feedback
+            ORDER BY updated_at DESC
+            """
+        ).fetchall()
+        grouped: dict[tuple[str, str], dict[str, list[list[float]]]] = defaultdict(lambda: {"positive": [], "negative": []})
+        for row in feedback:
+            media_path = path_by_id.get(int(row["media_id"]), "")
+            embedding_row = embeddings.get(media_path)
+            if not embedding_row:
+                continue
+            vector = [float(value) for value in embedding_row["embedding"]]
+            key = (row["tag"], row["category"] or category_for_tag(row["tag"]))
+            if int(row["verdict"]) > 0:
+                grouped[key]["positive"].append(vector)
+            else:
+                grouped[key]["negative"].append(vector)
+        conn.execute("DELETE FROM media_tags WHERE source='vision-calibrated'")
+        for (tag, category), samples in grouped.items():
+            positives = samples["positive"]
+            negatives = samples["negative"]
+            if len(positives) < min_positive:
+                skipped.append({"tag": tag, "category": category, "positive": len(positives), "negative": len(negatives)})
+                continue
+            positive_mean = mean_vector(positives)
+            negative_mean = mean_vector(negatives)
+            model = {
+                "tag": tag,
+                "category": category,
+                "positive": positive_mean,
+                "negative": negative_mean,
+                "threshold": 0.62 if negatives else 0.68,
+                "version": 1,
+            }
+            conn.execute(
+                """
+                INSERT INTO vision_calibrators (tag, category, model_json, positive_count, negative_count, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(tag, category) DO UPDATE SET
+                    model_json=excluded.model_json,
+                    positive_count=excluded.positive_count,
+                    negative_count=excluded.negative_count,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (tag, category, json.dumps(model, ensure_ascii=False), len(positives), len(negatives)),
+            )
+            trained += 1
+            for media_path, embedding_row in embeddings.items():
+                media_id = media_id_by_path.get(media_path)
+                if not media_id:
+                    continue
+                vector = [float(value) for value in embedding_row["embedding"]]
+                score = calibrated_probability(vector, positive_mean, negative_mean)
+                if score < model["threshold"]:
+                    continue
+                state = "confirmed" if score >= 0.76 else "pending"
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+                    VALUES (?, ?, ?, ?, 'vision-calibrated', ?)
+                    """,
+                    (media_id, tag, category, score, state),
+                )
+                applied += 1
+        conn.execute(
+            "INSERT INTO media_operations (operation, detail) VALUES (?, ?)",
+            ("train_vision_calibrators", f"trained={trained} applied={applied} skipped={len(skipped)} root={root}"),
+        )
+    return {"ok": True, "trained": trained, "applied_tags": applied, "skipped": skipped[:20], "embedding_rows": len(embeddings)}
+
+
+def vision_calibrator_status(root: Path | None = None) -> dict:
+    init_db()
+    root = root or output_root()
+    embeddings = read_vision_embeddings(root)
+    with connect() as conn:
+        feedback = conn.execute(
+            """
+            SELECT tag, category,
+                   SUM(CASE WHEN verdict > 0 THEN 1 ELSE 0 END) AS positive,
+                   SUM(CASE WHEN verdict < 0 THEN 1 ELSE 0 END) AS negative
+            FROM tag_feedback
+            GROUP BY tag, category
+            ORDER BY positive DESC, negative DESC, tag
+            """
+        ).fetchall()
+        models = conn.execute(
+            "SELECT tag, category, positive_count, negative_count, updated_at FROM vision_calibrators ORDER BY updated_at DESC"
+        ).fetchall()
+    return {
+        "embedding_rows": len(embeddings),
+        "feedback": [dict(row) for row in feedback],
+        "models": [dict(row) for row in models],
+    }
+
+
+def set_tag_feedback(media_id: int, tag: str, category: str, verdict: int, note: str = "") -> dict:
+    init_db()
+    tag = tag.strip()
+    category = (category or category_for_tag(tag)).strip()
+    if not tag:
+        raise ValueError("tag is required")
+    verdict = 1 if verdict > 0 else -1
+    with connect() as conn:
+        media = conn.execute("SELECT id FROM media_items WHERE id=?", (media_id,)).fetchone()
+        if media is None:
+            raise KeyError("media not found")
+        conn.execute(
+            """
+            INSERT INTO tag_feedback (media_id, tag, category, verdict, note, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(media_id, tag, category) DO UPDATE SET
+                verdict=excluded.verdict,
+                note=excluded.note,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (media_id, tag, category, verdict, note.strip()),
+        )
+        if verdict > 0:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+                VALUES (?, ?, ?, 1.0, 'manual', 'confirmed')
+                """,
+                (media_id, tag, category),
+            )
+        else:
+            conn.execute("UPDATE media_tags SET state='rejected' WHERE media_id=? AND tag=?", (media_id, tag))
+        conn.execute(
+            "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'tag_feedback', ?)",
+            (media_id, f"{tag}={verdict}"),
+        )
+    return {"ok": True, "media_id": media_id, "tag": tag, "category": category, "verdict": verdict}
+
+
 def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str = "", limit: int = 100, offset: int = 0, include_risk: bool = False, randomize: bool = False) -> dict:
     clauses = []
     params: list[object] = []
