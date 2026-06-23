@@ -40,6 +40,7 @@ import './styles.css';
 
 const i18n = {
   en: {
+    locale: 'en',
     app: 'Private Library',
     manager: 'TG Media Manager',
     version: 'Version',
@@ -238,7 +239,8 @@ const i18n = {
     downloadRecommended: 'Download recommended',
     modelReady: 'Ready',
     modelMissing: 'Missing',
-    modelNeedsUrl: 'Needs URL env',
+    modelNeedsUrl: 'Needs download URL',
+    modelBusyHint: 'A job is running. Model downloads are paused until the current job finishes.',
     modelRuntimeCache: 'Runtime cache',
     modelFile: 'File model',
     modelHint: 'Models are not baked into the Docker image. They are downloaded into /models and survive container updates.',
@@ -391,6 +393,7 @@ const i18n = {
     },
   },
   'zh-CN': {
+    locale: 'zh-CN',
     app: '私享影库',
     manager: 'TG Media Manager',
     version: '版本',
@@ -589,7 +592,8 @@ const i18n = {
     downloadRecommended: '下载推荐模型',
     modelReady: '已就绪',
     modelMissing: '缺失',
-    modelNeedsUrl: '需要 URL 环境变量',
+    modelNeedsUrl: '需要下载 URL',
+    modelBusyHint: '当前有任务正在运行，模型下载会等任务结束后再操作。',
     modelRuntimeCache: '运行时缓存',
     modelFile: '文件模型',
     modelHint: '模型不会打进 Docker 镜像，会下载到 /models；容器升级后缓存仍然保留。',
@@ -1821,6 +1825,7 @@ function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
 
 function RandomFlowPanel({ mediaResults, loadRandomMedia, t }) {
   const [filters, setFilters] = useState({ media_type: 'all', tag: '', author: '', q: '' });
+  const activeFilters = [filters.media_type !== 'all' ? filters.media_type : '', filters.q, filters.tag, filters.author].filter(Boolean);
   function run(event) {
     event?.preventDefault();
     loadRandomMedia(filters);
@@ -1839,6 +1844,7 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, t }) {
         <input value={filters.author} onChange={event => setFilters({ ...filters, author: event.target.value })} placeholder={t.authorName} />
         <button type="submit"><Shuffle size={16} />{t.randomize}</button>
       </form>
+      {activeFilters.length > 0 && <div className="hintBox smallHint"><span>{t.searchResults}: {activeFilters.join(' / ')}</span></div>}
       <MediaGrid items={mediaResults.items || []} t={t} />
     </section>
   );
@@ -1866,7 +1872,7 @@ function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loa
     <>
       <section className="panel">
         <div className="panelHead"><h2>{t.virtualLibrary}</h2><button className="panelButton" onClick={() => start('index-metadata')}><Database size={16} />{t.rebuildIndex}</button><span>{mediaResults.total || 0}</span></div>
-        <div className="hintBox"><span>{t.noIndexHint}</span></div>
+        {Number(mediaResults.total || 0) === 0 && <div className="hintBox"><span>{t.noIndexHint}</span></div>}
         <form className="mediaSearchBar" onSubmit={runMediaSearch}>
           <select value={mediaType} onChange={event => { setMediaType(event.target.value); loadMedia({ q: mediaQuery, media_type: event.target.value }); }}>
             <option value="all">{t.allMedia}</option>
@@ -2215,7 +2221,7 @@ function CollectionViewer({ title, subtitle, items, close, t }) {
 }
 
 function LogsPanel({ jobs, applied, openJob, setActive, t }) {
-  return <section className="panel"><div className="panelHead"><h2>{t.recentLogs}</h2><span>{applied.rows} {t.moveLogRows}</span></div><div className="jobs">{jobs.map(job => <button className="job" key={job.id} onClick={() => { openJob(job.id); setActive('jobs'); }}><div><strong>#{job.id} {job.command}</strong><p>{job.stdout || job.stderr || job.message || job.created_at}</p></div><JobBadge status={job.status} /></button>)}</div></section>;
+  return <section className="panel"><div className="panelHead"><h2>{t.recentLogs}</h2><span>{applied.rows} {t.moveLogRows}</span></div><div className="jobs">{jobs.map(job => <button className="job" key={job.id} onClick={() => { openJob(job.id); setActive('jobs'); }}><div className="jobMain"><strong>#{job.id} {job.command}</strong><p>{job.stdout || job.stderr || job.message || job.created_at}</p></div><JobBadge status={job.status} /></button>)}</div></section>;
 }
 
 function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDraft, saveModelSource, saveManifestSource, pullModel, deleteModel, start, busy, t }) {
@@ -2228,6 +2234,11 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
   const recommended = models.filter(model => model.recommended && model.status !== 'ready').length;
   function updateDraft(modelId, key, value) {
     setDrafts(current => ({ ...current, [modelId]: { ...(current[modelId] || {}), [key]: value } }));
+  }
+  function modelPlaceholder(model) {
+    if (model.id?.includes('onnx') || model.path?.endsWith('.onnx')) return 'https://github.com/.../model.onnx';
+    if (model.path?.endsWith('.gguf')) return 'https://github.com/.../model.gguf';
+    return 'https://github.com/.../model.bin';
   }
   return (
     <section className="panel modelPanel">
@@ -2246,9 +2257,11 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
         <button className="panelButton" onClick={() => saveManifestSource(manifestDraft)}><Save size={16} />{t.saveModelSource}</button>
         <small>{t.modelManifestHint}</small>
       </div>
+      {busy && <div className="hintBox smallHint"><span>{t.modelBusyHint}</span></div>}
       <div className="modelGrid">
         {models.map(model => {
           const draft = drafts?.[model.id] || { url: model.source_url || '', sha256: model.sha256 || '' };
+          const description = t.locale === 'zh-CN' ? (model.description_zh || model.description) : model.description;
           return (
           <article className={`modelCard ${model.status}`} key={model.id}>
             <div className="modelCardTop">
@@ -2259,7 +2272,7 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
               </div>
               <b>{statusLabel[model.status] || model.status}</b>
             </div>
-            <p>{model.description}</p>
+            <p>{description}</p>
             <div className="modelMeta">
               <div><span>{t.modelSize}</span><strong>{prettyBytes(model.bytes)}</strong></div>
               <div><span>{t.modelPath}</span><strong title={model.path}>{model.path}</strong></div>
@@ -2268,7 +2281,7 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
             </div>
             {model.source_editable && (
               <div className="modelSourceForm">
-                <label>{t.modelSourceUrl}<input value={draft.url || ''} onChange={event => updateDraft(model.id, 'url', event.target.value)} placeholder="https://github.com/.../model.gguf" /></label>
+                <label>{t.modelSourceUrl}<input value={draft.url || ''} onChange={event => updateDraft(model.id, 'url', event.target.value)} placeholder={modelPlaceholder(model)} /></label>
                 <label>{t.modelSha256}<input value={draft.sha256 || ''} onChange={event => updateDraft(model.id, 'sha256', event.target.value)} placeholder="optional 64-char checksum" /></label>
                 <button className="panelButton" onClick={() => saveModelSource(model.id, draft)}><Save size={16} />{t.saveModelSource}</button>
               </div>

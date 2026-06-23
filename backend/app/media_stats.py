@@ -6,7 +6,7 @@ import os
 import time
 from collections import Counter
 from pathlib import Path
-from .db import get_settings
+from .db import connect, get_settings, init_db
 
 
 def media_root() -> Path:
@@ -133,6 +133,28 @@ def jsonl_count(path: Path) -> int:
         return 0
 
 
+def indexed_media_counts() -> dict:
+    try:
+        init_db()
+        with connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT media_type, COUNT(*) AS count
+                FROM media_items
+                WHERE risk_state='normal'
+                GROUP BY media_type
+                """
+            ).fetchall()
+        counts = {str(row["media_type"] or "other"): int(row["count"] or 0) for row in rows}
+        return {
+            "photo": counts.get("photo", 0),
+            "video": counts.get("video", 0),
+            "other": sum(value for key, value in counts.items() if key not in {"photo", "video"}),
+        }
+    except Exception:
+        return {"photo": 0, "video": 0, "other": 0}
+
+
 def summary() -> dict:
     global _SUMMARY_CACHE
     now = time.time()
@@ -166,6 +188,7 @@ def summary() -> dict:
         "output_exists": library.exists(),
         "top": top,
         "source_leftovers": state.get("source_leftovers") or source_leftovers,
+        "media_types": state.get("media_types") or indexed_media_counts(),
         "keywords": state.get("keywords") or (rollup["keywords"] if rollup else immediate_counts(library / "_REVIEW" / "Keywords")),
         "actors_sample": state.get("actors_sample") or (rollup["actors_sample"] if rollup else immediate_counts(library / "Actors")[:80]),
         "library_state": state,

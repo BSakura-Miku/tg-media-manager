@@ -703,11 +703,11 @@ button:disabled { opacity: .55; cursor: wait; }
 .row { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 0 8px; background: var(--panel-2); border-radius: 4px; font-size: 13px; }
 .row span { color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row strong { font-variant-numeric: tabular-nums; color: var(--text); font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.jobs { display: grid; gap: 8px; }
-.job { min-height: 56px; width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px; background: var(--panel-2); border-color: var(--line); text-align: left; }
+.jobs { display: grid; gap: 8px; min-width: 0; overflow: hidden; }
+.job { min-height: 56px; width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px; background: var(--panel-2); border-color: var(--line); text-align: left; }
 .jobMain { min-width: 0; flex: 1; display: grid; gap: 4px; }
-.job strong { font-size: 13px; color: var(--text); }
-.job p { margin-top: 3px; max-width: 900px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text); }
+.job p { min-width: 0; margin-top: 3px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .job small { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .jobProgress { display: block; width: 100%; height: 6px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--line) 70%, transparent); }
 .jobProgress b { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #5ea2ff, #66e3d0); box-shadow: 0 0 18px rgba(94, 162, 255, .35); }
@@ -1087,6 +1087,7 @@ tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); col
   grid-template-columns: 38px 1fr auto;
   gap: 10px;
   align-items: center;
+  min-width: 0;
 }
 .modelCardTop > svg {
   width: 38px;
@@ -1098,6 +1099,7 @@ tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); col
 }
 .modelCardTop strong,
 .modelMeta strong {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1107,6 +1109,11 @@ tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); col
 .modelMeta span {
   color: var(--muted);
   font-size: 12px;
+}
+.modelCardTop > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
 }
 .modelCardTop b {
   padding: 5px 9px;

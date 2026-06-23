@@ -686,7 +686,48 @@ def original_source_for_media(data: dict) -> dict:
 
 
 def media_for_author(author: str, media_type: str = "all", limit: int = 80, offset: int = 0) -> dict:
-    return media_query(media_type=media_type, author=author, limit=limit, offset=offset, include_risk=False)
+    author = author.strip()
+    if not author:
+        return {"total": 0, "limit": limit, "offset": offset, "items": []}
+    clauses = ["m.risk_state='normal'"]
+    params: list[object] = []
+    if media_type in {"photo", "video"}:
+        clauses.append("m.media_type=?")
+        params.append(media_type)
+    actor_path = f"Actors/{author}/%"
+    like = f"%{author}%"
+    clauses.append(
+        """
+        (
+            m.author LIKE ?
+            OR m.person LIKE ?
+            OR m.relative_path LIKE ?
+            OR EXISTS (
+                SELECT 1 FROM media_tags t
+                WHERE t.media_id=m.id
+                  AND t.state != 'rejected'
+                  AND (t.tag LIKE ? OR (t.category='author' AND t.tag=?))
+            )
+        )
+        """
+    )
+    params.extend([like, like, actor_path, like, author])
+    where = f"WHERE {' AND '.join(clauses)}"
+    with connect() as conn:
+        total = int(conn.execute(f"SELECT COUNT(DISTINCT m.id) AS c FROM media_items m {where}", params).fetchone()["c"])
+        rows = conn.execute(
+            f"""
+            SELECT m.*, GROUP_CONCAT(t.tag, ',') AS tags
+            FROM media_items m
+            LEFT JOIN media_tags t ON t.media_id=m.id AND t.state != 'rejected'
+            {where}
+            GROUP BY m.id
+            ORDER BY m.mtime DESC, m.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+    return {"total": total, "limit": limit, "offset": offset, "items": [dict(row) for row in rows]}
 
 
 def tag_graph(limit_nodes: int = 80, limit_edges: int = 180, min_edge: int = 2) -> dict:
@@ -734,24 +775,49 @@ def tag_graph(limit_nodes: int = 80, limit_edges: int = 180, min_edge: int = 2) 
 
 
 def media_by_relative_paths(root: Path, relative_paths: list[str], limit: int = 120) -> dict:
-    clean = [str(Path(item)) for item in relative_paths if item]
+    clean = []
+    names = []
+    for item in relative_paths:
+        if not item:
+            continue
+        normalized = Path(item).as_posix()
+        clean.append(normalized)
+        name = Path(item).name
+        if name:
+            names.append(name)
+    clean = sorted(set(clean))
+    names = sorted(set(names))
     if not clean:
         return {"items": [], "total": 0}
+    path_placeholders = ",".join("?" for _ in clean)
+    name_placeholders = ",".join("?" for _ in names) if names else "''"
+    conditions = [
+        f"m.relative_path IN ({path_placeholders})",
+        f"m.normalized_path IN ({path_placeholders})",
+    ]
+    params: list[object] = [*clean, *clean]
+    if names:
+        conditions.extend([
+            f"m.filename IN ({name_placeholders})",
+            f"m.original_name IN ({name_placeholders})",
+        ])
+        params.extend([*names, *names])
+    where = " OR ".join(conditions)
     with connect() as conn:
-        placeholders = ",".join("?" for _ in clean)
+        total = int(conn.execute(f"SELECT COUNT(DISTINCT m.id) AS c FROM media_items m WHERE {where}", params).fetchone()["c"])
         rows = conn.execute(
             f"""
             SELECT m.*, GROUP_CONCAT(t.tag, ',') AS tags
             FROM media_items m
             LEFT JOIN media_tags t ON t.media_id=m.id AND t.state != 'rejected'
-            WHERE m.relative_path IN ({placeholders})
+            WHERE {where}
             GROUP BY m.id
             ORDER BY m.mtime DESC
             LIMIT ?
             """,
-            [*clean, limit],
+            [*params, limit],
         ).fetchall()
-    return {"items": [dict(row) for row in rows], "total": len(rows)}
+    return {"items": [dict(row) for row in rows], "total": total}
 
 
 SENSEVOICE_TOKEN_TAGS = {
