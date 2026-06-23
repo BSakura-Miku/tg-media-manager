@@ -176,11 +176,67 @@ def manifest_maps(root: Path) -> tuple[dict[str, dict], dict[str, dict]]:
         if original:
             manifest[original] = row
     applied = {}
-    for row in read_csv(manifests / "applied_moves.csv"):
+    for row in movement_rows(manifests):
         new_path = row.get("new_path", "")
         if new_path:
             applied[new_path] = row
     return manifest, applied
+
+
+def movement_rows(manifests: Path) -> list[dict]:
+    rows: list[dict] = []
+    for row in read_csv(manifests / "applied_moves.csv"):
+        if row.get("original_path") and row.get("new_path"):
+            rows.append({**row, "source_file": "applied_moves", "original_path": row["original_path"], "new_path": row["new_path"]})
+    for filename in ("vision_move_plan.csv", "face_move_plan.csv", "dedupe_move_plan.csv", "organized_duplicates.csv"):
+        for row in read_csv(manifests / filename):
+            src = row.get("source") or row.get("original_path") or row.get("path") or row.get("media_path")
+            dst = row.get("destination") or row.get("new_path") or row.get("duplicate_path")
+            if src and dst:
+                rows.append({**row, "source_file": filename, "original_path": src, "new_path": dst})
+    for row in read_csv(manifests / "move_plan.csv"):
+        src = row.get("original_path")
+        dst = row.get("planned_path")
+        if src and dst:
+            rows.append({**row, "source_file": "move_plan", "original_path": src, "new_path": dst})
+    return rows
+
+
+def trace_original_source(root: Path, rel_path: str, hash_value: str = "", hash8: str = "", fallback_name: str = "") -> dict:
+    manifests = root / "_MANIFESTS"
+    transitions = {}
+    row_by_dest = {}
+    for row in movement_rows(manifests):
+        dst = row.get("new_path", "")
+        src = row.get("original_path", "")
+        if dst and src and dst not in transitions:
+            transitions[dst] = src
+            row_by_dest[dst] = row
+    current = rel_path
+    source_path = ""
+    source_name = fallback_name or Path(rel_path).name
+    source_kind = "index"
+    visited = set()
+    for _ in range(16):
+        if not current or current in visited or current not in transitions:
+            break
+        visited.add(current)
+        source_path = transitions[current]
+        source_name = Path(source_path).name or source_name
+        source_kind = str(row_by_dest.get(current, {}).get("source_file") or "move_chain")
+        current = source_path
+    for manifest in read_csv(manifests / "manifest_all.csv"):
+        original_path = manifest.get("original_path", "")
+        if (current and original_path == current) or (source_path and original_path == source_path) or (hash_value and manifest.get("hash") == hash_value) or (hash8 and manifest.get("hash8") == hash8):
+            source_path = original_path or source_path
+            source_name = manifest.get("original_name") or Path(source_path).name or source_name
+            source_kind = "manifest_all"
+            break
+    return {
+        "display_original_name": source_name,
+        "source_original_path": source_path,
+        "original_name_source": source_kind,
+    }
 
 
 def iter_media_files(root: Path):
@@ -218,7 +274,8 @@ def upsert_media(conn, root: Path, path: Path, media_type: str, manifest: dict, 
     stat = path.stat()
     rel_path = safe_relative(root, path)
     parsed = parse_filename(path.name, path)
-    original_name = manifest.get("original_name") or Path(applied.get("original_path", "")).name or path.name
+    original_trace = trace_original_source(root, rel_path, manifest.get("hash", ""), manifest.get("hash8", ""), path.name)
+    original_name = original_trace.get("display_original_name") or manifest.get("original_name") or Path(applied.get("original_path", "")).name or path.name
     width = int(float(manifest["width"])) if manifest.get("width") else None
     height = int(float(manifest["height"])) if manifest.get("height") else None
     duration = float(manifest["duration"]) if manifest.get("duration") else None
@@ -773,32 +830,14 @@ def media_detail(media_id: int) -> dict | None:
 
 def original_source_for_media(data: dict) -> dict:
     root = Path(data.get("root") or output_root())
-    manifests = root / "_MANIFESTS"
     rel_path = data.get("relative_path", "")
     filename = data.get("filename", "")
     current_original = data.get("original_name", "")
     hash_value = data.get("sha256", "")
     hash8 = data.get("hash8", "")
-    result = {
-        "display_original_name": current_original or filename,
-        "source_original_path": "",
-        "original_name_source": "index",
-    }
-    for applied in read_csv(manifests / "applied_moves.csv"):
-        if applied.get("new_path") == rel_path or (hash_value and applied.get("hash_before") == hash_value):
-            original_path = applied.get("original_path", "")
-            result["source_original_path"] = original_path
-            result["display_original_name"] = Path(original_path).name or result["display_original_name"]
-            result["original_name_source"] = "applied_moves"
-            break
-    if result["original_name_source"] == "index":
-        for manifest in read_csv(manifests / "manifest_all.csv"):
-            if (hash_value and manifest.get("hash") == hash_value) or (hash8 and manifest.get("hash8") == hash8):
-                original_path = manifest.get("original_path", "")
-                result["source_original_path"] = original_path
-                result["display_original_name"] = manifest.get("original_name") or Path(original_path).name or result["display_original_name"]
-                result["original_name_source"] = "manifest_all"
-                break
+    result = trace_original_source(root, rel_path, hash_value, hash8, current_original or filename)
+    if not result.get("display_original_name"):
+        result["display_original_name"] = current_original or filename
     return result
 
 
