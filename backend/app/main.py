@@ -33,6 +33,7 @@ from .metadata import (
     train_vision_calibrators,
     vision_calibrator_status,
 )
+from .model_manager import delete_model, model_catalog
 
 try:
     from PIL import Image, ImageChops, ImageOps
@@ -282,6 +283,19 @@ def api_create_job(req: JobRequest) -> dict:
 @app.get("/api/commands")
 def api_commands() -> dict:
     return {"commands": sorted(ALLOWED_COMMANDS)}
+
+
+@app.get("/api/models")
+def api_models() -> dict:
+    return model_catalog()
+
+
+@app.delete("/api/models/{model_id}")
+def api_delete_model(model_id: str) -> dict:
+    try:
+        return delete_model(model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 def read_csv(path: Path) -> list[dict]:

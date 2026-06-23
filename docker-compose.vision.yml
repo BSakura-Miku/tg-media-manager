@@ -11,7 +11,13 @@ services:
       BROWSE_ROOTS: /media,/library,/incoming
       APP_DB: /data/tg_media_manager.sqlite3
       MODEL_ROOT: /models
+      HF_HOME: /models/huggingface
+      TORCH_HOME: /models/torch
+      XDG_CACHE_HOME: /models/cache
       INSIGHTFACE_HOME: /models/insightface
+      SENSEVOICE_GGUF_MODEL: /models/sensevoice/SenseVoiceSmall.gguf
+      SENSEVOICE_GGUF_URL: ${SENSEVOICE_GGUF_URL:-}
+      CUSTOM_DETECTOR_ONNX_URL: ${CUSTOM_DETECTOR_ONNX_URL:-}
     volumes:
       - /tmp/bssecondary_mount/BS-Media2/BS-Lsp/Tgdownloads/LSP:/media
       - ./data:/data

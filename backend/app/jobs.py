@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .db import connect, get_settings
 from .metadata import import_vision_outputs, rebuild_metadata_index, rebuild_similarity_index, train_vision_calibrators, transcribe_videos
+from .model_manager import pull_model
 
 
 ALLOWED_COMMANDS = {
@@ -22,6 +23,13 @@ ALLOWED_COMMANDS = {
     "workflow-vision-plan": [["extract-frames"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"]],
     "workflow-full-library": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["normalize-organized"], ["organize-review"], ["refresh-state"], ["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"], ["dedupe-organized", "--apply"], ["__similarity_index__"], ["__transcribe__"], ["__metadata_index__"]],
     "workflow-transcribe-sample": [["__transcribe_sample__"], ["__metadata_index__"]],
+    "model-pull-openclip-vit-l": [["__model_pull__", "openclip-vit-l"]],
+    "model-pull-openclip-vit-h": [["__model_pull__", "openclip-vit-h"]],
+    "model-pull-insightface-buffalo-l": [["__model_pull__", "insightface-buffalo-l"]],
+    "model-pull-faster-whisper-small": [["__model_pull__", "faster-whisper-small"]],
+    "model-pull-sensevoice-small-gguf": [["__model_pull__", "sensevoice-small-gguf"]],
+    "model-pull-custom-detector-onnx": [["__model_pull__", "custom-detector-onnx"]],
+    "model-pull-recommended": [["__model_pull__", "openclip-vit-l"], ["__model_pull__", "insightface-buffalo-l"], ["__model_pull__", "sensevoice-small-gguf"]],
     "scan": ["scan"],
     "analyze-filenames": ["analyze-filenames"],
     "classify-keywords": ["classify-keywords"],
@@ -81,6 +89,7 @@ PIPELINE_STAGES = {
     "__similarity_index__": "index-similarity",
     "__transcribe_sample__": "transcribe",
     "__transcribe__": "transcribe",
+    "__model_pull__": "model-download",
 }
 
 
@@ -356,6 +365,7 @@ def run_job(job_id: int, command: str) -> None:
             "index-similarity" if step == ["__similarity_index__"] else
             "transcribe-sample" if step == ["__transcribe_sample__"] else
             "transcribe" if step == ["__transcribe__"] else
+            f"model-pull {step[1]}" if step and step[0] == "__model_pull__" else
             " ".join([*base_args, *step])
             for step in steps
         )
@@ -395,6 +405,13 @@ def run_job(job_id: int, command: str) -> None:
                 update_job_progress(job_id, stage="transcribe", message="full transcribe running")
                 result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=None))
                 stdout_parts.append(f"$ transcribe\n{captured}\n{result}")
+                returncode = 0 if result.get("ok") else 1
+            elif step and step[0] == "__model_pull__":
+                model_id = step[1]
+                update_job_progress(job_id, stage="model-download", message=f"pulling {model_id}")
+                os.environ["TGMM_CANCEL_FILE"] = str(cancel_file(job_id))
+                result, captured = run_internal_with_progress(job_id, "model-download", lambda: pull_model(model_id))
+                stdout_parts.append(f"$ model-pull {model_id}\n{captured}\n{result}")
                 returncode = 0 if result.get("ok") else 1
             else:
                 dynamic_step = apply_dynamic_step_args(step, settings)

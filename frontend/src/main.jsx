@@ -8,6 +8,7 @@ import {
   Camera,
   CheckCircle2,
   Database,
+  Download,
   FileSearch,
   Film,
   Folder,
@@ -31,6 +32,7 @@ import {
   Sun,
   Tags,
   TerminalSquare,
+  Trash2,
   Users,
   XCircle,
 } from 'lucide-react';
@@ -49,6 +51,7 @@ const i18n = {
     virtualLibrary: 'Virtual Library',
     tagGraph: 'Tag Graph',
     randomFlow: 'Random Flow',
+    models: 'Models',
     authors: 'Authors',
     faces: 'Face Groups',
     logs: 'Logs',
@@ -225,6 +228,21 @@ const i18n = {
     applyConfirm: 'Apply Plan will move files according to the current move_plan.csv. Continue?',
     applyAllConfirm: 'Apply All will move every planned file, including review items. Continue?',
     settingsSaved: 'Settings saved',
+    modelManager: 'Model Manager',
+    modelRoot: 'Model root',
+    modelStatus: 'Status',
+    modelSize: 'Size',
+    modelPath: 'Path',
+    downloadModel: 'Download',
+    deleteModel: 'Delete cache',
+    downloadRecommended: 'Download recommended',
+    modelReady: 'Ready',
+    modelMissing: 'Missing',
+    modelNeedsUrl: 'Needs URL env',
+    modelRuntimeCache: 'Runtime cache',
+    modelFile: 'File model',
+    modelHint: 'Models are not baked into the Docker image. They are downloaded into /models and survive container updates.',
+    deleteModelConfirm: 'Delete this cached model from /models?',
     workflowConfirm: 'This will run several jobs in sequence. Continue?',
     libraryHelp: 'The Library page shows manifest search results. Pick a source above, search by actor, keyword, path, hash, FaceGroup, or scene label.',
     libraryQuickSearch: 'Quick search',
@@ -279,6 +297,7 @@ const i18n = {
       'workflow-vision-plan': 'Scene Plan',
       'workflow-full-library': 'Full Library',
       'workflow-transcribe-sample': 'Speech Sample',
+      'model-pull-recommended': 'Download Recommended Models',
       'index-metadata': 'Rebuild Index',
       'index-similarity': 'Similarity Index',
       'transcribe-sample': 'Speech Sample',
@@ -310,6 +329,12 @@ const i18n = {
       apply: 'Apply Plan',
       'apply-include-review': 'Apply All',
       'clean-empty-dirs': 'Clean Dirs',
+      'model-pull-openclip-vit-l': 'Download OpenCLIP ViT-L',
+      'model-pull-openclip-vit-h': 'Download OpenCLIP ViT-H',
+      'model-pull-insightface-buffalo-l': 'Download InsightFace',
+      'model-pull-faster-whisper-small': 'Download Whisper Small',
+      'model-pull-sensevoice-small-gguf': 'Download SenseVoice GGUF',
+      'model-pull-custom-detector-onnx': 'Download Custom Detector',
     },
     commandHelp: {
       'workflow-new-downloads': 'Best default for new files: scan, classify, move, refresh.',
@@ -318,6 +343,7 @@ const i18n = {
       'workflow-vision-plan': 'Run local image scene labels and create a dry-run plan.',
       'workflow-full-library': 'Run scan, organize, frames, faces, scene labels, dedupe, transcription, and indexes.',
       'workflow-transcribe-sample': 'Transcribe a small sample of videos and index the text.',
+      'model-pull-recommended': 'Download the default vision, face, and speech models into /models.',
       'index-metadata': 'Import organized files and manifests into the virtual SQLite library.',
       'index-similarity': 'Build exact duplicate, image perceptual hash, and video keyframe similarity groups.',
       'transcribe-sample': 'Transcribe up to 5 videos that do not have transcript text.',
@@ -349,6 +375,12 @@ const i18n = {
       apply: 'Move files according to move_plan.csv.',
       'apply-include-review': 'Move all planned files, including review items.',
       'clean-empty-dirs': 'Remove empty directories.',
+      'model-pull-openclip-vit-l': 'Download/cache the default OpenCLIP vision model.',
+      'model-pull-openclip-vit-h': 'Download/cache the stronger OpenCLIP model.',
+      'model-pull-insightface-buffalo-l': 'Download/cache the InsightFace buffalo_l model.',
+      'model-pull-faster-whisper-small': 'Download/cache the faster-whisper small fallback model.',
+      'model-pull-sensevoice-small-gguf': 'Download the SenseVoice GGUF file from SENSEVOICE_GGUF_URL.',
+      'model-pull-custom-detector-onnx': 'Download the optional custom detector from CUSTOM_DETECTOR_ONNX_URL.',
     },
   },
   'zh-CN': {
@@ -363,6 +395,7 @@ const i18n = {
     virtualLibrary: '虚拟媒体库',
     tagGraph: '标签图谱',
     randomFlow: '随机瀑布流',
+    models: '模型',
     authors: '作者',
     faces: '人脸组',
     logs: '日志',
@@ -539,6 +572,21 @@ const i18n = {
     applyConfirm: 'Apply Plan 会按当前 move_plan.csv 移动文件。继续？',
     applyAllConfirm: 'Apply All 会移动所有计划文件，包括 review 项。继续？',
     settingsSaved: '设置已保存',
+    modelManager: '模型管理',
+    modelRoot: '模型目录',
+    modelStatus: '状态',
+    modelSize: '大小',
+    modelPath: '路径',
+    downloadModel: '下载',
+    deleteModel: '删除缓存',
+    downloadRecommended: '下载推荐模型',
+    modelReady: '已就绪',
+    modelMissing: '缺失',
+    modelNeedsUrl: '需要 URL 环境变量',
+    modelRuntimeCache: '运行时缓存',
+    modelFile: '文件模型',
+    modelHint: '模型不会打进 Docker 镜像，会下载到 /models；容器升级后缓存仍然保留。',
+    deleteModelConfirm: '从 /models 删除这个模型缓存？',
     workflowConfirm: '这会连续运行多个任务，继续？',
     libraryHelp: '媒体库页是清单搜索结果页：在上方选择来源，可以按人物、关键词、路径、hash、人脸组、场景标签搜索。',
     libraryQuickSearch: '快捷搜索',
@@ -593,6 +641,7 @@ const i18n = {
       'workflow-vision-plan': '场景识别计划',
       'workflow-full-library': '全量智能整理',
       'workflow-transcribe-sample': '语音样本',
+      'model-pull-recommended': '下载推荐模型',
       'index-metadata': '重建索引',
       'index-similarity': '相似索引',
       'transcribe-sample': '语音样本',
@@ -624,6 +673,12 @@ const i18n = {
       apply: '执行移动计划',
       'apply-include-review': '执行全部移动',
       'clean-empty-dirs': '清空目录',
+      'model-pull-openclip-vit-l': '下载 OpenCLIP ViT-L',
+      'model-pull-openclip-vit-h': '下载 OpenCLIP ViT-H',
+      'model-pull-insightface-buffalo-l': '下载 InsightFace',
+      'model-pull-faster-whisper-small': '下载 Whisper Small',
+      'model-pull-sensevoice-small-gguf': '下载 SenseVoice GGUF',
+      'model-pull-custom-detector-onnx': '下载自定义检测模型',
     },
     commandHelp: {
       'workflow-new-downloads': '新文件首选：扫描、分析、关键词归类、执行移动、刷新统计。',
@@ -632,6 +687,7 @@ const i18n = {
       'workflow-vision-plan': '本地识别画面场景/标签，只生成预览计划。',
       'workflow-full-library': '完整跑扫描、整理、抽帧、人脸、场景、去重、转写和索引。',
       'workflow-transcribe-sample': '抽样转写视频语音，并把文字导入搜索。',
+      'model-pull-recommended': '把默认视觉、人脸、语音模型下载到 /models。',
       'index-metadata': '把已整理文件和清单导入 SQLite 虚拟媒体库。',
       'index-similarity': '生成精确重复、图片感知 hash、视频关键帧相似组。',
       'transcribe-sample': '最多转写 5 个还没有文字的视频。',
@@ -663,6 +719,12 @@ const i18n = {
       apply: '按 move_plan.csv 移动文件。',
       'apply-include-review': '移动所有计划文件，包括 review 项。',
       'clean-empty-dirs': '删除整理后留下的空文件夹。',
+      'model-pull-openclip-vit-l': '下载/缓存默认 OpenCLIP 视觉模型。',
+      'model-pull-openclip-vit-h': '下载/缓存更强的 OpenCLIP 模型。',
+      'model-pull-insightface-buffalo-l': '下载/缓存 InsightFace buffalo_l 人脸模型。',
+      'model-pull-faster-whisper-small': '下载/缓存 faster-whisper small 回退模型。',
+      'model-pull-sensevoice-small-gguf': '从 SENSEVOICE_GGUF_URL 下载 SenseVoice GGUF 文件。',
+      'model-pull-custom-detector-onnx': '从 CUSTOM_DETECTOR_ONNX_URL 下载可选自定义检测模型。',
     },
   },
 };
@@ -713,6 +775,7 @@ const nav = [
   ['library', 'library', Folder],
   ['tagGraph', 'tagGraph', Share2],
   ['randomFlow', 'randomFlow', Shuffle],
+  ['models', 'models', HardDrive],
   ['authors', 'authors', Users],
   ['faces', 'faces', Users],
   ['logs', 'logs', TerminalSquare],
@@ -753,6 +816,18 @@ function buildLabel(version, t) {
 function prettyNumber(value) {
   const number = Number(value || 0);
   return Number.isFinite(number) ? number.toLocaleString() : '0';
+}
+
+function prettyBytes(value) {
+  let size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  return `${size >= 10 || index === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[index]}`;
 }
 
 function estimatedMediaTotal(summary, mediaResults) {
@@ -847,6 +922,7 @@ function App() {
   const [faces, setFaces] = useState([]);
   const [faceSuggestions, setFaceSuggestions] = useState([]);
   const [settings, setSettings] = useState(null);
+  const [models, setModels] = useState({ root: '/models', models: [] });
   const [monitor, setMonitor] = useState(null);
   const [directories, setDirectories] = useState([]);
   const [browsePath, setBrowsePath] = useState('/media');
@@ -859,7 +935,7 @@ function App() {
   const t = i18n[language] || i18n['zh-CN'];
 
   async function refresh() {
-    const [s, j, a, f, suggestions, cfg, mon, ver] = await Promise.all([
+    const [s, j, a, f, suggestions, cfg, mon, modelCatalog, ver] = await Promise.all([
       api('/api/summary'),
       api('/api/jobs'),
       api('/api/authors').catch(() => []),
@@ -867,6 +943,7 @@ function App() {
       api('/api/face-merge-suggestions').catch(() => []),
       api('/api/settings').catch(() => null),
       api('/api/monitor').catch(() => null),
+      api('/api/models').catch(() => ({ root: '/models', models: [] })),
       api('/api/version').catch(() => null),
     ]);
     setSummary(s);
@@ -875,6 +952,7 @@ function App() {
     setFaces(f);
     setFaceSuggestions(suggestions);
     setMonitor(mon);
+    setModels(modelCatalog);
     if (ver) setVersion(ver);
     if (cfg) {
       setSettings(cfg);
@@ -901,6 +979,7 @@ function App() {
         loadRandomMedia().catch(() => {});
         loadTagGraph().catch(() => {});
         loadSimilarity().catch(() => {});
+        loadModels().catch(() => {});
       }
     }).catch(exc => setError(exc.message));
     const id = setInterval(() => refresh().catch(() => {}), 4000);
@@ -917,6 +996,7 @@ function App() {
     await loadRandomMedia();
     await loadTagGraph();
     await loadSimilarity();
+    await loadModels();
   }
 
   async function start(command) {
@@ -1017,6 +1097,12 @@ function App() {
   async function loadSimilarity() {
     const data = await api('/api/media/similarity-groups?limit=80');
     setSimilarityResults(data);
+    return data;
+  }
+
+  async function loadModels() {
+    const data = await api('/api/models');
+    setModels(data);
     return data;
   }
 
@@ -1121,6 +1207,24 @@ function App() {
     }
   }
 
+  async function pullModel(modelId) {
+    const command = `model-pull-${modelId}`;
+    await start(command);
+  }
+
+  async function deleteModel(modelId) {
+    const ok = window.confirm(t.deleteModelConfirm);
+    if (!ok) return;
+    setError('');
+    try {
+      await api(`/api/models/${encodeURIComponent(modelId)}`, { method: 'DELETE' });
+      await loadModels();
+      setMessage(t.modelMissing);
+    } catch (exc) {
+      setError(exc.message);
+    }
+  }
+
   async function checkMonitorNow() {
     setError('');
     try {
@@ -1199,6 +1303,7 @@ function App() {
         {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} t={t} />}
         {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} loadMedia={loadMedia} setActive={setActive} t={t} />}
         {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} t={t} />}
+        {active === 'models' && <ModelsPanel catalog={models} pullModel={pullModel} deleteModel={deleteModel} start={start} busy={busy || hasRunning} t={t} />}
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
@@ -2059,6 +2164,54 @@ function CollectionViewer({ title, subtitle, items, close, t }) {
 
 function LogsPanel({ jobs, applied, openJob, setActive, t }) {
   return <section className="panel"><div className="panelHead"><h2>{t.recentLogs}</h2><span>{applied.rows} {t.moveLogRows}</span></div><div className="jobs">{jobs.map(job => <button className="job" key={job.id} onClick={() => { openJob(job.id); setActive('jobs'); }}><div><strong>#{job.id} {job.command}</strong><p>{job.stdout || job.stderr || job.message || job.created_at}</p></div><JobBadge status={job.status} /></button>)}</div></section>;
+}
+
+function ModelsPanel({ catalog, pullModel, deleteModel, start, busy, t }) {
+  const models = catalog?.models || [];
+  const statusLabel = {
+    ready: t.modelReady,
+    missing: t.modelMissing,
+    needs_url: t.modelNeedsUrl,
+  };
+  const recommended = models.filter(model => model.recommended && model.status !== 'ready').length;
+  return (
+    <section className="panel modelPanel">
+      <div className="panelHead">
+        <div>
+          <h2>{t.modelManager}</h2>
+          <p>{t.modelHint}</p>
+        </div>
+        <div className="panelActions">
+          <span>{t.modelRoot}: {catalog?.root || '/models'}</span>
+          <button className="panelButton" disabled={busy || recommended === 0} onClick={() => start('model-pull-recommended')}><Download size={16} />{t.downloadRecommended}</button>
+        </div>
+      </div>
+      <div className="modelGrid">
+        {models.map(model => (
+          <article className={`modelCard ${model.status}`} key={model.id}>
+            <div className="modelCardTop">
+              <HardDrive size={20} />
+              <div>
+                <strong>{model.name}</strong>
+                <span>{model.category} · {model.kind === 'file' ? t.modelFile : t.modelRuntimeCache}</span>
+              </div>
+              <b>{statusLabel[model.status] || model.status}</b>
+            </div>
+            <p>{model.description}</p>
+            <div className="modelMeta">
+              <div><span>{t.modelSize}</span><strong>{prettyBytes(model.bytes)}</strong></div>
+              <div><span>{t.modelPath}</span><strong title={model.path}>{model.path}</strong></div>
+              {model.url_env && <div><span>URL env</span><strong>{model.url_env}{model.url_configured ? '' : ' unset'}</strong></div>}
+            </div>
+            <div className="modelActions">
+              <button className="panelButton" disabled={busy || model.status === 'needs_url'} onClick={() => pullModel(model.id)}><Download size={16} />{t.downloadModel}</button>
+              <button className="panelButton dangerButton" disabled={!model.present || busy} onClick={() => deleteModel(model.id)}><Trash2 size={16} />{t.deleteModel}</button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function SettingsPanel({ settings, setSettings, saveSettings, browse, directories, browsePath, monitor, checkMonitorNow, t }) {

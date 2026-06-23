@@ -1,0 +1,302 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+
+def model_root() -> Path:
+    return Path(os.environ.get("MODEL_ROOT", "/models"))
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default).strip()
+
+
+MODEL_REGISTRY = {
+    "openclip-vit-l": {
+        "name": "OpenCLIP ViT-L-14",
+        "category": "vision",
+        "kind": "runtime-cache",
+        "description": "Default local scene, clothing, style, and content tag model.",
+        "path": "torch",
+        "command": "openclip",
+        "model": "ViT-L-14",
+        "pretrained": "laion2b_s32b_b82k",
+        "recommended": True,
+    },
+    "openclip-vit-h": {
+        "name": "OpenCLIP ViT-H-14",
+        "category": "vision",
+        "kind": "runtime-cache",
+        "description": "Stronger low-confidence rescan model. Larger and slower.",
+        "path": "torch",
+        "command": "openclip",
+        "model": "ViT-H-14",
+        "pretrained": "laion2b_s32b_b79k",
+        "recommended": False,
+    },
+    "insightface-buffalo-l": {
+        "name": "InsightFace buffalo_l",
+        "category": "face",
+        "kind": "runtime-cache",
+        "description": "Local face detection and same-face embedding model.",
+        "path": "insightface/models/buffalo_l",
+        "command": "insightface",
+        "recommended": True,
+    },
+    "faster-whisper-small": {
+        "name": "faster-whisper small",
+        "category": "speech",
+        "kind": "runtime-cache",
+        "description": "Fallback speech-to-text model when SenseVoice GGUF is unavailable.",
+        "path": "whisper",
+        "command": "faster-whisper",
+        "model": "small",
+        "recommended": False,
+    },
+    "sensevoice-small-gguf": {
+        "name": "SenseVoice Small GGUF",
+        "category": "speech",
+        "kind": "file",
+        "description": "Preferred full-video speech recognition model for Mandarin/Japanese mixed media.",
+        "path": "sensevoice/SenseVoiceSmall.gguf",
+        "url_env": "SENSEVOICE_GGUF_URL",
+        "sha256_env": "SENSEVOICE_GGUF_SHA256",
+        "recommended": True,
+    },
+    "custom-detector-onnx": {
+        "name": "Custom detector ONNX",
+        "category": "vision",
+        "kind": "file",
+        "description": "Optional future clothing/scene detector exported from your own labeled data.",
+        "path": "detectors/custom.onnx",
+        "url_env": "CUSTOM_DETECTOR_ONNX_URL",
+        "sha256_env": "CUSTOM_DETECTOR_ONNX_SHA256",
+        "recommended": False,
+    },
+}
+
+
+def _safe_path(relative: str) -> Path:
+    root = model_root().resolve()
+    path = (root / relative).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError("Model path escapes MODEL_ROOT")
+    return path
+
+
+def _dir_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file():
+        return path.stat().st_size
+    total = 0
+    for item in path.rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _is_present(path: Path, kind: str) -> bool:
+    if kind == "file":
+        return path.is_file() and path.stat().st_size > 0
+    if not path.exists():
+        return False
+    if path.is_file():
+        return path.stat().st_size > 0
+    return any(path.iterdir())
+
+
+def _marker_path(model_id: str) -> Path:
+    return _safe_path(f".tgmm-models/{model_id}.ready")
+
+
+def _model_status(model_id: str, spec: dict) -> dict:
+    path = _safe_path(str(spec["path"]))
+    url = _env(str(spec.get("url_env", ""))) if spec.get("url_env") else ""
+    present = _is_present(path, str(spec["kind"]))
+    if spec["kind"] == "runtime-cache" and spec.get("command") in {"openclip", "faster-whisper"}:
+        present = _marker_path(model_id).exists()
+    status = "ready" if present else ("needs_url" if spec["kind"] == "file" and not url else "missing")
+    return {
+        "id": model_id,
+        "name": spec["name"],
+        "category": spec["category"],
+        "kind": spec["kind"],
+        "description": spec["description"],
+        "recommended": bool(spec.get("recommended")),
+        "path": str(path),
+        "status": status,
+        "present": present,
+        "bytes": _dir_size(path),
+        "url_env": spec.get("url_env", ""),
+        "url_configured": bool(url),
+        "sha256_env": spec.get("sha256_env", ""),
+    }
+
+
+def model_catalog() -> dict:
+    root = model_root()
+    return {
+        "root": str(root),
+        "models": [_model_status(model_id, spec) for model_id, spec in MODEL_REGISTRY.items()],
+    }
+
+
+def delete_model(model_id: str) -> dict:
+    spec = MODEL_REGISTRY.get(model_id)
+    if not spec:
+        raise ValueError("Unknown model")
+    path = _safe_path(str(spec["path"]))
+    marker = _marker_path(model_id)
+    if spec["kind"] == "runtime-cache" and spec.get("command") in {"openclip", "faster-whisper"}:
+        deleted = False
+        if marker.exists():
+            marker.unlink()
+            deleted = True
+        return {"ok": True, "deleted": deleted, "path": str(path), "note": "shared runtime cache kept; readiness marker removed"}
+    if not path.exists():
+        return {"ok": True, "deleted": False, "path": str(path)}
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    if marker.exists():
+        marker.unlink()
+    return {"ok": True, "deleted": True, "path": str(path)}
+
+
+def _progress(stage: str, processed: int, total: int, current: str = "") -> None:
+    pct = int(processed / total * 100) if total else 0
+    print(
+        "TGMM_PROGRESS "
+        + json.dumps(
+            {
+                "stage": stage,
+                "processed": processed,
+                "total": total,
+                "progress": max(0, min(99, pct)),
+                "current": current,
+                "message": f"{stage}: {processed}/{total}",
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
+
+
+def _cancelled() -> bool:
+    cancel = os.environ.get("TGMM_CANCEL_FILE", "")
+    return bool(cancel and Path(cancel).exists())
+
+
+def _verify_sha256(path: Path, expected: str) -> None:
+    if not expected:
+        return
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    if actual.lower() != expected.lower():
+        raise RuntimeError(f"sha256 mismatch for {path.name}: expected {expected}, got {actual}")
+
+
+def _download_file(model_id: str, spec: dict) -> dict:
+    url = _env(str(spec.get("url_env", "")))
+    if not url:
+        raise RuntimeError(f"{spec['url_env']} is not configured; set it in compose/.env, then pull again")
+    path = _safe_path(str(spec["path"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    part = path.with_suffix(path.suffix + ".part")
+    req = urllib.request.Request(url, headers={"User-Agent": "tg-media-manager/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as response, part.open("wb") as fh:
+        total = int(response.headers.get("Content-Length") or 0)
+        done = 0
+        last_emit = 0.0
+        while True:
+            if _cancelled():
+                raise KeyboardInterrupt("cancelled")
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            fh.write(chunk)
+            done += len(chunk)
+            now = time.time()
+            if total and now - last_emit > 1:
+                _progress("model-download", done, total, path.name)
+                last_emit = now
+    _verify_sha256(part, _env(str(spec.get("sha256_env", ""))))
+    part.replace(path)
+    _progress("model-download", 1, 1, path.name)
+    return {"ok": True, "model": model_id, "path": str(path), "bytes": path.stat().st_size}
+
+
+def _run_cache_command(model_id: str, spec: dict) -> dict:
+    root = model_root()
+    root.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env.setdefault("MODEL_ROOT", str(root))
+    env.setdefault("TORCH_HOME", str(root / "torch"))
+    env.setdefault("HF_HOME", str(root / "huggingface"))
+    env.setdefault("XDG_CACHE_HOME", str(root / "cache"))
+    env.setdefault("INSIGHTFACE_HOME", str(root / "insightface"))
+    command = spec["command"]
+    if command == "openclip":
+        code = (
+            "import open_clip\n"
+            f"print('downloading {spec['model']} {spec['pretrained']}')\n"
+            f"open_clip.create_model_and_transforms({spec['model']!r}, pretrained={spec['pretrained']!r}, device='cpu')\n"
+            "print('ok')\n"
+        )
+    elif command == "insightface":
+        code = (
+            "from insightface.app import FaceAnalysis\n"
+            "import os\n"
+            "root=os.environ.get('INSIGHTFACE_HOME','/models/insightface')\n"
+            "print('downloading insightface buffalo_l')\n"
+            "app=FaceAnalysis(name='buffalo_l', root=root, providers=['CPUExecutionProvider'])\n"
+            "app.prepare(ctx_id=-1, det_size=(640,640))\n"
+            "print('ok')\n"
+        )
+    elif command == "faster-whisper":
+        code = (
+            "from faster_whisper import WhisperModel\n"
+            "import os\n"
+            "root=os.path.join(os.environ.get('MODEL_ROOT','/models'),'whisper')\n"
+            f"print('downloading faster-whisper {spec['model']}')\n"
+            f"WhisperModel({spec['model']!r}, device='cpu', compute_type='int8', download_root=root)\n"
+            "print('ok')\n"
+        )
+    else:
+        raise RuntimeError(f"Unsupported model cache command: {command}")
+    _progress("model-download", 0, 1, model_id)
+    proc = subprocess.run([sys.executable, "-c", code], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=3600)
+    print(proc.stdout, end="", flush=True)
+    if proc.returncode != 0:
+        print(proc.stderr, end="", flush=True)
+        raise RuntimeError(f"{model_id} download failed with exit {proc.returncode}")
+    marker = _marker_path(model_id)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"model": model_id, "created_at": time.time()}, ensure_ascii=False), encoding="utf-8")
+    _progress("model-download", 1, 1, model_id)
+    return {"ok": True, "model": model_id, "path": str(_safe_path(str(spec["path"]))), "stdout": proc.stdout[-4000:]}
+
+
+def pull_model(model_id: str) -> dict:
+    spec = MODEL_REGISTRY.get(model_id)
+    if not spec:
+        raise ValueError("Unknown model")
+    if spec["kind"] == "file":
+        return _download_file(model_id, spec)
+    return _run_cache_command(model_id, spec)
