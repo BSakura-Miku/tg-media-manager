@@ -1380,8 +1380,10 @@ function DashboardPanel({ summary, jobs, mediaResults, tagGraph, loadMedia, setA
   const runningJobs = jobs.filter(job => job.status === 'running' || job.status === 'queued');
   const items = (mediaResults.items || []).slice(0, 6);
   const mediaTotal = estimatedMediaTotal(summary, mediaResults);
+  const videoCount = summary?.media_types?.video ?? mediaResults.video_total ?? 0;
+  const photoCount = summary?.media_types?.photo ?? mediaResults.photo_total ?? 0;
   const stats = [
-    [t.totalMedia, mediaTotal, FolderOpen, 'blue', `${t.videos} ${prettyNumber(mediaResults.video_total || 0)} / ${t.photos} ${prettyNumber(mediaResults.photo_total || 0)}`],
+    [t.totalMedia, mediaTotal, FolderOpen, 'blue', `${t.videos} ${prettyNumber(videoCount)} / ${t.photos} ${prettyNumber(photoCount)}`],
     [t.totalTags, keywords.length || top.keywords, Tags, 'purple', `${t.keywords} ${prettyNumber(top.keywords || 0)}`],
     [t.totalAuthors, actors.length || top.actors, Users, 'green', `${t.actors} ${prettyNumber(top.actors || 0)}`],
     [t.faces, top.faces || summary?.vision?.face_group_rows || 0, ScanFace, 'orange', `${t.faceRows} ${prettyNumber(summary?.vision?.face_index_rows || 0)}`],
