@@ -283,27 +283,59 @@ def ffmpeg_hw_prefix() -> list[str]:
 
 
 THUMB_SIZE = (800, 520)
+MEDIA_THUMB_CACHE = "media_thumbs_v3"
+
+
+def trim_near_black_border(image):
+    try:
+        gray = ImageOps.grayscale(image)
+        width, height = gray.size
+        pixels = gray.load()
+
+        def row_has_content(y: int) -> bool:
+            values = [pixels[x, y] for x in range(width)]
+            return max(values) > 34 or (sum(values) / max(1, width)) > 14
+
+        def col_has_content(x: int) -> bool:
+            values = [pixels[x, y] for y in range(height)]
+            return max(values) > 34 or (sum(values) / max(1, height)) > 14
+
+        top = next((y for y in range(height) if row_has_content(y)), 0)
+        bottom = next((y for y in range(height - 1, -1, -1) if row_has_content(y)), height - 1) + 1
+        left = next((x for x in range(width) if col_has_content(x)), 0)
+        right = next((x for x in range(width - 1, -1, -1) if col_has_content(x)), width - 1) + 1
+    except Exception:
+        return image
+    crop_width = max(1, right - left)
+    crop_height = max(1, bottom - top)
+    if crop_width < width * 0.12 or crop_height < height * 0.08:
+        return image
+    if crop_width * crop_height < width * height * 0.04:
+        return image
+    if (left, top, right, bottom) == (0, 0, width, height):
+        return image
+    return image.crop((left, top, right, bottom))
 
 
 def trim_uniform_border(image):
     if ImageChops is None:
-        return image
+        return trim_near_black_border(image)
     try:
         bg = Image.new(image.mode, image.size, image.getpixel((0, 0)))
         diff = ImageChops.difference(image, bg)
         bbox = diff.getbbox()
     except Exception:
-        return image
+        return trim_near_black_border(image)
     if not bbox:
         return image
     left, top, right, bottom = bbox
     original_area = image.size[0] * image.size[1]
     cropped_area = max(1, right - left) * max(1, bottom - top)
-    if cropped_area < original_area * 0.18:
-        return image
     if (left, top, right, bottom) == (0, 0, image.size[0], image.size[1]):
-        return image
-    return image.crop(bbox)
+        return trim_near_black_border(image)
+    if cropped_area < original_area * 0.04:
+        return trim_near_black_border(image)
+    return trim_near_black_border(image.crop(bbox))
 
 
 def write_smart_thumbnail(src: Path, dest: Path) -> bool:
@@ -668,7 +700,7 @@ def api_media_file(media_id: int):
 def api_media_thumbnail(media_id: int):
     detail = checked_media_detail(media_id)
     path = Path(detail["path"])
-    thumb_dir = output_root() / "_MANIFESTS" / "media_thumbs_v2"
+    thumb_dir = output_root() / "_MANIFESTS" / MEDIA_THUMB_CACHE
     thumb = thumb_dir / f"{media_id}.jpg"
     if thumb.exists():
         return FileResponse(thumb, media_type="image/jpeg")
