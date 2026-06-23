@@ -117,6 +117,29 @@ def create_job(command: str) -> int:
     return job_id
 
 
+def mark_interrupted_jobs() -> int:
+    with connect() as conn:
+        rows = conn.execute("SELECT id FROM jobs WHERE status IN ('queued', 'running')").fetchall()
+        if not rows:
+            return 0
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='failed',
+                progress=0,
+                finished_at=CURRENT_TIMESTAMP,
+                message='interrupted by service restart; cached outputs are kept and the job can be rerun',
+                stderr=CASE
+                    WHEN stderr='' THEN 'interrupted by service restart'
+                    ELSE stderr || char(10) || 'interrupted by service restart'
+                END,
+                heartbeat_at=CURRENT_TIMESTAMP
+            WHERE status IN ('queued', 'running')
+            """
+        )
+    return len(rows)
+
+
 def cancel_file(job_id: int) -> Path:
     return Path(os.environ.get("JOB_CANCEL_DIR", "/tmp/tgmm-jobs")) / f"{job_id}.cancel"
 

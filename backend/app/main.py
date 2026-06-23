@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .db import connect, get_settings, init_db, rows_to_dicts, save_settings
-from .jobs import ALLOWED_COMMANDS, create_job, request_job_cancel
+from .jobs import ALLOWED_COMMANDS, create_job, mark_interrupted_jobs, request_job_cancel
 from .media_stats import summary
 from .metadata import (
     media_by_relative_paths,
@@ -133,6 +133,7 @@ class AuthRequest(BaseModel):
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    mark_interrupted_jobs()
     start_monitor_thread()
 
 
