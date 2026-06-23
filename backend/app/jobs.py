@@ -73,6 +73,31 @@ def create_job(command: str) -> int:
     return job_id
 
 
+def hardware_env(settings: dict) -> dict[str, str]:
+    env = os.environ.copy()
+    compute = (settings.get("compute_device") or os.environ.get("COMPUTE_DEVICE", "auto")).lower()
+    ffmpeg = settings.get("ffmpeg_hwaccel") or os.environ.get("FFMPEG_HWACCEL", "auto")
+    face = settings.get("face_providers") or os.environ.get("FACE_PROVIDERS", "")
+    openvino = settings.get("openvino_device") or os.environ.get("OPENVINO_DEVICE", "")
+    whisper = settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", "cpu")
+    if compute == "cpu":
+        ffmpeg = "none"
+        face = "CPUExecutionProvider"
+        openvino = "CPU"
+        whisper = "cpu"
+    elif compute == "gpu":
+        ffmpeg = ffmpeg if ffmpeg != "none" else "auto"
+        face = face or "OpenVINOExecutionProvider,CPUExecutionProvider"
+        openvino = openvino or "GPU"
+    env["COMPUTE_DEVICE"] = compute
+    env["FFMPEG_HWACCEL"] = ffmpeg
+    env["FACE_PROVIDERS"] = face or "OpenVINOExecutionProvider,CPUExecutionProvider"
+    env["OPENVINO_DEVICE"] = openvino or "GPU"
+    env["WHISPER_DEVICE"] = whisper
+    env.setdefault("WHISPER_COMPUTE_TYPE", "int8")
+    return env
+
+
 def run_job(job_id: int, command: str) -> None:
     settings = get_settings()
     media_root = settings.get("media_root") or os.environ.get("MEDIA_ROOT", "/media")
@@ -82,6 +107,8 @@ def run_job(job_id: int, command: str) -> None:
     if steps and isinstance(steps[0], str):
         steps = [steps]
     base_args = ["python", str(core_script()), "--root", media_root, "--output-root", output_root]
+    env = hardware_env(settings)
+    os.environ.update({key: value for key, value in env.items() if key in {"COMPUTE_DEVICE", "FFMPEG_HWACCEL", "FACE_PROVIDERS", "OPENVINO_DEVICE", "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE"}})
     if source_dirs:
         base_args.extend(["--source-dirs", source_dirs])
     with connect() as conn:
@@ -122,7 +149,7 @@ def run_job(job_id: int, command: str) -> None:
                 returncode = 0 if result.get("ok") else 1
             else:
                 step_args = [*base_args, *step]
-                proc = subprocess.run(step_args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
+                proc = subprocess.run(step_args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None, env=env)
                 stdout_parts.append(f"$ {' '.join(step_args)}\n{proc.stdout}")
                 if proc.stderr:
                     stderr_parts.append(f"$ {' '.join(step_args)}\n{proc.stderr}")

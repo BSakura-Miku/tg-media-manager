@@ -143,6 +143,20 @@ const i18n = {
     noRows: 'No rows',
     mediaRoot: 'Media source root',
     outputRoot: 'Organized library root',
+    hardware: 'Compute hardware',
+    computeDevice: 'Compute mode',
+    ffmpegHwaccel: 'Video decode',
+    openvinoDevice: 'OpenVINO device',
+    faceProviders: 'Face inference provider',
+    whisperDevice: 'Speech device',
+    ffmpegNone: 'Software decode',
+    openvinoAuto: 'OpenVINO Auto',
+    cpuOnly: 'CPU only',
+    gpuPreferred: 'GPU preferred',
+    gpuHint: 'These settings are passed to scan, face, vision, video decode, and speech jobs. Use CPU only if the GPU driver is unstable.',
+    auto: 'Auto',
+    gpu: 'GPU',
+    cpu: 'CPU',
     sourceDirs: 'Source subdirectories',
     sourceDirsHint: 'Comma separated. Leave empty to scan the whole source root.',
     monitor: 'Folder monitor',
@@ -220,6 +234,8 @@ const i18n = {
     openMedia: 'Open',
     mediaDetail: 'Media detail',
     originalName: 'Original name',
+    sourceOriginalPath: 'Original source path',
+    indexedName: 'Library filename',
     filePath: 'File path',
     tags: 'Tags',
     timeline: 'Timeline',
@@ -412,6 +428,20 @@ const i18n = {
     noRows: '没有记录',
     mediaRoot: '媒体来源目录',
     outputRoot: '整理后媒体库目录',
+    hardware: '计算硬件',
+    computeDevice: '计算模式',
+    ffmpegHwaccel: '视频解码',
+    openvinoDevice: 'OpenVINO 设备',
+    faceProviders: '人脸推理后端',
+    whisperDevice: '语音识别设备',
+    ffmpegNone: '软件解码',
+    openvinoAuto: 'OpenVINO 自动',
+    cpuOnly: '仅 CPU',
+    gpuPreferred: '优先 GPU',
+    gpuHint: '这些设置会传给扫描、人脸、视觉、视频解码和语音识别任务。如果核显驱动不稳定，可以切到仅 CPU。',
+    auto: '自动',
+    gpu: 'GPU',
+    cpu: 'CPU',
     sourceDirs: '来源子目录',
     sourceDirsHint: '英文逗号分隔；留空则扫描整个来源目录。',
     monitor: '目录监控',
@@ -489,6 +519,8 @@ const i18n = {
     openMedia: '打开',
     mediaDetail: '媒体详情',
     originalName: '原始文件名',
+    sourceOriginalPath: '最初来源路径',
+    indexedName: '库内文件名',
     filePath: '文件路径',
     tags: '标签',
     timeline: '时间轴',
@@ -666,6 +698,35 @@ function estimatedMediaTotal(summary, mediaResults) {
   if (Number(mediaResults?.total || 0) > 0) return Number(mediaResults.total);
   const known = Number(top.actors || 0) + Number(top.keywords || 0) + Number(top.unknown || 0) + Number(top.duplicates || 0);
   return known || 0;
+}
+
+function initialAspect(item) {
+  const width = Number(item?.width || 0);
+  const height = Number(item?.height || 0);
+  if (width > 0 && height > 0) return Math.max(0.55, Math.min(1.9, width / height));
+  return item?.media_type === 'video' ? 16 / 9 : 4 / 5;
+}
+
+function MediaThumbImage({ item, className = 'mediaThumb', label = '' }) {
+  const [aspect, setAspect] = useState(initialAspect(item));
+  const badge = label || (item.media_type === 'video' ? 'VID' : 'IMG');
+  return (
+    <div className={className} style={{ '--thumb-ratio': String(aspect) }}>
+      <img
+        src={`/api/media/${item.id}/thumbnail`}
+        alt={item.filename}
+        loading="lazy"
+        onLoad={event => {
+          const img = event.currentTarget;
+          if (img.naturalWidth && img.naturalHeight) {
+            setAspect(Math.max(0.48, Math.min(2.1, img.naturalWidth / img.naturalHeight)));
+          }
+        }}
+        onError={event => { event.currentTarget.style.display = 'none'; }}
+      />
+      <span>{badge}</span>
+    </div>
+  );
 }
 
 function LoginScreen({ login, error, theme, setTheme, t, version }) {
@@ -1175,10 +1236,12 @@ function RecentMediaPanel({ items, total, setActive, t }) {
 function RecentMediaCard({ item, open }) {
   return (
     <button className="recentCard" onClick={() => open(item)}>
-      <img src={`/api/media/${item.id}/thumbnail`} alt={item.filename} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} />
-      <span>{item.media_type === 'video' ? <Film size={14} /> : <ImageIcon size={14} />}{item.media_type}</span>
-      <strong>{item.author || item.scene || item.filename}</strong>
-      <small>{item.duration ? formatSeconds(item.duration) : item.quality || ''}</small>
+      <MediaThumbImage item={item} className="recentThumb" />
+      <div className="recentMeta">
+        <span>{item.media_type === 'video' ? <Film size={14} /> : <ImageIcon size={14} />}{item.media_type}</span>
+        <strong>{item.author || item.scene || item.filename}</strong>
+        <small>{item.duration ? formatSeconds(item.duration) : item.quality || ''}</small>
+      </div>
     </button>
   );
 }
@@ -1356,6 +1419,8 @@ function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
   const [focusedTag, setFocusedTag] = useState('');
   const [draggingTag, setDraggingTag] = useState('');
   const [manualPositions, setManualPositions] = useState({});
+  const [hoverPoint, setHoverPoint] = useState(null);
+  const [zoom, setZoom] = useState(1);
   const nodes = graph.nodes || [];
   const edges = graph.edges || [];
   const topNodes = nodes.slice(0, 48);
@@ -1392,9 +1457,32 @@ function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
       y: Math.max(6, Math.min(94, ((event.clientY - rect.top) / Math.max(1, rect.height)) * 100)),
     };
   }
+  function displayPoint(point) {
+    if (!hoverPoint || draggingTag) return point;
+    const dx = hoverPoint.x - point.x;
+    const dy = hoverPoint.y - point.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    if (distance > 18) return point;
+    const pull = (1 - distance / 18) * 2.8;
+    return {
+      x: Math.max(4, Math.min(96, point.x + (dx / Math.max(1, distance)) * pull)),
+      y: Math.max(6, Math.min(94, point.y + (dy / Math.max(1, distance)) * pull)),
+    };
+  }
+  function displayPositions() {
+    const map = new Map();
+    positions.forEach((point, tag) => map.set(tag, displayPoint(point)));
+    return map;
+  }
   function moveNode(event) {
+    const point = svgPoint(event);
+    setHoverPoint(point);
     if (!draggingTag) return;
-    setManualPositions({ ...manualPositions, [draggingTag]: svgPoint(event) });
+    setManualPositions({ ...manualPositions, [draggingTag]: point });
+  }
+  function zoomGraph(event) {
+    event.preventDefault();
+    setZoom(value => Math.max(0.7, Math.min(1.55, value + (event.deltaY > 0 ? -0.08 : 0.08))));
   }
   function edgeIsFocused(edge) {
     return focusedTag && (edge.source === focusedTag || edge.target === focusedTag);
@@ -1403,21 +1491,24 @@ function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
     if (!focusedTag || tag === focusedTag) return false;
     return !focusedNeighbors.some(item => item.tag === tag);
   }
+  const drawnPositions = displayPositions();
+  const viewSize = 100 / zoom;
+  const viewOffset = (100 - viewSize) / 2;
   return (
     <>
       <section className="panel">
-        <div className="panelHead"><h2>{t.tagGraph}</h2><div className="panelActions"><select value={minEdge} onChange={event => setMinEdge(Number(event.target.value))}><option value="1">1+</option><option value="2">2+</option><option value="4">4+</option><option value="8">8+</option></select><button className="panelButton" onClick={() => loadTagGraph({ min_edge: minEdge })}><RefreshCw size={16} />{t.refreshGraph}</button></div><span>{nodes.length}</span></div>
+        <div className="panelHead"><h2>{t.tagGraph}</h2><div className="panelActions"><button className="iconButton mini" onClick={() => setZoom(value => Math.max(0.7, value - 0.12))}>-</button><button className="iconButton mini" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button><button className="iconButton mini" onClick={() => setZoom(value => Math.min(1.55, value + 0.12))}>+</button><select value={minEdge} onChange={event => setMinEdge(Number(event.target.value))}><option value="1">1+</option><option value="2">2+</option><option value="4">4+</option><option value="8">8+</option></select><button className="panelButton" onClick={() => loadTagGraph({ min_edge: minEdge })}><RefreshCw size={16} />{t.refreshGraph}</button></div><span>{nodes.length}</span></div>
         <div className="hintBox"><span>{t.tagGraphHelp} {t.tagGraphFocusHelp}</span></div>
         {!nodes.length ? <Empty label={t.tagGraphEmpty} /> : (
           <div className="graphLayout">
-            <svg className="tagGraphCanvas" viewBox="0 0 100 100" role="img" onPointerMove={moveNode} onPointerUp={() => setDraggingTag('')} onPointerLeave={() => setDraggingTag('')}>
+            <svg className="tagGraphCanvas" viewBox={`${viewOffset} ${viewOffset} ${viewSize} ${viewSize}`} role="img" onPointerMove={moveNode} onWheel={zoomGraph} onPointerUp={() => setDraggingTag('')} onPointerLeave={() => { setDraggingTag(''); setHoverPoint(null); }}>
               {edges.filter(edge => positions.has(edge.source) && positions.has(edge.target)).slice(0, 180).map(edge => {
-                const left = positions.get(edge.source);
-                const right = positions.get(edge.target);
+                const left = drawnPositions.get(edge.source);
+                const right = drawnPositions.get(edge.target);
                 return <line className={edgeIsFocused(edge) ? 'isFocused' : focusedTag ? 'isDimmed' : ''} key={`${edge.source}-${edge.target}`} x1={left.x} y1={left.y} x2={right.x} y2={right.y} strokeWidth={Math.min(2.2, 0.25 + Number(edge.weight || 1) / 18)} onClick={() => openTag(edge.source, edge.target)} />;
               })}
               {topNodes.map(node => {
-                const point = positions.get(node.tag);
+                const point = drawnPositions.get(node.tag);
                 const size = 1.8 + (Number(node.media_count || 0) / maxCount) * 4.2;
                 const classes = [focusedTag === node.tag ? 'isFocused' : '', nodeIsDimmed(node.tag) ? 'isDimmed' : ''].filter(Boolean).join(' ');
                 return (
@@ -1427,6 +1518,7 @@ function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
                   </g>
                 );
               })}
+              {hoverPoint && <circle className="graphCursor" cx={hoverPoint.x} cy={hoverPoint.y} r={2.4 / zoom} />}
             </svg>
             <div className="tagNodeList">
               {focusedTag && (
@@ -1561,10 +1653,7 @@ function MediaGrid({ items, t }) {
       <div className="mediaGrid">
         {items.map(item => (
           <button className="mediaCard" key={item.id} onClick={() => open(item)}>
-            <div className="mediaThumb">
-              <img src={`/api/media/${item.id}/thumbnail`} alt={item.filename} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} />
-              <span>{item.media_type === 'video' ? 'VID' : 'IMG'}</span>
-            </div>
+            <MediaThumbImage item={item} />
             <div className="mediaMeta">
               <strong>{item.author || item.person || item.filename}</strong>
               <p>{item.filename}</p>
@@ -1597,7 +1686,9 @@ function MediaViewer({ item, detail, close, t }) {
           <div className="viewerInfo">
             <div className="list">
               <div className="row"><span>{t.authorName}</span><strong>{data.author || '-'}</strong></div>
-              <div className="row"><span>{t.originalName}</span><strong>{data.original_name || data.filename}</strong></div>
+              <div className="row"><span>{t.originalName}</span><strong>{data.display_original_name || data.original_name || data.filename}</strong></div>
+              <div className="row"><span>{t.indexedName}</span><strong>{data.filename}</strong></div>
+              <div className="row"><span>{t.sourceOriginalPath}</span><strong>{data.source_original_path || '-'}</strong></div>
               <div className="row"><span>{t.filePath}</span><strong>{data.relative_path || data.filename}</strong></div>
               <div className="row"><span>{t.thumbnail}</span><strong>{data.resolution || data.quality || '-'}</strong></div>
               <div className="row"><span>{t.media}</span><strong>{data.media_type}</strong></div>
@@ -1834,7 +1925,21 @@ function LogsPanel({ jobs, applied, openJob, setActive, t }) {
 }
 
 function SettingsPanel({ settings, setSettings, saveSettings, browse, directories, browsePath, monitor, checkMonitorNow, t }) {
-  const cfg = settings || { media_root: '/media', output_root: '/media', source_dirs: '', language: 'zh-CN', monitor_enabled: false, monitor_dirs: '', monitor_interval_minutes: 10, browse_roots: ['/media'] };
+  const cfg = settings || {
+    media_root: '/media',
+    output_root: '/media',
+    source_dirs: '',
+    language: 'zh-CN',
+    compute_device: 'auto',
+    ffmpeg_hwaccel: 'auto',
+    openvino_device: 'GPU',
+    face_providers: 'OpenVINOExecutionProvider,CPUExecutionProvider',
+    whisper_device: 'cpu',
+    monitor_enabled: false,
+    monitor_dirs: '',
+    monitor_interval_minutes: 10,
+    browse_roots: ['/media'],
+  };
   function update(key, value) {
     setSettings({ ...cfg, [key]: value });
   }
@@ -1846,6 +1951,12 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
           <label>{t.mediaRoot}<input value={cfg.media_root || ''} onChange={event => update('media_root', event.target.value)} /></label>
           <label>{t.outputRoot}<input value={cfg.output_root || ''} onChange={event => update('output_root', event.target.value)} /></label>
           <label>{t.sourceDirs}<input value={cfg.source_dirs || ''} onChange={event => update('source_dirs', event.target.value)} placeholder="photos,photos2,videos,videos2" /><small>{t.sourceDirsHint}</small></label>
+          <div className="formSectionTitle">{t.hardware}</div>
+          <label>{t.computeDevice}<select value={cfg.compute_device || 'auto'} onChange={event => update('compute_device', event.target.value)}><option value="auto">{t.auto}</option><option value="gpu">{t.gpuPreferred}</option><option value="cpu">{t.cpuOnly}</option></select><small>{t.gpuHint}</small></label>
+          <label>{t.ffmpegHwaccel}<select value={cfg.ffmpeg_hwaccel || 'auto'} onChange={event => update('ffmpeg_hwaccel', event.target.value)}><option value="auto">{t.auto}</option><option value="vaapi">VAAPI</option><option value="qsv">Intel QSV</option><option value="none">{t.ffmpegNone}</option></select></label>
+          <label>{t.openvinoDevice}<select value={cfg.openvino_device || 'GPU'} onChange={event => update('openvino_device', event.target.value)}><option value="GPU">{t.gpu}</option><option value="CPU">{t.cpu}</option><option value="AUTO">{t.openvinoAuto}</option></select></label>
+          <label>{t.faceProviders}<select value={cfg.face_providers || 'OpenVINOExecutionProvider,CPUExecutionProvider'} onChange={event => update('face_providers', event.target.value)}><option value="OpenVINOExecutionProvider,CPUExecutionProvider">OpenVINO + CPU fallback</option><option value="CPUExecutionProvider">CPUExecutionProvider</option></select></label>
+          <label>{t.whisperDevice}<select value={cfg.whisper_device || 'cpu'} onChange={event => update('whisper_device', event.target.value)}><option value="cpu">{t.cpu}</option><option value="cuda">CUDA</option></select></label>
           <div className="formSectionTitle">{t.monitor}</div>
           <label className="checkLine"><input type="checkbox" checked={!!cfg.monitor_enabled} onChange={event => update('monitor_enabled', event.target.checked)} />{t.monitorEnabled}</label>
           <label>{t.monitorDirs}<input value={cfg.monitor_dirs || ''} onChange={event => update('monitor_dirs', event.target.value)} placeholder={cfg.source_dirs || 'photos,photos2,videos,videos2'} /><small>{t.monitorDirsHint}</small></label>

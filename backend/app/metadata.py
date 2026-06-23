@@ -438,6 +438,7 @@ def media_detail(media_id: int) -> dict | None:
         ops = conn.execute("SELECT operation, detail, created_at FROM media_operations WHERE media_id=? OR media_id IS NULL ORDER BY id DESC LIMIT 30", (media_id,)).fetchall()
         transcript = conn.execute("SELECT language, text, segments_json, model, source, updated_at FROM media_transcripts WHERE media_id=?", (media_id,)).fetchone()
     data = dict(row)
+    data.update(original_source_for_media(data))
     data["tags"] = [dict(item) for item in tags]
     data["timeline"] = [dict(item) for item in timeline]
     data["operations"] = [dict(item) for item in ops]
@@ -449,6 +450,37 @@ def media_detail(media_id: int) -> dict | None:
             transcript_data["segments"] = []
         data["transcript"] = transcript_data
     return data
+
+
+def original_source_for_media(data: dict) -> dict:
+    root = Path(data.get("root") or output_root())
+    manifests = root / "_MANIFESTS"
+    rel_path = data.get("relative_path", "")
+    filename = data.get("filename", "")
+    current_original = data.get("original_name", "")
+    hash_value = data.get("sha256", "")
+    hash8 = data.get("hash8", "")
+    result = {
+        "display_original_name": current_original or filename,
+        "source_original_path": "",
+        "original_name_source": "index",
+    }
+    for applied in read_csv(manifests / "applied_moves.csv"):
+        if applied.get("new_path") == rel_path or (hash_value and applied.get("hash_before") == hash_value):
+            original_path = applied.get("original_path", "")
+            result["source_original_path"] = original_path
+            result["display_original_name"] = Path(original_path).name or result["display_original_name"]
+            result["original_name_source"] = "applied_moves"
+            break
+    if result["original_name_source"] == "index":
+        for manifest in read_csv(manifests / "manifest_all.csv"):
+            if (hash_value and manifest.get("hash") == hash_value) or (hash8 and manifest.get("hash8") == hash8):
+                original_path = manifest.get("original_path", "")
+                result["source_original_path"] = original_path
+                result["display_original_name"] = manifest.get("original_name") or Path(original_path).name or result["display_original_name"]
+                result["original_name_source"] = "manifest_all"
+                break
+    return result
 
 
 def media_for_author(author: str, media_type: str = "all", limit: int = 80, offset: int = 0) -> dict:

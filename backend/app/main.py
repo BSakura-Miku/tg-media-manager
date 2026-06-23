@@ -81,6 +81,11 @@ class SettingsRequest(BaseModel):
     output_root: str = ""
     source_dirs: str = ""
     language: str = "zh-CN"
+    compute_device: str = "auto"
+    ffmpeg_hwaccel: str = "auto"
+    openvino_device: str = "GPU"
+    face_providers: str = "OpenVINOExecutionProvider,CPUExecutionProvider"
+    whisper_device: str = "cpu"
     monitor_enabled: bool = False
     monitor_dirs: str = ""
     monitor_interval_minutes: int = 10
@@ -175,11 +180,14 @@ def api_system_hardware() -> dict:
         except Exception as exc:
             return repr(exc)
 
+    settings = default_settings()
     return {
-        "ffmpeg_hwaccel": os.environ.get("FFMPEG_HWACCEL", ""),
+        "compute_device": settings.get("compute_device", "auto"),
+        "ffmpeg_hwaccel": settings.get("ffmpeg_hwaccel") or os.environ.get("FFMPEG_HWACCEL", ""),
         "ffmpeg_hw_device": os.environ.get("FFMPEG_HW_DEVICE", ""),
-        "face_providers": os.environ.get("FACE_PROVIDERS", ""),
-        "openvino_device": os.environ.get("OPENVINO_DEVICE", ""),
+        "face_providers": settings.get("face_providers") or os.environ.get("FACE_PROVIDERS", ""),
+        "openvino_device": settings.get("openvino_device") or os.environ.get("OPENVINO_DEVICE", ""),
+        "whisper_device": settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", ""),
         "dri_exists": Path("/dev/dri").exists(),
         "dri": run(["sh", "-lc", "ls -la /dev/dri 2>/dev/null || true"]),
         "ffmpeg_hwaccels": run(["ffmpeg", "-hide_banner", "-hwaccels"]),
@@ -277,10 +285,11 @@ def run_core_command(command: list[str], timeout: int = 120) -> subprocess.Compl
 
 
 def ffmpeg_hw_prefix() -> list[str]:
-    mode = os.environ.get("FFMPEG_HWACCEL", "").strip().lower()
+    settings = get_settings()
+    mode = (settings.get("ffmpeg_hwaccel") or os.environ.get("FFMPEG_HWACCEL", "")).strip().lower()
     if mode in {"", "none", "false", "0", "off"}:
         return []
-    device = os.environ.get("FFMPEG_HW_DEVICE", "/dev/dri/renderD128")
+    device = settings.get("ffmpeg_hw_device") or os.environ.get("FFMPEG_HW_DEVICE", "/dev/dri/renderD128")
     if mode in {"vaapi", "auto"} and Path(device).exists():
         return ["-hwaccel", "vaapi", "-hwaccel_device", device]
     if mode == "qsv":
@@ -288,8 +297,8 @@ def ffmpeg_hw_prefix() -> list[str]:
     return []
 
 
-THUMB_SIZE = (800, 520)
-MEDIA_THUMB_CACHE = "media_thumbs_v5"
+THUMB_SIZE = (900, 900)
+MEDIA_THUMB_CACHE = "media_thumbs_v6"
 
 
 def trim_near_black_border(image):
@@ -391,7 +400,7 @@ def write_smart_thumbnail(src: Path, dest: Path) -> bool:
             image = ImageOps.exif_transpose(opened).convert("RGB")
             image = trim_uniform_border(image)
             resampling = getattr(Image, "Resampling", Image).LANCZOS
-            image = ImageOps.fit(image, THUMB_SIZE, method=resampling, centering=(0.5, 0.35))
+            image.thumbnail(THUMB_SIZE, resampling)
             dest.parent.mkdir(parents=True, exist_ok=True)
             image.save(dest, "JPEG", quality=86, optimize=True)
         return dest.exists() and dest.stat().st_size > 0
@@ -506,6 +515,11 @@ def default_settings() -> dict:
         "output_root": output,
         "source_dirs": settings.get("source_dirs") or os.environ.get("MEDIA_SOURCE_DIRS", ""),
         "language": settings.get("language") or os.environ.get("APP_LANGUAGE", "zh-CN"),
+        "compute_device": settings.get("compute_device") or os.environ.get("COMPUTE_DEVICE", "auto"),
+        "ffmpeg_hwaccel": settings.get("ffmpeg_hwaccel") or os.environ.get("FFMPEG_HWACCEL", "auto"),
+        "openvino_device": settings.get("openvino_device") or os.environ.get("OPENVINO_DEVICE", "GPU"),
+        "face_providers": settings.get("face_providers") or os.environ.get("FACE_PROVIDERS", "OpenVINOExecutionProvider,CPUExecutionProvider"),
+        "whisper_device": settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", "cpu"),
         "monitor_enabled": (settings.get("monitor_enabled") or os.environ.get("MONITOR_ENABLED", "false")).lower() in {"1", "true", "yes", "on"},
         "monitor_dirs": settings.get("monitor_dirs") or os.environ.get("MONITOR_DIRS", ""),
         "monitor_interval_minutes": monitor_interval_value,
@@ -551,6 +565,11 @@ def api_save_settings(req: SettingsRequest) -> dict:
     if not path_in_allowed_roots(Path(media)) or not path_in_allowed_roots(Path(output)):
         raise HTTPException(status_code=400, detail="Path is outside configured browse roots")
     language = req.language if req.language in {"en", "zh-CN"} else "zh-CN"
+    compute_device = req.compute_device if req.compute_device in {"auto", "gpu", "cpu"} else "auto"
+    ffmpeg_hwaccel = req.ffmpeg_hwaccel if req.ffmpeg_hwaccel in {"auto", "none", "vaapi", "qsv"} else "auto"
+    openvino_device = req.openvino_device if req.openvino_device in {"AUTO", "GPU", "CPU"} else "GPU"
+    face_providers = req.face_providers if req.face_providers in {"OpenVINOExecutionProvider,CPUExecutionProvider", "CPUExecutionProvider"} else "OpenVINOExecutionProvider,CPUExecutionProvider"
+    whisper_device = req.whisper_device if req.whisper_device in {"cpu", "cuda"} else "cpu"
     source_dirs = ",".join(part.strip().strip("/") for part in req.source_dirs.split(",") if part.strip())
     monitor_dirs = ",".join(part.strip().strip("/") for part in req.monitor_dirs.split(",") if part.strip())
     try:
@@ -563,6 +582,11 @@ def api_save_settings(req: SettingsRequest) -> dict:
         "output_root": output,
         "source_dirs": source_dirs,
         "language": language,
+        "compute_device": compute_device,
+        "ffmpeg_hwaccel": ffmpeg_hwaccel,
+        "openvino_device": openvino_device,
+        "face_providers": face_providers,
+        "whisper_device": whisper_device,
         "monitor_enabled": "true" if req.monitor_enabled else "false",
         "monitor_dirs": monitor_dirs,
         "monitor_interval_minutes": interval,
