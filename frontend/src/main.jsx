@@ -149,6 +149,16 @@ const i18n = {
     openvinoDevice: 'OpenVINO device',
     faceProviders: 'Face inference provider',
     whisperDevice: 'Speech device',
+    asrEngine: 'Speech engine',
+    asrAuto: 'Auto: SenseVoice first, then Whisper',
+    asrSenseVoice: 'SenseVoice GGUF',
+    asrWhisper: 'faster-whisper',
+    senseVoiceModel: 'SenseVoice GGUF model',
+    senseVoiceBin: 'SenseVoice runner',
+    senseVoiceCommand: 'Custom SenseVoice command',
+    senseVoiceCommandHint: 'Optional template. Use {audio}, {model}, {bin}; leave empty for the built-in command.',
+    transcribeMaxSeconds: 'Transcribe max seconds',
+    transcribeFullHint: '0 means full video. Use a positive value only for quick sampling.',
     ffmpegNone: 'Software decode',
     openvinoAuto: 'OpenVINO Auto',
     cpuOnly: 'CPU only',
@@ -438,6 +448,16 @@ const i18n = {
     openvinoDevice: 'OpenVINO 设备',
     faceProviders: '人脸推理后端',
     whisperDevice: '语音识别设备',
+    asrEngine: '语音识别引擎',
+    asrAuto: '自动：优先 SenseVoice，再回退 Whisper',
+    asrSenseVoice: 'SenseVoice GGUF',
+    asrWhisper: 'faster-whisper',
+    senseVoiceModel: 'SenseVoice GGUF 模型',
+    senseVoiceBin: 'SenseVoice 运行器',
+    senseVoiceCommand: '自定义 SenseVoice 命令',
+    senseVoiceCommandHint: '可选模板。支持 {audio}、{model}、{bin}；留空则使用内置命令。',
+    transcribeMaxSeconds: '每个视频识别秒数',
+    transcribeFullHint: '0 表示完整识别全片；只有快速抽样时才建议填正数。',
     ffmpegNone: '软件解码',
     openvinoAuto: 'OpenVINO 自动',
     cpuOnly: '仅 CPU',
@@ -2001,10 +2021,14 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
     openvino_device: 'GPU',
     face_providers: 'OpenVINOExecutionProvider,CPUExecutionProvider',
     whisper_device: 'cpu',
+    asr_engine: 'auto',
+    sensevoice_gguf_bin: 'llama-sensevoice',
+    sensevoice_gguf_model: '/models/sensevoice/SenseVoiceSmall.gguf',
+    sensevoice_gguf_command: '',
     frame_workers: 1,
     frames_per_video: 3,
     frame_checkpoint_every: 100,
-    transcribe_max_seconds: 900,
+    transcribe_max_seconds: 0,
     monitor_enabled: false,
     monitor_dirs: '',
     monitor_interval_minutes: 10,
@@ -2029,8 +2053,12 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
           <label>Checkpoint every<input type="number" min="10" max="1000" value={cfg.frame_checkpoint_every || 100} onChange={event => update('frame_checkpoint_every', event.target.value)} /><small>抽帧索引和任务进度的落盘频率。</small></label>
           <label>{t.openvinoDevice}<select value={cfg.openvino_device || 'GPU'} onChange={event => update('openvino_device', event.target.value)}><option value="GPU">{t.gpu}</option><option value="CPU">{t.cpu}</option><option value="AUTO">{t.openvinoAuto}</option></select></label>
           <label>{t.faceProviders}<select value={cfg.face_providers || 'OpenVINOExecutionProvider,CPUExecutionProvider'} onChange={event => update('face_providers', event.target.value)}><option value="OpenVINOExecutionProvider,CPUExecutionProvider">OpenVINO + CPU fallback</option><option value="CPUExecutionProvider">CPUExecutionProvider</option></select></label>
+          <label>{t.asrEngine}<select value={cfg.asr_engine || 'auto'} onChange={event => update('asr_engine', event.target.value)}><option value="auto">{t.asrAuto}</option><option value="sensevoice-gguf">{t.asrSenseVoice}</option><option value="faster-whisper">{t.asrWhisper}</option></select></label>
+          <label>{t.senseVoiceModel}<input value={cfg.sensevoice_gguf_model || '/models/sensevoice/SenseVoiceSmall.gguf'} onChange={event => update('sensevoice_gguf_model', event.target.value)} /></label>
+          <label>{t.senseVoiceBin}<input value={cfg.sensevoice_gguf_bin || 'llama-sensevoice'} onChange={event => update('sensevoice_gguf_bin', event.target.value)} /></label>
+          <label>{t.senseVoiceCommand}<input value={cfg.sensevoice_gguf_command || ''} onChange={event => update('sensevoice_gguf_command', event.target.value)} placeholder="{bin} -m {model} -f {audio} --language auto" /><small>{t.senseVoiceCommandHint}</small></label>
           <label>{t.whisperDevice}<select value={cfg.whisper_device || 'cpu'} onChange={event => update('whisper_device', event.target.value)}><option value="cpu">{t.cpu}</option><option value="cuda">CUDA</option></select></label>
-          <label>Transcribe max seconds<input type="number" min="30" max="86400" value={cfg.transcribe_max_seconds || 900} onChange={event => update('transcribe_max_seconds', event.target.value)} /><small>每个视频最多识别多少秒。</small></label>
+          <label>{t.transcribeMaxSeconds}<input type="number" min="0" max="86400" value={cfg.transcribe_max_seconds ?? 0} onChange={event => update('transcribe_max_seconds', event.target.value)} /><small>{t.transcribeFullHint}</small></label>
           <div className="formSectionTitle">{t.monitor}</div>
           <label className="checkLine"><input type="checkbox" checked={!!cfg.monitor_enabled} onChange={event => update('monitor_enabled', event.target.checked)} />{t.monitorEnabled}</label>
           <label>{t.monitorDirs}<input value={cfg.monitor_dirs || ''} onChange={event => update('monitor_dirs', event.target.value)} placeholder={cfg.source_dirs || 'photos,photos2,videos,videos2'} /><small>{t.monitorDirsHint}</small></label>

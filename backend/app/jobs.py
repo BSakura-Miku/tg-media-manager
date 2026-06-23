@@ -135,6 +135,7 @@ def hardware_env(settings: dict) -> dict[str, str]:
     face = settings.get("face_providers") or os.environ.get("FACE_PROVIDERS", "")
     openvino = settings.get("openvino_device") or os.environ.get("OPENVINO_DEVICE", "")
     whisper = settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", "cpu")
+    asr_engine = settings.get("asr_engine") or os.environ.get("ASR_ENGINE", "auto")
     if compute == "cpu":
         ffmpeg = "none"
         face = "CPUExecutionProvider"
@@ -151,9 +152,14 @@ def hardware_env(settings: dict) -> dict[str, str]:
     env["OPENVINO_DEVICE"] = openvino or "GPU"
     env["WHISPER_DEVICE"] = whisper
     env.setdefault("WHISPER_COMPUTE_TYPE", "int8")
+    env["ASR_ENGINE"] = asr_engine
+    env["SENSEVOICE_GGUF_BIN"] = settings.get("sensevoice_gguf_bin") or os.environ.get("SENSEVOICE_GGUF_BIN", "llama-sensevoice")
+    env["SENSEVOICE_GGUF_MODEL"] = settings.get("sensevoice_gguf_model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "/models/sensevoice/SenseVoiceSmall.gguf")
+    if settings.get("sensevoice_gguf_command") or os.environ.get("SENSEVOICE_GGUF_COMMAND"):
+        env["SENSEVOICE_GGUF_COMMAND"] = settings.get("sensevoice_gguf_command") or os.environ.get("SENSEVOICE_GGUF_COMMAND", "")
     env["FRAME_WORKERS"] = str(settings.get("frame_workers") or os.environ.get("FRAME_WORKERS", "1"))
     env["FRAME_CHECKPOINT_EVERY"] = str(settings.get("frame_checkpoint_every") or os.environ.get("FRAME_CHECKPOINT_EVERY", "100"))
-    env["TRANSCRIBE_MAX_SECONDS"] = str(settings.get("transcribe_max_seconds") or os.environ.get("TRANSCRIBE_MAX_SECONDS", "900"))
+    env["TRANSCRIBE_MAX_SECONDS"] = str(settings.get("transcribe_max_seconds") or os.environ.get("TRANSCRIBE_MAX_SECONDS", "0"))
     return env
 
 
@@ -321,7 +327,14 @@ def run_job(job_id: int, command: str) -> None:
         cancel.unlink()
     except OSError:
         pass
-    os.environ.update({key: value for key, value in env.items() if key in {"COMPUTE_DEVICE", "FFMPEG_HWACCEL", "FACE_PROVIDERS", "OPENVINO_DEVICE", "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE"}})
+    os.environ.update({
+        key: value for key, value in env.items()
+        if key in {
+            "COMPUTE_DEVICE", "FFMPEG_HWACCEL", "FACE_PROVIDERS", "OPENVINO_DEVICE",
+            "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE", "ASR_ENGINE", "SENSEVOICE_GGUF_BIN",
+            "SENSEVOICE_GGUF_MODEL", "SENSEVOICE_GGUF_COMMAND", "TRANSCRIBE_MAX_SECONDS",
+        }
+    })
     if source_dirs:
         base_args.extend(["--source-dirs", source_dirs])
     with connect() as conn:

@@ -86,10 +86,14 @@ class SettingsRequest(BaseModel):
     openvino_device: str = "GPU"
     face_providers: str = "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device: str = "cpu"
+    asr_engine: str = "auto"
+    sensevoice_gguf_bin: str = "llama-sensevoice"
+    sensevoice_gguf_model: str = "/models/sensevoice/SenseVoiceSmall.gguf"
+    sensevoice_gguf_command: str = ""
     frame_workers: int = 1
     frames_per_video: int = 3
     frame_checkpoint_every: int = 100
-    transcribe_max_seconds: int = 900
+    transcribe_max_seconds: int = 0
     monitor_enabled: bool = False
     monitor_dirs: str = ""
     monitor_interval_minutes: int = 10
@@ -540,10 +544,14 @@ def default_settings() -> dict:
         "openvino_device": settings.get("openvino_device") or os.environ.get("OPENVINO_DEVICE", "GPU"),
         "face_providers": settings.get("face_providers") or os.environ.get("FACE_PROVIDERS", "OpenVINOExecutionProvider,CPUExecutionProvider"),
         "whisper_device": settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", "cpu"),
+        "asr_engine": settings.get("asr_engine") or os.environ.get("ASR_ENGINE", "auto"),
+        "sensevoice_gguf_bin": settings.get("sensevoice_gguf_bin") or os.environ.get("SENSEVOICE_GGUF_BIN", "llama-sensevoice"),
+        "sensevoice_gguf_model": settings.get("sensevoice_gguf_model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "/models/sensevoice/SenseVoiceSmall.gguf"),
+        "sensevoice_gguf_command": settings.get("sensevoice_gguf_command") or os.environ.get("SENSEVOICE_GGUF_COMMAND", ""),
         "frame_workers": setting_int("frame_workers", "FRAME_WORKERS", 1, 1, 16),
         "frames_per_video": setting_int("frames_per_video", "FRAMES_PER_VIDEO", 3, 1, 12),
         "frame_checkpoint_every": setting_int("frame_checkpoint_every", "FRAME_CHECKPOINT_EVERY", 100, 10, 1000),
-        "transcribe_max_seconds": setting_int("transcribe_max_seconds", "TRANSCRIBE_MAX_SECONDS", 900, 30, 86400),
+        "transcribe_max_seconds": setting_int("transcribe_max_seconds", "TRANSCRIBE_MAX_SECONDS", 0, 0, 86400),
         "monitor_enabled": (settings.get("monitor_enabled") or os.environ.get("MONITOR_ENABLED", "false")).lower() in {"1", "true", "yes", "on"},
         "monitor_dirs": settings.get("monitor_dirs") or os.environ.get("MONITOR_DIRS", ""),
         "monitor_interval_minutes": monitor_interval_value,
@@ -594,6 +602,16 @@ def api_save_settings(req: SettingsRequest) -> dict:
     openvino_device = req.openvino_device if req.openvino_device in {"AUTO", "GPU", "CPU"} else "GPU"
     face_providers = req.face_providers if req.face_providers in {"OpenVINOExecutionProvider,CPUExecutionProvider", "CPUExecutionProvider"} else "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device = req.whisper_device if req.whisper_device in {"cpu", "cuda"} else "cpu"
+    asr_engine = req.asr_engine if req.asr_engine in {"auto", "sensevoice-gguf", "sensevoice", "faster-whisper", "whisper"} else "auto"
+    if asr_engine == "sensevoice":
+        asr_engine = "sensevoice-gguf"
+    if asr_engine == "whisper":
+        asr_engine = "faster-whisper"
+    sensevoice_gguf_bin = (req.sensevoice_gguf_bin or "llama-sensevoice").strip()
+    sensevoice_gguf_model = (req.sensevoice_gguf_model or "/models/sensevoice/SenseVoiceSmall.gguf").strip()
+    if sensevoice_gguf_model and not sensevoice_gguf_model.startswith("/"):
+        raise HTTPException(status_code=400, detail="SenseVoice model path must be an absolute container path")
+    sensevoice_gguf_command = (req.sensevoice_gguf_command or "").strip()
     def clamp_int(value, default: int, low: int, high: int) -> str:
         try:
             parsed = int(value or default)
@@ -603,7 +621,7 @@ def api_save_settings(req: SettingsRequest) -> dict:
     frame_workers = clamp_int(req.frame_workers, 1, 1, 16)
     frames_per_video = clamp_int(req.frames_per_video, 3, 1, 12)
     frame_checkpoint_every = clamp_int(req.frame_checkpoint_every, 100, 10, 1000)
-    transcribe_max_seconds = clamp_int(req.transcribe_max_seconds, 900, 30, 86400)
+    transcribe_max_seconds = clamp_int(req.transcribe_max_seconds, 0, 0, 86400)
     source_dirs = ",".join(part.strip().strip("/") for part in req.source_dirs.split(",") if part.strip())
     monitor_dirs = ",".join(part.strip().strip("/") for part in req.monitor_dirs.split(",") if part.strip())
     try:
@@ -621,6 +639,10 @@ def api_save_settings(req: SettingsRequest) -> dict:
         "openvino_device": openvino_device,
         "face_providers": face_providers,
         "whisper_device": whisper_device,
+        "asr_engine": asr_engine,
+        "sensevoice_gguf_bin": sensevoice_gguf_bin,
+        "sensevoice_gguf_model": sensevoice_gguf_model,
+        "sensevoice_gguf_command": sensevoice_gguf_command,
         "frame_workers": frame_workers,
         "frames_per_video": frames_per_video,
         "frame_checkpoint_every": frame_checkpoint_every,

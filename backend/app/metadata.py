@@ -6,6 +6,8 @@ import json
 import mimetypes
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import time
 from collections import defaultdict
@@ -552,15 +554,212 @@ def media_by_relative_paths(root: Path, relative_paths: list[str], limit: int = 
     return {"items": [dict(row) for row in rows], "total": len(rows)}
 
 
-def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "base") -> dict:
+SENSEVOICE_TOKEN_TAGS = {
+    "HAPPY": ("voice_mood", "笑声愉悦", 0.76),
+    "SAD": ("voice_mood", "哭腔低落", 0.72),
+    "ANGRY": ("voice_mood", "强势命令", 0.70),
+    "NEUTRAL": ("voice_mood", "普通对白", 0.60),
+    "BGM": ("audio_event", "背景音乐", 0.82),
+    "MUSIC": ("audio_event", "背景音乐", 0.82),
+    "LAUGHTER": ("audio_event", "笑声", 0.86),
+    "LAUGH": ("audio_event", "笑声", 0.86),
+    "CRYING": ("audio_event", "哭声", 0.80),
+    "COUGH": ("audio_event", "咳嗽", 0.76),
+    "APPLAUSE": ("audio_event", "掌声", 0.72),
+    "SNEEZE": ("audio_event", "喷嚏", 0.72),
+}
+
+LANGUAGE_TAGS = {
+    "zh": "中文",
+    "yue": "粤语",
+    "en": "英语",
+    "ja": "日语",
+    "ko": "韩语",
+}
+
+AUDIO_TEXT_RULES = [
+    ("voice_mood", "撒娇", 0.72, ["哥哥", "不要嘛", "好不好嘛", "人家", "讨厌啦"]),
+    ("voice_mood", "害羞", 0.68, ["害羞", "不好意思", "别看", "不要看"]),
+    ("voice_mood", "挑逗", 0.72, ["想不想", "喜欢吗", "舒服吗", "乖", "听话"]),
+    ("voice_mood", "低语耳语", 0.68, ["小声", "悄悄", "耳边"]),
+    ("voice_style", "甜妹音", 0.62, ["哥哥", "呀", "嘛", "啦"]),
+    ("voice_style", "成熟声线", 0.58, ["姐姐", "听话", "乖一点"]),
+    ("voice_style", "软萌声线", 0.58, ["人家", "不要嘛", "好嘛"]),
+    ("shooting_method", "自拍口播", 0.70, ["大家好", "今天", "视频", "直播"]),
+    ("content_type", "剧情对白", 0.65, ["老师", "同学", "主人", "哥哥", "姐姐"]),
+]
+
+
+def clean_sensevoice_text(text: str) -> tuple[str, list[str]]:
+    tokens = re.findall(r"<\|([^|<>]+)\|>", text)
+    cleaned = re.sub(r"<\|[^|<>]+\|>", "", text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned, tokens
+
+
+def audio_tags_for_transcript(text: str, language: str, source: str) -> list[dict]:
+    cleaned, tokens = clean_sensevoice_text(text)
+    lowered = cleaned.lower()
+    tags: dict[tuple[str, str], dict] = {}
+    if language:
+        label = LANGUAGE_TAGS.get(language.lower(), language)
+        tags[("voice_language", label)] = {"tag": label, "category": "voice_language", "confidence": 0.95, "source": source, "state": "confirmed"}
+    for token in tokens:
+        key = token.upper()
+        language_key = token.lower()
+        if language_key in LANGUAGE_TAGS:
+            label = LANGUAGE_TAGS[language_key]
+            tags[("voice_language", label)] = {"tag": label, "category": "voice_language", "confidence": 0.95, "source": source, "state": "confirmed"}
+        if key in SENSEVOICE_TOKEN_TAGS:
+            category, label, confidence = SENSEVOICE_TOKEN_TAGS[key]
+            tags[(category, label)] = {"tag": label, "category": category, "confidence": confidence, "source": source, "state": "confirmed" if confidence >= 0.7 else "pending"}
+    for category, label, confidence, words in AUDIO_TEXT_RULES:
+        if any(word.lower() in lowered for word in words):
+            tags[(category, label)] = {"tag": label, "category": category, "confidence": confidence, "source": source, "state": "confirmed" if confidence >= 0.7 else "pending"}
+    if cleaned:
+        tags[("audio_event", "有人声")] = {"tag": "有人声", "category": "audio_event", "confidence": 0.9, "source": source, "state": "confirmed"}
+    return list(tags.values())
+
+
+def extract_audio_wav(video: Path, wav: Path) -> tuple[bool, str]:
+    cmd = ["ffmpeg", "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "16000"]
+    max_seconds = (os.environ.get("TRANSCRIBE_MAX_SECONDS", "0") or "0").strip()
     try:
-        from faster_whisper import WhisperModel  # type: ignore
-    except Exception as exc:
-        return {
-            "ok": False,
-            "error": "faster-whisper is not installed in this image. Install the transcribe extra or build a transcribe-enabled image.",
-            "detail": repr(exc),
-        }
+        seconds = int(max_seconds)
+    except ValueError:
+        seconds = 0
+    if seconds > 0:
+        cmd.extend(["-t", str(seconds)])
+    cmd.append(str(wav))
+    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
+    return proc.returncode == 0 and wav.exists() and wav.stat().st_size > 0, proc.stderr[-1000:]
+
+
+def sensevoice_command(wav: Path) -> list[str] | None:
+    model = os.environ.get("SENSEVOICE_GGUF_MODEL", "/models/sensevoice/SenseVoiceSmall.gguf")
+    binary = os.environ.get("SENSEVOICE_GGUF_BIN", "llama-sensevoice")
+    template = os.environ.get("SENSEVOICE_GGUF_COMMAND", "")
+    if template:
+        return [part.format(audio=str(wav), model=model, bin=binary) for part in shlex.split(template)]
+    found = shutil.which(binary) or shutil.which("sensevoice-cli") or shutil.which("llama-sensevoice")
+    if not found or not Path(model).exists():
+        return None
+    return [found, "-m", model, "-f", str(wav), "--language", "auto"]
+
+
+def parse_sensevoice_output(stdout: str) -> tuple[str, str, list[dict]]:
+    text = stdout.strip()
+    language = ""
+    segments: list[dict] = []
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            language = str(data.get("language") or data.get("lang") or "")
+            raw_text = str(data.get("text") or data.get("result") or "")
+            raw_segments = data.get("segments") or data.get("sentence_info") or []
+            if isinstance(raw_segments, list):
+                for item in raw_segments:
+                    if not isinstance(item, dict):
+                        continue
+                    start = float(item.get("start", item.get("start_ms", 0)) or 0)
+                    end = float(item.get("end", item.get("end_ms", 0)) or 0)
+                    if start > 1000 or end > 1000:
+                        start /= 1000
+                        end /= 1000
+                    segment_text = str(item.get("text") or "")
+                    segments.append({"start": round(start, 2), "end": round(end, 2), "text": clean_sensevoice_text(segment_text)[0]})
+            text = raw_text or "\n".join(item["text"] for item in segments)
+        elif isinstance(data, list):
+            parts = []
+            for item in data:
+                if isinstance(item, dict):
+                    parts.append(str(item.get("text") or ""))
+            text = "\n".join(parts).strip()
+    except Exception:
+        pass
+    cleaned, tokens = clean_sensevoice_text(text)
+    for token in tokens:
+        if token.lower() in LANGUAGE_TAGS:
+            language = token.lower()
+    if not segments and cleaned:
+        segments = [{"start": 0, "end": 0, "text": cleaned}]
+    return cleaned, language, segments
+
+
+def transcribe_with_sensevoice_gguf(wav: Path) -> dict | None:
+    cmd = sensevoice_command(wav)
+    if not cmd:
+        return None
+    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
+    if proc.returncode != 0:
+        return {"ok": False, "error": proc.stderr[-1000:] or f"exit {proc.returncode}", "engine": "sensevoice-gguf"}
+    text, language, segments = parse_sensevoice_output(proc.stdout)
+    return {
+        "ok": True,
+        "text": text,
+        "tag_text": proc.stdout,
+        "language": language,
+        "segments": segments,
+        "engine": "sensevoice-gguf",
+        "raw": proc.stdout[-2000:],
+    }
+
+
+def transcribe_with_faster_whisper(wav: Path, model, model_name: str) -> dict:
+    segments_iter, info = model.transcribe(str(wav), vad_filter=True)
+    segments = [
+        {"start": round(float(seg.start), 2), "end": round(float(seg.end), 2), "text": seg.text.strip()}
+        for seg in segments_iter
+        if seg.text.strip()
+    ]
+    text = "\n".join(item["text"] for item in segments)
+    return {
+        "ok": True,
+        "text": text,
+        "tag_text": text,
+        "language": getattr(info, "language", "") or "",
+        "segments": segments,
+        "engine": "faster-whisper",
+        "model": model_name,
+    }
+
+
+def save_transcript(conn, media_id: int, result: dict, model_name: str) -> None:
+    text = str(result.get("text") or "")
+    language = str(result.get("language") or "")
+    segments = result.get("segments") or []
+    engine = str(result.get("engine") or "unknown")
+    conn.execute(
+        """
+        INSERT INTO media_transcripts (media_id, language, text, segments_json, model, source, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(media_id) DO UPDATE SET
+            language=excluded.language,
+            text=excluded.text,
+            segments_json=excluded.segments_json,
+            model=excluded.model,
+            source=excluded.source,
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        (media_id, language, text, json.dumps(segments, ensure_ascii=False), model_name, engine),
+    )
+    conn.execute("DELETE FROM media_tags WHERE media_id=? AND source IN ('audio', 'sensevoice-gguf', 'faster-whisper')", (media_id,))
+    tag_text = str(result.get("tag_text") or text)
+    for tag in audio_tags_for_transcript(tag_text, language, "audio"):
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (media_id, tag["tag"], tag["category"], tag["confidence"], tag["source"], tag["state"]),
+        )
+    conn.execute(
+        "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'transcribe', ?)",
+        (media_id, f"segments={len(segments)} model={model_name} engine={engine}"),
+    )
+
+
+def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "base") -> dict:
     query = """
         SELECT id, path, filename
         FROM media_items
@@ -578,10 +777,24 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
         return {"ok": True, "processed": 0, "segments": 0}
     total = len(rows)
     print("TGMM_PROGRESS " + json.dumps({"stage": "transcribe", "processed": 0, "total": total, "progress": 0, "message": "loading model"}, ensure_ascii=False), flush=True)
-    device = os.environ.get("WHISPER_DEVICE", "cpu")
-    compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+    asr_engine = os.environ.get("ASR_ENGINE", "auto").strip().lower()
+    sensevoice_available = sensevoice_command(Path("__probe__.wav")) is not None
+    model = None
     model_name = os.environ.get("WHISPER_MODEL", model_size)
-    model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=os.environ.get("MODEL_ROOT", "/models"))
+    should_load_whisper = asr_engine in {"faster-whisper", "whisper"} or (asr_engine == "auto" and not sensevoice_available)
+    if should_load_whisper:
+        try:
+            from faster_whisper import WhisperModel  # type: ignore
+            device = os.environ.get("WHISPER_DEVICE", "cpu")
+            compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+            model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=os.environ.get("MODEL_ROOT", "/models"))
+        except Exception as exc:
+            if asr_engine != "auto":
+                return {
+                    "ok": False,
+                    "error": "faster-whisper is not installed in this image. Install the transcribe extra or build a transcribe-enabled image.",
+                    "detail": repr(exc),
+                }
     processed = 0
     segment_count = 0
     errors = []
@@ -596,44 +809,35 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                 if not path.exists():
                     continue
                 wav = tmp_root / f"{row['id']}.wav"
-                proc = subprocess.run(
-                    ["ffmpeg", "-y", "-i", str(path), "-vn", "-ac", "1", "-ar", "16000", "-t", os.environ.get("TRANSCRIBE_MAX_SECONDS", "900"), str(wav)],
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=None,
-                )
-                if proc.returncode != 0 or not wav.exists():
-                    errors.append({"id": row["id"], "error": proc.stderr[-1000:]})
+                ok, audio_error = extract_audio_wav(path, wav)
+                if not ok:
+                    errors.append({"id": row["id"], "error": audio_error})
                     continue
                 try:
-                    segments_iter, info = model.transcribe(str(wav), vad_filter=True)
-                    segments = [
-                        {"start": round(float(seg.start), 2), "end": round(float(seg.end), 2), "text": seg.text.strip()}
-                        for seg in segments_iter
-                        if seg.text.strip()
-                    ]
-                    text = "\n".join(item["text"] for item in segments)
-                    conn.execute(
-                        """
-                        INSERT INTO media_transcripts (media_id, language, text, segments_json, model, source, updated_at)
-                        VALUES (?, ?, ?, ?, ?, 'faster-whisper', CURRENT_TIMESTAMP)
-                        ON CONFLICT(media_id) DO UPDATE SET
-                            language=excluded.language,
-                            text=excluded.text,
-                            segments_json=excluded.segments_json,
-                            model=excluded.model,
-                            source=excluded.source,
-                            updated_at=CURRENT_TIMESTAMP
-                        """,
-                        (int(row["id"]), getattr(info, "language", "") or "", text, json.dumps(segments, ensure_ascii=False), model_name),
-                    )
-                    conn.execute(
-                        "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'transcribe', ?)",
-                        (int(row["id"]), f"segments={len(segments)} model={model_name}"),
-                    )
+                    result = None
+                    if asr_engine in {"auto", "sensevoice", "sensevoice-gguf"} and sensevoice_available:
+                        result = transcribe_with_sensevoice_gguf(wav)
+                        if result and not result.get("ok"):
+                            errors.append({"id": row["id"], "error": result.get("error", "sensevoice failed")})
+                            if asr_engine != "auto":
+                                continue
+                            result = None
+                    if result is None:
+                        if asr_engine == "auto" and model is None:
+                            try:
+                                from faster_whisper import WhisperModel  # type: ignore
+                                device = os.environ.get("WHISPER_DEVICE", "cpu")
+                                compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+                                model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=os.environ.get("MODEL_ROOT", "/models"))
+                            except Exception as exc:
+                                errors.append({"id": row["id"], "error": f"fallback faster-whisper unavailable: {exc!r}"})
+                        if model is None:
+                            errors.append({"id": row["id"], "error": "no ASR engine available"})
+                            continue
+                        result = transcribe_with_faster_whisper(wav, model, model_name)
+                    save_transcript(conn, int(row["id"]), result, result.get("model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "SenseVoiceSmall.gguf"))
                     processed += 1
-                    segment_count += len(segments)
+                    segment_count += len(result.get("segments") or [])
                 except Exception as exc:
                     errors.append({"id": row["id"], "error": repr(exc)})
                 print(
