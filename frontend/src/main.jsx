@@ -245,6 +245,10 @@ const i18n = {
     modelFile: 'File model',
     modelHint: 'Models are not baked into the Docker image. They are downloaded into /models and survive container updates.',
     modelSourceUrl: 'Source URL',
+    modelUrlSourceDefault: 'Using built-in verified default URL. You can override it here.',
+    modelUrlSourceSettings: 'Using custom URL saved in Web settings.',
+    modelUrlSourceEnv: 'Using URL from environment variable.',
+    modelUrlSourceMissing: 'No default URL is available. Paste a direct model file URL or upload your own model pack.',
     modelSha256: 'SHA256',
     modelOfficialRef: 'Official reference',
     modelManifestUrl: 'Manifest URL',
@@ -598,6 +602,10 @@ const i18n = {
     modelFile: '文件模型',
     modelHint: '模型不会打进 Docker 镜像，会下载到 /models；容器升级后缓存仍然保留。',
     modelSourceUrl: '模型下载 URL',
+    modelUrlSourceDefault: '正在使用内置已验证默认链接；你也可以在这里覆盖。',
+    modelUrlSourceSettings: '正在使用 Web 设置中保存的自定义链接。',
+    modelUrlSourceEnv: '正在使用环境变量里的链接。',
+    modelUrlSourceMissing: '没有可用默认链接，请填入直连模型文件 URL，或使用你自己的模型包。',
     modelSha256: 'SHA256 校验',
     modelOfficialRef: '官方参考',
     modelManifestUrl: '模型包 Manifest URL',
@@ -2242,6 +2250,12 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
     if (model.path?.endsWith('.gguf')) return 'https://github.com/.../model.gguf';
     return 'https://github.com/.../model.bin';
   }
+  function modelUrlSourceLabel(model) {
+    if (model.url_source === 'default') return t.modelUrlSourceDefault;
+    if (model.url_source === 'settings') return t.modelUrlSourceSettings;
+    if (model.url_source === 'env') return t.modelUrlSourceEnv;
+    return t.modelUrlSourceMissing;
+  }
   return (
     <section className="panel modelPanel">
       <div className="panelHead">
@@ -2283,7 +2297,7 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
             </div>
             {model.source_editable && (
               <div className="modelSourceForm">
-                <label>{t.modelSourceUrl}<input value={draft.url || ''} onChange={event => updateDraft(model.id, 'url', event.target.value)} placeholder={modelPlaceholder(model)} /></label>
+                <label>{t.modelSourceUrl}<input value={draft.url || ''} onChange={event => updateDraft(model.id, 'url', event.target.value)} placeholder={modelPlaceholder(model)} /><small>{modelUrlSourceLabel(model)}</small></label>
                 <label>{t.modelSha256}<input value={draft.sha256 || ''} onChange={event => updateDraft(model.id, 'sha256', event.target.value)} placeholder="optional 64-char checksum" /></label>
                 <button className="panelButton" onClick={() => saveModelSource(model.id, draft)}><Save size={16} />{t.saveModelSource}</button>
               </div>

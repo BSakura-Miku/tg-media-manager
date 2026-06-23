@@ -74,7 +74,8 @@ MODEL_REGISTRY = {
         "description": "Preferred full-video speech recognition model for Mandarin/Japanese mixed media.",
         "description_zh": "推荐的完整视频语音识别模型，适合中文、日文和混合语音素材。",
         "path": "sensevoice/SenseVoiceSmall.gguf",
-        "official_url": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+        "official_url": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF",
+        "default_url": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF/resolve/main/sensevoice-small.gguf",
         "url_env": "SENSEVOICE_GGUF_URL",
         "sha256_env": "SENSEVOICE_GGUF_SHA256",
         "recommended": True,
@@ -148,6 +149,17 @@ def _configured_url(model_id: str, spec: dict, settings: dict | None = None) -> 
     )
 
 
+def _configured_url_source(model_id: str, spec: dict, settings: dict | None = None) -> str:
+    settings = settings if settings is not None else get_settings()
+    if settings.get(source_setting_key(model_id), "").strip():
+        return "settings"
+    if _env(str(spec.get("url_env", ""))):
+        return "env"
+    if str(spec.get("default_url", "")).strip():
+        return "default"
+    return ""
+
+
 def _configured_sha256(model_id: str, spec: dict, settings: dict | None = None) -> str:
     settings = settings if settings is not None else get_settings()
     return (
@@ -161,6 +173,7 @@ def _model_status(model_id: str, spec: dict) -> dict:
     settings = get_settings()
     path = _safe_path(str(spec["path"]))
     url = _configured_url(model_id, spec, settings) if spec.get("kind") == "file" else ""
+    url_source = _configured_url_source(model_id, spec, settings) if spec.get("kind") == "file" else ""
     sha256 = _configured_sha256(model_id, spec, settings) if spec.get("kind") == "file" else ""
     present = _is_present(path, str(spec["kind"]))
     if spec["kind"] == "runtime-cache" and spec.get("command") in {"openclip", "faster-whisper"}:
@@ -180,6 +193,7 @@ def _model_status(model_id: str, spec: dict) -> dict:
         "bytes": _dir_size(path),
         "url_env": spec.get("url_env", ""),
         "url_configured": bool(url),
+        "url_source": url_source,
         "source_url": url,
         "source_editable": spec.get("kind") == "file",
         "official_url": spec.get("official_url", ""),

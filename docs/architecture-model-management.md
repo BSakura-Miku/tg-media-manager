@@ -25,9 +25,10 @@ Examples:
 - OpenCLIP models are cached through `open_clip`.
 - InsightFace `buffalo_l` is cached through InsightFace.
 - faster-whisper models are cached through `faster-whisper`.
-- SenseVoice official reference: `https://huggingface.co/FunAudioLLM/SenseVoiceSmall`
+- SenseVoice GGUF is a direct official Hugging Face artifact:
+  `https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF/resolve/main/sensevoice-small.gguf`
 
-Official sources are preferred for common models because they are easier to verify and update.
+Official sources are preferred for common models because they are easier to verify and update. When a verified direct artifact exists, the registry can provide it as a built-in default so the Web UI can download it without manual URL entry.
 
 ### Direct Artifact URLs
 
