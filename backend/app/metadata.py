@@ -990,6 +990,71 @@ def transcribe_with_faster_whisper(wav: Path, model, model_name: str) -> dict:
     }
 
 
+def subtitle_dir(root: Path | None = None) -> Path:
+    base = root or output_root()
+    return base / "_MANIFESTS" / "subtitles"
+
+
+def vtt_timestamp(value: object) -> str:
+    total_ms = max(0, int(round(float(value or 0) * 1000)))
+    hours, rem = divmod(total_ms, 3600_000)
+    minutes, rem = divmod(rem, 60_000)
+    seconds, millis = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{millis:03d}"
+
+
+def vtt_escape(text: object) -> str:
+    return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").strip()
+
+
+def transcript_to_vtt(segments: list[dict], text: str = "", mode: str = "original") -> str:
+    rows = ["WEBVTT", ""]
+    clean_segments = [item for item in segments if isinstance(item, dict) and str(item.get("text") or "").strip()]
+    if not clean_segments and text.strip():
+        clean_segments = [{"start": 0, "end": 5, "text": text.strip()}]
+    for index, item in enumerate(clean_segments, start=1):
+        start = float(item.get("start", item.get("start_seconds", 0)) or 0)
+        end = float(item.get("end", item.get("end_seconds", 0)) or 0)
+        if end <= start:
+            end = start + 4
+        original = vtt_escape(item.get("text", ""))
+        translated = vtt_escape(item.get("translation_zh") or item.get("zh") or item.get("translated_text") or "")
+        cue_text = original
+        if mode == "bilingual" and translated and translated != original:
+            cue_text = f"{original}\n{translated}"
+        rows.extend([str(index), f"{vtt_timestamp(start)} --> {vtt_timestamp(end)}", cue_text, ""])
+    return "\n".join(rows)
+
+
+def write_subtitle_files(conn, media_id: int, segments: list[dict], text: str) -> None:
+    row = conn.execute("SELECT root FROM media_items WHERE id=?", (media_id,)).fetchone()
+    root = Path(row["root"]) if row and row["root"] else output_root()
+    out_dir = subtitle_dir(root)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"{media_id}.vtt").write_text(transcript_to_vtt(segments, text, "original"), encoding="utf-8")
+    (out_dir / f"{media_id}.bilingual.vtt").write_text(transcript_to_vtt(segments, text, "bilingual"), encoding="utf-8")
+
+
+def subtitle_for_media(media_id: int, mode: str = "original") -> tuple[str, Path | None]:
+    suffix = ".bilingual.vtt" if mode == "bilingual" else ".vtt"
+    with connect() as conn:
+        media = conn.execute("SELECT root FROM media_items WHERE id=?", (media_id,)).fetchone()
+        transcript = conn.execute("SELECT text, segments_json FROM media_transcripts WHERE media_id=?", (media_id,)).fetchone()
+    if media is None:
+        raise KeyError("Media not found")
+    root = Path(media["root"]) if media["root"] else output_root()
+    path = subtitle_dir(root) / f"{media_id}{suffix}"
+    if path.exists():
+        return path.read_text(encoding="utf-8", errors="replace"), path
+    if transcript is None:
+        return "", None
+    try:
+        segments = json.loads(transcript["segments_json"] or "[]")
+    except Exception:
+        segments = []
+    return transcript_to_vtt(segments, str(transcript["text"] or ""), mode), None
+
+
 def save_transcript(conn, media_id: int, result: dict, model_name: str) -> None:
     text = str(result.get("text") or "")
     language = str(result.get("language") or "")
@@ -1023,6 +1088,10 @@ def save_transcript(conn, media_id: int, result: dict, model_name: str) -> None:
         "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'transcribe', ?)",
         (media_id, f"segments={len(segments)} model={model_name} engine={engine}"),
     )
+    try:
+        write_subtitle_files(conn, media_id, segments, text)
+    except OSError:
+        pass
 
 
 def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "base") -> dict:

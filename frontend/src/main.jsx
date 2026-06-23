@@ -274,6 +274,9 @@ const i18n = {
     refreshGraph: 'Refresh graph',
     relatedTags: 'Related tags',
     transcript: 'Transcript',
+    subtitles: 'Subtitles',
+    originalSubtitles: 'Original subtitles',
+    bilingualSubtitles: 'Bilingual subtitles',
     noTranscript: 'No transcript yet',
     mediaSearch: 'Search media, tags, authors',
     allMedia: 'All media',
@@ -631,6 +634,9 @@ const i18n = {
     refreshGraph: '刷新图谱',
     relatedTags: '关联标签',
     transcript: '转写文字',
+    subtitles: '字幕',
+    originalSubtitles: '原文字幕',
+    bilingualSubtitles: '双语字幕',
     noTranscript: '还没有转写内容',
     mediaSearch: '搜索媒体、标签、作者',
     allMedia: '全部媒体',
@@ -816,8 +822,9 @@ function api(path, options) {
   });
 }
 
-function Stat({ label, value, icon: Icon, tone = 'blue', sub = '' }) {
-  return <div className={`stat ${tone}`}><div className="statIcon"><Icon size={24} /></div><div><div className="statValue">{value ?? 0}</div><div className="statLabel">{label}</div>{sub && <div className="statSub">{sub}</div>}</div></div>;
+function Stat({ label, value, icon: Icon, tone = 'blue', sub = '', onClick }) {
+  const Tag = onClick ? 'button' : 'div';
+  return <Tag className={`stat ${tone} ${onClick ? 'clickable' : ''}`} onClick={onClick || undefined}><div className="statIcon"><Icon size={24} /></div><div><div className="statValue">{value ?? 0}</div><div className="statLabel">{label}</div>{sub && <div className="statSub">{sub}</div>}</div></Tag>;
 }
 
 function JobBadge({ status }) {
@@ -1391,16 +1398,16 @@ function DashboardPanel({ summary, jobs, mediaResults, tagGraph, loadMedia, setA
   const videoCount = summary?.media_types?.video ?? mediaResults.video_total ?? 0;
   const photoCount = summary?.media_types?.photo ?? mediaResults.photo_total ?? 0;
   const stats = [
-    [t.totalMedia, mediaTotal, FolderOpen, 'blue', `${t.videos} ${prettyNumber(videoCount)} / ${t.photos} ${prettyNumber(photoCount)}`],
-    [t.totalTags, keywords.length || top.keywords, Tags, 'purple', `${t.keywords} ${prettyNumber(top.keywords || 0)}`],
-    [t.totalAuthors, actors.length || top.actors, Users, 'green', `${t.actors} ${prettyNumber(top.actors || 0)}`],
-    [t.faces, top.faces || summary?.vision?.face_group_rows || 0, ScanFace, 'orange', `${t.faceRows} ${prettyNumber(summary?.vision?.face_index_rows || 0)}`],
-    [t.taskRunning, runningJobs.length, CheckCircle2, 'blue', `${t.jobs} ${prettyNumber(jobs.length)}`],
+    [t.totalMedia, mediaTotal, FolderOpen, 'blue', `${t.videos} ${prettyNumber(videoCount)} / ${t.photos} ${prettyNumber(photoCount)}`, () => setActive('library')],
+    [t.totalTags, keywords.length || top.keywords, Tags, 'purple', `${t.keywords} ${prettyNumber(top.keywords || 0)}`, () => setActive('tagGraph')],
+    [t.totalAuthors, actors.length || top.actors, Users, 'green', `${t.actors} ${prettyNumber(top.actors || 0)}`, () => setActive('authors')],
+    [t.faces, top.faces || summary?.vision?.face_group_rows || 0, ScanFace, 'orange', `${t.faceRows} ${prettyNumber(summary?.vision?.face_index_rows || 0)}`, () => setActive('faces')],
+    [t.taskRunning, runningJobs.length, CheckCircle2, 'blue', `${t.jobs} ${prettyNumber(jobs.length)}`, () => setActive('jobs')],
   ];
   return (
     <>
       <section className="dashboardStats">
-        {stats.map(([label, value, Icon, tone, sub]) => <Stat key={label} label={label} value={prettyNumber(value)} icon={Icon} tone={tone} sub={sub} />)}
+        {stats.map(([label, value, Icon, tone, sub, onClick]) => <Stat key={label} label={label} value={prettyNumber(value)} icon={Icon} tone={tone} sub={sub} onClick={onClick} />)}
       </section>
       <section className="dashboardMain">
         <DashboardTagGraph graph={tagGraph} keywords={keywords} loadMedia={loadMedia} setActive={setActive} t={t} />
@@ -1982,7 +1989,12 @@ function MediaViewer({ item, detail, close, t }) {
         <div className="viewerHead"><h2>{t.mediaDetail}</h2><button className="iconButton" onClick={close}><XCircle size={18} /></button></div>
         <div className="viewerBody">
           <div className="viewerMedia">
-            {data.media_type === 'video' ? <video src={`/api/media/${data.id}/file`} controls poster={`/api/media/${data.id}/thumbnail`} /> : <img src={`/api/media/${data.id}/file`} alt={data.filename} />}
+            {data.media_type === 'video' ? (
+              <video src={`/api/media/${data.id}/file`} controls poster={`/api/media/${data.id}/thumbnail`}>
+                {data.transcript?.text && <track kind="subtitles" srcLang={data.transcript?.language || 'und'} label={t.originalSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=original`} default />}
+                {data.transcript?.text && <track kind="subtitles" srcLang="zh" label={t.bilingualSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=bilingual`} />}
+              </video>
+            ) : <img src={`/api/media/${data.id}/file`} alt={data.filename} />}
           </div>
           <div className="viewerInfo">
             <div className="list">
@@ -2020,6 +2032,7 @@ function MediaViewer({ item, detail, close, t }) {
               </>
             )}
             <h3>{t.transcript}</h3>
+            {data.media_type === 'video' && data.transcript?.text && <div className="hintBox smallHint"><span>{t.subtitles}</span><a href={`/api/media/${data.id}/subtitles.vtt?mode=bilingual`} target="_blank" rel="noreferrer">WebVTT</a></div>}
             {data.transcript?.text ? <pre className="transcriptBlock">{data.transcript.text}</pre> : <div className="empty smallEmpty">{t.noTranscript}</div>}
           </div>
         </div>

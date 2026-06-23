@@ -332,14 +332,18 @@ select, input {
   position: fixed;
   inset: 0;
   z-index: 20;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
   padding: 24px;
+  padding-top: max(18px, env(safe-area-inset-top));
   background: rgba(0, 0, 0, .68);
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .viewerPanel {
   width: min(1180px, 100%);
-  max-height: 92vh;
+  max-height: calc(100dvh - 36px);
   display: grid;
   grid-template-rows: auto 1fr;
   overflow: hidden;
@@ -364,6 +368,7 @@ select, input {
   gap: 12px;
   padding: 12px;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .viewerMedia {
   min-height: 420px;
@@ -377,7 +382,7 @@ select, input {
 .viewerMedia img,
 .viewerMedia video {
   max-width: 100%;
-  max-height: 76vh;
+  max-height: min(76vh, 760px);
   display: block;
 }
 .viewerMedia video {
@@ -1453,6 +1458,22 @@ button:hover {
   position: relative;
   min-height: 120px;
   overflow: hidden;
+  text-align: left;
+}
+
+.stat.clickable {
+  cursor: pointer;
+}
+
+.stat.clickable:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+  box-shadow: 0 18px 52px rgba(68, 111, 220, .18);
+}
+
+.stat.clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .stat:after {
@@ -1565,6 +1586,8 @@ button:hover {
   translate: -50% -50%;
   border-color: rgba(126, 166, 255, .38);
   background: rgba(33, 57, 102, .82);
+  color: #f8fbff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .28);
 }
 
 .orbitNode strong,
@@ -1575,7 +1598,7 @@ button:hover {
 }
 
 .orbitNode span {
-  color: var(--soft);
+  color: rgba(248, 251, 255, .82);
   font-size: 12px;
 }
 
@@ -1586,6 +1609,22 @@ button:hover {
   border-radius: 999px;
   background: linear-gradient(135deg, rgba(54, 108, 220, .9), rgba(76, 191, 212, .68));
   box-shadow: 0 0 54px rgba(79, 132, 255, .45);
+  color: #08111f;
+  text-shadow: none;
+}
+
+.orbitCenter span {
+  color: rgba(8, 17, 31, .76);
+}
+
+:root[data-theme="light"] .orbitNode {
+  border-color: rgba(15, 23, 42, .2);
+  box-shadow: 0 14px 34px rgba(26, 44, 80, .18);
+}
+
+:root[data-theme="light"] .orbitCenter {
+  background: linear-gradient(135deg, #3b82f6, #67e8f9);
+  color: #071426;
 }
 
 .orbitCenter strong {
@@ -2261,4 +2300,47 @@ button:active {
 @media (max-width: 620px) {
   .mediaGrid,
   .recentGrid { column-count: 1; grid-template-columns: 1fr; }
+}
+
+/* Final interaction/readability overrides */
+.stat.clickable {
+  appearance: none;
+  color: inherit;
+  font: inherit;
+}
+
+:root[data-theme="light"] .tagGraphCanvas {
+  background:
+    linear-gradient(90deg, rgba(31, 65, 128, .09) 1px, transparent 1px),
+    linear-gradient(rgba(31, 65, 128, .09) 1px, transparent 1px),
+    radial-gradient(circle at 50% 50%, rgba(59, 130, 246, .13), transparent 42%),
+    rgba(248, 251, 255, .95);
+}
+
+:root[data-theme="light"] .tagGraphCanvas line {
+  stroke: rgba(37, 99, 235, .42);
+  opacity: .72;
+}
+
+:root[data-theme="light"] .tagGraphCanvas circle {
+  fill: #5b8bdc;
+  stroke: rgba(15, 23, 42, .22);
+  filter: drop-shadow(0 7px 16px rgba(37, 99, 235, .18));
+}
+
+.tagGraphCanvas text,
+:root[data-theme="light"] .tagGraphCanvas text {
+  fill: var(--text);
+  stroke: var(--panel);
+  stroke-width: .95px;
+  font-weight: 760;
+}
+
+:root[data-theme="light"] .tagGraphCanvas text {
+  fill: #111827;
+  stroke: rgba(255, 255, 255, .92);
+}
+
+:root[data-theme="light"] .tagGraphCanvas g.isFocused text {
+  fill: #061225;
 }

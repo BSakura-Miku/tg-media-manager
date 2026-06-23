@@ -29,6 +29,7 @@ from .metadata import (
     risk_queue,
     set_tag_feedback,
     similarity_groups,
+    subtitle_for_media,
     tag_graph,
     train_vision_calibrators,
     vision_calibrator_status,
@@ -991,6 +992,18 @@ def api_media_file(media_id: int):
     detail = checked_media_detail(media_id)
     path = Path(detail["path"])
     return FileResponse(path, media_type=mime_for(path, detail.get("media_type", "")))
+
+
+@app.get("/api/media/{media_id}/subtitles.vtt")
+def api_media_subtitles(media_id: int, mode: str = Query("original", pattern="^(original|bilingual)$")):
+    checked_media_detail(media_id)
+    try:
+        content, _ = subtitle_for_media(media_id, mode)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Media not found")
+    if not content:
+        raise HTTPException(status_code=404, detail="Subtitle not found")
+    return Response(content=content, media_type="text/vtt; charset=utf-8", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/media/{media_id}/thumbnail")
