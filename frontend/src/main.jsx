@@ -87,6 +87,10 @@ const i18n = {
     imageFiles: 'Image files',
     otherFiles: 'Other files',
     availableSpace: 'Available',
+    totalCapacity: 'Total indexed',
+    videoUnit: 'videos',
+    photoUnit: 'photos',
+    itemUnit: 'items',
     dashboardGraphHint: 'Click a tag to browse matching media.',
     recentEmpty: 'No indexed media yet',
     privacyLocked: 'Privacy lock',
@@ -505,6 +509,10 @@ const i18n = {
     imageFiles: '图片文件',
     otherFiles: '其他文件',
     availableSpace: '可用空间',
+    totalCapacity: '索引总量',
+    videoUnit: '部',
+    photoUnit: '张',
+    itemUnit: '项',
     dashboardGraphHint: '点击标签可浏览对应媒体。',
     recentEmpty: '还没有索引媒体',
     privacyLocked: '隐私锁定',
@@ -1757,23 +1765,45 @@ function DashboardJobs({ jobs, openJob, setActive, t }) {
 }
 
 function StoragePanel({ summary, mediaTotal, t }) {
-  const top = summary?.top || {};
-  const videos = Number(summary?.media_types?.video || 0);
-  const photos = Number(summary?.media_types?.photo || 0);
-  const other = Math.max(0, Number(mediaTotal || 0) - videos - photos);
-  const used = Math.max(1, videos + photos + other || mediaTotal || 1);
-  const videoPct = Math.max(6, Math.round((videos / used) * 100));
-  const photoPct = Math.max(6, Math.round((photos / used) * 100));
+  const storage = summary?.media_storage || {};
+  const videos = {
+    count: Number(storage.video?.count ?? summary?.media_types?.video ?? 0),
+    bytes: Number(storage.video?.bytes || 0),
+  };
+  const photos = {
+    count: Number(storage.photo?.count ?? summary?.media_types?.photo ?? 0),
+    bytes: Number(storage.photo?.bytes || 0),
+  };
+  const fallbackOtherCount = Math.max(0, Number(mediaTotal || 0) - videos.count - photos.count);
+  const other = {
+    count: Number(storage.other?.count ?? fallbackOtherCount),
+    bytes: Number(storage.other?.bytes || 0),
+  };
+  const totalBytes = videos.bytes + photos.bytes + other.bytes;
+  const totalCount = videos.count + photos.count + other.count;
+  const ringTotal = totalBytes > 0 ? totalBytes : Math.max(1, totalCount || mediaTotal || 1);
+  const videoValue = totalBytes > 0 ? videos.bytes : videos.count;
+  const photoValue = totalBytes > 0 ? photos.bytes : photos.count;
+  const otherValue = totalBytes > 0 ? other.bytes : other.count;
+  const videoPct = Math.max(0, Math.round((videoValue / ringTotal) * 100));
+  const photoPct = Math.max(0, Math.round((photoValue / ringTotal) * 100));
+  const otherPct = Math.max(0, Math.round((otherValue / ringTotal) * 100));
+  const formatStorage = (item, unit) => {
+    const countText = `${prettyNumber(item.count)} ${unit}`;
+    if (totalBytes <= 0) return countText;
+    return t.locale === 'zh-CN'
+      ? `${prettyBytes(item.bytes)}（${countText}）`
+      : `${prettyBytes(item.bytes)} (${countText})`;
+  };
   return (
     <section className="panel storagePanel">
       <div className="panelHead"><h2>{t.storageSpace}</h2><span>{t.localOnly}</span></div>
       <div className="storageBody">
-        <div className="storageRing" style={{ '--video': `${videoPct}%`, '--photo': `${photoPct}%` }}><HardDrive size={24} /><strong>{prettyNumber(mediaTotal)}</strong><span>{t.usedSpace}</span></div>
+        <div className="storageRing" style={{ '--video': `${videoPct}%`, '--photo': `${photoPct}%`, '--other': `${otherPct}%` }}><HardDrive size={24} /><strong>{totalBytes > 0 ? prettyBytes(totalBytes) : prettyNumber(mediaTotal)}</strong><span>{totalBytes > 0 ? t.totalCapacity : t.usedSpace}</span></div>
         <div className="storageList">
-          <div><i className="violet" /><span>{t.videoFiles}</span><strong>{prettyNumber(videos)}</strong></div>
-          <div><i className="pink" /><span>{t.imageFiles}</span><strong>{prettyNumber(photos)}</strong></div>
-          <div><i className="blue" /><span>{t.otherFiles}</span><strong>{prettyNumber(other || top.unknown || 0)}</strong></div>
-          <div><i className="green" /><span>{t.availableSpace}</span><strong>{prettyNumber(top.duplicates || 0)}</strong></div>
+          <div><i className="violet" /><span>{t.videoFiles}</span><strong>{formatStorage(videos, t.videoUnit)}</strong></div>
+          <div><i className="pink" /><span>{t.imageFiles}</span><strong>{formatStorage(photos, t.photoUnit)}</strong></div>
+          <div><i className="blue" /><span>{t.otherFiles}</span><strong>{formatStorage(other, t.itemUnit)}</strong></div>
         </div>
       </div>
     </section>

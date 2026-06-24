@@ -35,6 +35,7 @@ PHASES = [
             ("Guided workflow commands", lambda: has_all("backend/app/jobs.py", ["workflow-full-library", "workflow-new-downloads", "workflow-review-cleanup", "workflow-face-balanced", "workflow-vision-plan"])),
             ("Workflow step progress", lambda: has_all("frontend/src/main.jsx", ["workflowSteps", "jobWorkflowInfo", "remaining"])),
             ("Media viewer actions", lambda: has_all("frontend/src/main.jsx", ["toggleFavorite", "deleteMedia", "saveManualTag", "saveAuthor"])),
+            ("Storage capacity display", lambda: has_all("frontend/src/main.jsx", ["media_storage", "videoUnit", "photoUnit", "prettyBytes"])),
         ],
     },
     {
@@ -45,6 +46,7 @@ PHASES = [
             ("Parser and virtual fields", lambda: has_all("backend/app/db.py", ["parser_templates", "original_name", "normalized_path", "risk_state"])),
             ("Metadata indexer", lambda: has_all("backend/app/metadata.py", ["def rebuild_metadata_index", "original_name", "filename"])),
             ("Virtual search endpoints", lambda: has_all("backend/app/main.py", ['@app.get("/api/media")', "/api/media/{media_id}", "media_detail"])),
+            ("Media storage aggregation", lambda: has_all("backend/app/media_stats.py", ["indexed_media_storage", "SUM(size_bytes)", "media_storage"])),
         ],
     },
     {

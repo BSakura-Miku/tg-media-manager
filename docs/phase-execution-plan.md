@@ -23,12 +23,14 @@ Implemented:
 - Job detail progress with stage and workflow-step context.
 - Dark/light theme, bilingual UI, version display, and redesigned app shell.
 - Media viewer with playback, details, tags, favorite, safe-delete, manual tag, and manual author editing.
+- Dashboard storage card with capacity plus count per media type; Simplified Chinese uses `部` for videos and `张` for photos.
 
 Validation after NAS full run:
 
 - Open every navigation page and at least one child/detail view.
 - Confirm long paths and job details do not overflow on desktop or mobile width.
 - Confirm recent media, random waterfall, authors, faces, and logs update from the current database.
+- Confirm dashboard storage shows examples like `视频 300 GB（1,000 部）` and `图片 80 GB（6,000 张）`, with the ring chart based on bytes.
 
 ## Phase 2: Metadata Database and Virtual Classification
 
@@ -37,6 +39,7 @@ Goal: use SQLite as the queryable source of truth for virtual views.
 Implemented:
 
 - SQLite tables for media items, tags, operations, timeline segments, similarity groups, parser templates, transcripts, feedback, and calibrators.
+- Summary API aggregates media counts and `size_bytes` by media type for virtual dashboard storage views.
 - Metadata indexing from organized media and manifests.
 - Filename parsing fields for author, person, platform, series, code, scene, quality, original name, normalized path, and risk state.
 - Virtual library search and filtering.
@@ -129,7 +132,6 @@ Expected outputs:
 
 ## Known Deferred Work
 
-- Dashboard storage card should show capacity plus count per media type, for example `Videos 300 GB (1,000 items)`, `Photos 80 GB (6,000 items)`. In Simplified Chinese, video counts must use `部` and photo counts must use `张`, for example `视频 300 GB（1,000 部）` and `图片 80 GB（6,000 张）`. The ring chart should be based on bytes, not item counts. This requires backend summary fields aggregated from `media_items.size_bytes` by `media_type`, plus a frontend formatting pass after the current NAS full-library job finishes.
 - Web model-pack manifest installer is recorded in `docs/architecture-model-management.md` but not fully implemented yet.
 - Local model upload through the Web UI is still future work.
 - Non-Chinese subtitle translation depends on a future local translation model/runtime selection.

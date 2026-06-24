@@ -155,6 +155,34 @@ def indexed_media_counts() -> dict:
         return {"photo": 0, "video": 0, "other": 0}
 
 
+def indexed_media_storage() -> dict:
+    empty = {
+        "photo": {"count": 0, "bytes": 0},
+        "video": {"count": 0, "bytes": 0},
+        "other": {"count": 0, "bytes": 0},
+    }
+    try:
+        init_db()
+        with connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT media_type, COUNT(*) AS count, COALESCE(SUM(size_bytes), 0) AS bytes
+                FROM media_items
+                WHERE risk_state='normal'
+                GROUP BY media_type
+                """
+            ).fetchall()
+        out = {key: dict(value) for key, value in empty.items()}
+        for row in rows:
+            media_type = str(row["media_type"] or "other")
+            bucket = media_type if media_type in {"photo", "video"} else "other"
+            out[bucket]["count"] += int(row["count"] or 0)
+            out[bucket]["bytes"] += int(row["bytes"] or 0)
+        return out
+    except Exception:
+        return empty
+
+
 def summary() -> dict:
     global _SUMMARY_CACHE
     now = time.time()
@@ -181,6 +209,7 @@ def summary() -> dict:
         name: len([p for p in (root / name).iterdir() if p.is_file()]) if (root / name).exists() else 0
         for name in source_names
     }
+    media_storage = indexed_media_storage()
     data = {
         "root": str(root),
         "output_root": str(library),
@@ -189,6 +218,7 @@ def summary() -> dict:
         "top": top,
         "source_leftovers": state.get("source_leftovers") or source_leftovers,
         "media_types": state.get("media_types") or indexed_media_counts(),
+        "media_storage": media_storage,
         "keywords": state.get("keywords") or (rollup["keywords"] if rollup else immediate_counts(library / "_REVIEW" / "Keywords")),
         "actors_sample": state.get("actors_sample") or (rollup["actors_sample"] if rollup else immediate_counts(library / "Actors")[:80]),
         "library_state": state,

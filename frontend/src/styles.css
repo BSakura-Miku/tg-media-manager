@@ -1931,7 +1931,12 @@ i.blue { background: var(--accent); }
   border-radius: 999px;
   background:
     radial-gradient(circle at center, var(--panel) 0 48%, transparent 49%),
-    conic-gradient(var(--accent) 0 var(--video), var(--pink) var(--video) calc(var(--video) + var(--photo)), var(--green) 0 100%);
+    conic-gradient(
+      var(--accent-2) 0 var(--video),
+      var(--pink) var(--video) calc(var(--video) + var(--photo)),
+      var(--accent) calc(var(--video) + var(--photo)) calc(var(--video) + var(--photo) + var(--other)),
+      rgba(255,255,255,.08) 0 100%
+    );
 }
 
 .storageRing strong {
