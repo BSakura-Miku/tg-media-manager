@@ -1315,6 +1315,7 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
     processed = 0
     segment_count = 0
     errors = []
+    warnings = []
     with TemporaryDirectory(prefix="tgmm_audio_") as tmpdir:
         tmp_root = Path(tmpdir)
         with connect() as conn:
@@ -1335,9 +1336,10 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                     if asr_engine in {"auto", "sensevoice", "sensevoice-gguf"} and sensevoice_available:
                         result = transcribe_with_sensevoice_gguf(wav)
                         if result and not result.get("ok"):
-                            errors.append({"id": row["id"], "error": result.get("error", "sensevoice failed")})
                             if asr_engine != "auto":
+                                errors.append({"id": row["id"], "error": result.get("error", "sensevoice failed")})
                                 continue
+                            warnings.append({"id": row["id"], "warning": "sensevoice fallback", "detail": result.get("error", "sensevoice failed")})
                             result = None
                     if result is None:
                         if asr_engine == "auto" and model is None:
@@ -1374,7 +1376,10 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                     ),
                     flush=True,
                 )
-    return {"ok": True, "processed": processed, "segments": segment_count, "errors": errors[:20]}
+    response = {"ok": True, "processed": processed, "segments": segment_count, "errors": errors[:20]}
+    if warnings:
+        response["warnings"] = warnings[:20]
+    return response
 
 
 def mime_for(path: Path, media_type: str) -> str:
