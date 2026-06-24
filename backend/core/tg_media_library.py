@@ -1689,6 +1689,46 @@ def vector_distance(a: list[float], b: list[float]) -> float:
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
+def union_face_pairs_vectorized(items: list[dict], parent: list[int], threshold: float, union) -> bool:
+    try:
+        import numpy as np
+    except Exception:
+        return False
+    if not items:
+        return True
+    try:
+        vectors = np.asarray([item["embedding_vec"] for item in items], dtype=np.float32)
+    except Exception:
+        return False
+    if vectors.ndim != 2 or vectors.shape[0] != len(items):
+        return False
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    vectors = vectors / np.maximum(norms, 1e-12)
+    min_similarity = 1.0 - (float(threshold) ** 2 / 2.0)
+    block_size = max(128, int(os.environ.get("FACE_CLUSTER_BLOCK_SIZE", "1024") or 1024))
+    total = len(items)
+    indices = np.arange(total)
+    for start in range(0, total, block_size):
+        end = min(total, start + block_size)
+        scores = vectors[start:end] @ vectors.T
+        mask = scores >= min_similarity
+        mask &= indices[None, :] > np.arange(start, end)[:, None]
+        left, right = np.nonzero(mask)
+        for local_i, j in zip(left.tolist(), right.tolist()):
+            union(start + local_i, j)
+        progress = int(end / max(1, total) * 100)
+        payload = json.dumps({
+            "stage": "face-cluster",
+            "processed": end,
+            "total": total,
+            "progress": progress,
+            "current": f"embedding block {start}-{end}",
+            "message": f"face cluster compared {end}/{total}",
+        }, ensure_ascii=False)
+        print(f"TGMM_PROGRESS {payload}", flush=True)
+    return True
+
+
 def face_cluster(config: Config, threshold: float) -> None:
     face_index = config.manifests / "face_index.csv"
     if not face_index.exists():
@@ -1715,10 +1755,11 @@ def face_cluster(config: Config, threshold: float) -> None:
         if ra != rb:
             parent[rb] = ra
 
-    for i in range(len(items)):
-        for j in range(i + 1, len(items)):
-            if vector_distance(items[i]["embedding_vec"], items[j]["embedding_vec"]) <= threshold:
-                union(i, j)
+    if not union_face_pairs_vectorized(items, parent, threshold, union):
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                if vector_distance(items[i]["embedding_vec"], items[j]["embedding_vec"]) <= threshold:
+                    union(i, j)
     buckets: dict[int, list[dict]] = defaultdict(list)
     for idx, item in enumerate(items):
         buckets[find(idx)].append(item)
