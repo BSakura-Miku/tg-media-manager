@@ -385,6 +385,26 @@ def ffprobe_info(path: Path, fast: bool) -> tuple[str, str, str, str, str]:
         return "", "", "", "", type(exc).__name__
 
 
+def video_duration_seconds(path: Path) -> float:
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ]
+        out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        if out.returncode != 0:
+            return 0.0
+        return max(0.0, float((out.stdout or "0").strip() or 0))
+    except Exception:
+        return 0.0
+
+
 def image_info(path: Path, fast: bool) -> tuple[str, str, str, str, str]:
     if fast:
         return "", "", "", "", ""
@@ -1190,26 +1210,114 @@ def run_ffmpeg_with_fallback(base_cmd: list[str], out: Path, timeout: int) -> bo
     return False
 
 
-def extract_video_frames(src: Path, out_dir: Path, frames: int) -> list[Path]:
+def dynamic_video_frame_count(duration: float, minimum: int) -> int:
+    cap = max(3, int(os.environ.get("VIDEO_DYNAMIC_MAX_FRAMES", "18")))
+    if duration <= 0:
+        wanted = minimum
+    elif duration < 45:
+        wanted = 3
+    elif duration < 180:
+        wanted = 5
+    elif duration < 600:
+        wanted = 8
+    elif duration < 1800:
+        wanted = 12
+    else:
+        wanted = 16
+    return max(1, min(cap, max(minimum, wanted)))
+
+
+def video_sample_time(duration: float, index: int, count: int) -> str:
+    if duration <= 0:
+        return "0" if index == 0 else str(max(0, index * 7 + 1))
+    if count <= 1:
+        return str(max(0.0, min(duration - 0.5, duration * 0.45)))
+    start = min(2.0, max(0.0, duration * 0.05))
+    end = max(start, duration - min(2.0, max(0.0, duration * 0.05)))
+    point = start + ((end - start) * index / (count - 1))
+    return f"{max(0.0, min(duration - 0.25, point)):.3f}"
+
+
+def make_contact_sheet(frames: list[Path], out: Path) -> Path | None:
+    if not frames:
+        return None
+    if valid_cache_file(out) and all(frame.stat().st_mtime <= out.stat().st_mtime for frame in frames if frame.exists()):
+        return out
+    tile_w, tile_h = 240, 150
+    columns = 3 if len(frames) <= 9 else 4
+    rows = math.ceil(len(frames) / columns)
+    if Image is None:
+        return make_contact_sheet_ffmpeg(frames, out, columns, rows, tile_w, tile_h)
+    tmp = out.with_name(f".{out.stem}.tmp{out.suffix}")
+    try:
+        sheet = Image.new("RGB", (columns * tile_w, rows * tile_h), (8, 12, 18))
+        for idx, frame in enumerate(frames):
+            with Image.open(frame) as img:
+                img = img.convert("RGB")
+                img.thumbnail((tile_w, tile_h))
+                x = (idx % columns) * tile_w + (tile_w - img.width) // 2
+                y = (idx // columns) * tile_h + (tile_h - img.height) // 2
+                sheet.paste(img, (x, y))
+        sheet.save(tmp, "JPEG", quality=84)
+        if valid_cache_file(tmp):
+            tmp.replace(out)
+            return out
+    except Exception:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    return make_contact_sheet_ffmpeg(frames, out, columns, rows, tile_w, tile_h)
+
+
+def make_contact_sheet_ffmpeg(frames: list[Path], out: Path, columns: int, rows: int, tile_w: int, tile_h: int) -> Path | None:
+    tmp = out.with_name(f".{out.stem}.tmp{out.suffix}")
+    pattern = str(frames[0].parent / "frame_*.jpg")
+    vf = (
+        f"scale={tile_w}:{tile_h}:force_original_aspect_ratio=decrease,"
+        f"pad={tile_w}:{tile_h}:(ow-iw)/2:(oh-ih)/2:color=0x080c12,"
+        f"tile={columns}x{rows}"
+    )
+    cmd = ["ffmpeg", "-y", "-pattern_type", "glob", "-i", pattern, "-vf", vf, "-frames:v", "1", "-q:v", "4", str(tmp)]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        if proc.returncode == 0 and valid_cache_file(tmp):
+            tmp.replace(out)
+            return out
+    except (subprocess.SubprocessError, OSError):
+        pass
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
+    return None
+
+
+def extract_video_frames(src: Path, out_dir: Path, frames: int) -> tuple[list[Path], Path | None, list[float]]:
     out_dir.mkdir(parents=True, exist_ok=True)
+    duration = video_duration_seconds(src)
+    frame_count = dynamic_video_frame_count(duration, frames)
     outputs = []
-    for i in range(frames):
+    times = []
+    for i in range(frame_count):
         out = out_dir / f"frame_{i + 1:02d}.jpg"
+        ss = video_sample_time(duration, i, frame_count)
         if valid_cache_file(out):
             outputs.append(out)
+            times.append(float(ss))
             continue
         if out.exists():
             try:
                 out.unlink()
             except OSError:
                 pass
-        # fps expression samples across the duration without needing metadata parsing.
         vf = "thumbnail,scale=min(640\\,iw):-2"
-        ss = "0" if i == 0 else str(max(0, i * 7 + 1))
         base_cmd = ["-ss", ss, "-i", str(src), "-frames:v", "1", "-vf", vf, "-q:v", "4", str(out)]
         if run_ffmpeg_with_fallback(base_cmd, out, 30):
             outputs.append(out)
-    return outputs
+            times.append(float(ss))
+    sheet = make_contact_sheet(outputs, out_dir / "contact_sheet.jpg")
+    return outputs, sheet, times
 
 
 def extract_image_thumb(src: Path, out_dir: Path) -> list[Path]:
@@ -1249,7 +1357,7 @@ def extract_image_thumb(src: Path, out_dir: Path) -> list[Path]:
 def write_frame_index(config: Config, rows: list[dict]) -> None:
     out = config.manifests / "frame_index.csv"
     with out.open("w", newline="", encoding="utf-8-sig") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["media_path", "cache_key", "kind", "frames", "error"])
+        writer = csv.DictWriter(handle, fieldnames=["media_path", "cache_key", "kind", "frames", "frame_times", "contact_sheet", "error"])
         writer.writeheader()
         writer.writerows(rows)
 
@@ -1258,18 +1366,27 @@ def extract_one_media_frame_job(config: Config, path: Path, frames: int) -> dict
     key = media_cache_key(path)
     out_dir = frame_cache_dir(config) / key
     error = ""
+    contact_sheet = None
+    frame_times = []
     try:
-        outputs = extract_video_frames(path, out_dir, frames) if media_kind(path) == "video" else extract_image_thumb(path, out_dir)
+        if media_kind(path) == "video":
+            outputs, contact_sheet, frame_times = extract_video_frames(path, out_dir, frames)
+        else:
+            outputs = extract_image_thumb(path, out_dir)
         if not outputs:
             error = "no_frames"
     except Exception as exc:
         outputs = []
+        contact_sheet = None
+        frame_times = []
         error = type(exc).__name__
     return {
         "media_path": rel(config.library_root, path),
         "cache_key": key,
         "kind": media_kind(path),
         "frames": "|".join(str(p.relative_to(config.library_root)) for p in outputs),
+        "frame_times": "|".join(f"{item:.3f}" for item in frame_times),
+        "contact_sheet": str(contact_sheet.relative_to(config.library_root)) if contact_sheet else "",
         "error": error,
     }
 
@@ -1317,6 +1434,8 @@ def extract_frames(config: Config, limit: int | None, frames: int, workers: int,
                     "cache_key": media_cache_key(path),
                     "kind": media_kind(path),
                     "frames": "",
+                    "frame_times": "",
+                    "contact_sheet": "",
                     "error": type(exc).__name__,
                 }
             rows.append(row)
@@ -1345,7 +1464,7 @@ def extract_frames(config: Config, limit: int | None, frames: int, workers: int,
     if errors:
         error_out = config.manifests / "frame_errors.csv"
         with error_out.open("w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(handle, fieldnames=["media_path", "cache_key", "kind", "frames", "error"])
+            writer = csv.DictWriter(handle, fieldnames=["media_path", "cache_key", "kind", "frames", "frame_times", "contact_sheet", "error"])
             writer.writeheader()
             writer.writerows(errors)
     print(f"frame_index {len(rows)} rows")

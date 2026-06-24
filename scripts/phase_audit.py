@@ -52,6 +52,7 @@ PHASES = [
         "name": "Vision tags and video understanding",
         "checks": [
             ("Frame extraction command", lambda: has_all("backend/core/tg_media_library.py", ["extract-frames", "frame_index.csv"])),
+            ("Dynamic video contact sheets", lambda: has_all("backend/core/tg_media_library.py", ["dynamic_video_frame_count", "make_contact_sheet", "contact_sheet"])),
             ("OpenCLIP vision labels", lambda: has_all("backend/core/tg_media_library.py", ["open_clip", "vision-scan", "vision_labels.csv"])),
             ("Timeline import", lambda: has_all("backend/app/metadata.py", ["media_timeline_segments", "representative_frame", "import_vision_outputs"])),
             ("Manual feedback calibrator", lambda: has_all("backend/app/metadata.py", ["tag_feedback", "train_vision_calibrators", "vision_calibrators"])),

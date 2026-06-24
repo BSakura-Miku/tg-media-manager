@@ -346,6 +346,7 @@ const i18n = {
     saveAuthor: 'Save author',
     manualEditSaved: 'Saved',
     trainVisionCalibrator: 'Train calibrator',
+    videoOverview: 'Video overview',
     timeline: 'Timeline',
     confidence: 'Confidence',
     noIndexHint: 'No indexed media yet. Run Rebuild index after scan/apply.',
@@ -763,6 +764,7 @@ const i18n = {
     saveAuthor: '保存作者',
     manualEditSaved: '已保存',
     trainVisionCalibrator: '训练校准器',
+    videoOverview: '视频概览',
     timeline: '时间轴',
     confidence: '置信度',
     noIndexHint: '还没有索引媒体。扫描/整理后先点重建索引。',
@@ -2405,6 +2407,12 @@ function MediaViewer({ item, detail, reload, close, t }) {
               <div className="row"><span>{t.thumbnail}</span><strong>{data.resolution || data.quality || '-'}</strong></div>
               <div className="row"><span>{t.media}</span><strong>{data.media_type}</strong></div>
             </div>
+            {data.media_type === 'video' && data.contact_sheet && (
+              <section className="videoOverview">
+                <h3>{t.videoOverview}</h3>
+                <img src={`/api/media/${data.id}/contact-sheet`} alt={t.videoOverview} loading="lazy" />
+              </section>
+            )}
             <h3>{t.tags}</h3>
             <div className="tagCloud tagFeedbackCloud">
               {tags.map(tag => (

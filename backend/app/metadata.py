@@ -423,9 +423,17 @@ def import_vision_outputs(root: Path | None = None) -> dict:
             except Exception:
                 confidence = 0.0
             if media["media_type"] == "video":
+                raw_times = [item for item in (row.get("frame_times") or "").split("|") if item]
                 for idx, frame in enumerate(frame_paths):
-                    start = float(idx * 7)
-                    end = float((idx + 1) * 7)
+                    try:
+                        start = float(raw_times[idx]) if idx < len(raw_times) else float(idx * 7)
+                    except Exception:
+                        start = float(idx * 7)
+                    try:
+                        next_start = float(raw_times[idx + 1]) if idx + 1 < len(raw_times) else start + 7
+                    except Exception:
+                        next_start = start + 7
+                    end = max(start + 1, next_start)
                     conn.execute(
                         """
                         INSERT INTO media_timeline_segments (media_id, start_seconds, end_seconds, label, confidence, source, representative_frame)
@@ -844,7 +852,26 @@ def media_detail(media_id: int) -> dict | None:
         except Exception:
             transcript_data["segments"] = []
         data["transcript"] = transcript_data
+    data["contact_sheet"] = contact_sheet_for_media(data)
     return data
+
+
+def contact_sheet_for_media(data: dict) -> str:
+    if data.get("media_type") != "video":
+        return ""
+    root = output_root()
+    relative_path = str(data.get("relative_path") or "")
+    if not relative_path:
+        return ""
+    for row in read_csv(root / "_MANIFESTS" / "frame_index.csv"):
+        if row.get("media_path") == relative_path:
+            sheet = row.get("contact_sheet") or ""
+            if sheet and (root / sheet).exists():
+                return sheet
+            frame_paths = [item for item in (row.get("frames") or "").split("|") if item]
+            if len(frame_paths) > 1:
+                return frame_paths[0]
+    return ""
 
 
 def original_source_for_media(data: dict) -> dict:

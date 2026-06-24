@@ -1095,6 +1095,23 @@ def api_media_thumbnail(media_id: int):
     raise HTTPException(status_code=404, detail="Thumbnail not found")
 
 
+@app.get("/api/media/{media_id}/contact-sheet")
+def api_media_contact_sheet(media_id: int):
+    detail = checked_media_detail(media_id)
+    sheet_rel = str(detail.get("contact_sheet") or "")
+    if not sheet_rel:
+        raise HTTPException(status_code=404, detail="Contact sheet not found")
+    root = output_root().resolve()
+    sheet = (root / sheet_rel).resolve()
+    try:
+        sheet.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Contact sheet path is outside library root") from exc
+    if not sheet.exists():
+        raise HTTPException(status_code=404, detail="Contact sheet missing")
+    return FileResponse(sheet, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/logs")
 def api_logs(limit: int = Query(20, ge=1, le=100)) -> dict:
     with connect() as conn:

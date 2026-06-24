@@ -56,6 +56,7 @@ Goal: classify media by visual content, not only filenames.
 Implemented:
 
 - Frame extraction with resumable cache behavior.
+- Dynamic video frame extraction by duration, plus generated contact-sheet overview images for video detail pages.
 - Local face scanning and conservative clustering.
 - OpenCLIP-based vision labels for scene, clothing/style, shooting method, content type, and related tags.
 - Vision index import into `media_tags` and `media_timeline_segments`.
@@ -65,6 +66,7 @@ Implemented:
 Validation after NAS full run:
 
 - Confirm `vision_labels.csv`, `frame_index.csv`, and timeline rows are populated.
+- Confirm longer videos receive more cached frames than short videos and expose `contact_sheet` in `frame_index.csv`.
 - Inspect top visual tags and low-confidence review items.
 - Confirm media details show tags and timeline segments when available.
 - Confirm manually confirmed/rejected tags persist and calibrator training records data.
