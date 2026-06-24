@@ -26,6 +26,18 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip uninstall -y onnxruntime \
     && /opt/venv/bin/pip install --no-cache-dir --force-reinstall --no-deps "onnxruntime-openvino>=1.24"
 
+FROM python:3.11-slim-trixie AS sensevoice-runtime-build
+WORKDIR /src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/FunAudioLLM/SenseVoice.git /src/SenseVoice \
+    && cmake -S /src/SenseVoice/runtime/llama.cpp -B /src/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF \
+    && cmake --build /src/build -j2 --target llama-funasr-sensevoice \
+    && strip /src/build/bin/llama-funasr-sensevoice
+
 FROM python:3.11-slim-trixie
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -48,6 +60,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=python-build /opt/venv /opt/venv
+COPY --from=sensevoice-runtime-build /src/build/bin/llama-funasr-sensevoice /usr/local/bin/llama-funasr-sensevoice
 COPY backend/ /app/backend/
 COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
 

@@ -1085,6 +1085,9 @@ def sensevoice_command(wav: Path) -> list[str] | None:
     model_root = Path(os.environ.get("MODEL_ROOT", "/models"))
     runtime = model_root / "sensevoice" / "bin" / "llama-funasr-sensevoice"
     vad = model_root / "sensevoice" / "fsmn-vad.gguf"
+    bundled_runtime = Path("/usr/local/bin/llama-funasr-sensevoice")
+    if bundled_runtime.exists() and Path(model).exists() and vad.exists():
+        return [str(bundled_runtime), "-m", model, "--vad", str(vad), "-a", str(wav)]
     if runtime.exists() and Path(model).exists() and vad.exists():
         return [str(runtime), "-m", model, "--vad", str(vad), "-a", str(wav)]
     found = shutil.which(binary) or shutil.which("sensevoice-cli") or shutil.which("llama-sensevoice") or shutil.which("llama-funasr-sensevoice")
