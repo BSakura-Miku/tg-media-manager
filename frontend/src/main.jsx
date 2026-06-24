@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import {
@@ -140,10 +140,23 @@ const i18n = {
     runNext: 'Run next step',
     searchResults: 'Search Results',
     recentLogs: 'Recent Logs',
+    latestFirst: 'Newest first',
     moveLogRows: 'move log rows',
     jobLog: 'Job Log',
     selectJob: 'select a job',
     selectJobHint: 'Select a job to inspect stdout and stderr',
+    runningJobs: 'Running',
+    failedJobs: 'Errors',
+    completedJobs: 'Completed',
+    otherJobs: 'Other',
+    workflowStep: 'Step',
+    remainingSteps: 'remaining',
+    workflowProgress: 'Workflow progress',
+    currentStepProgress: 'Current step',
+    failedShort: 'failed',
+    loadingMore: 'Loading more...',
+    scrollForMore: 'Scroll to load more',
+    noMoreMedia: 'No more media',
     command: 'Command',
     started: 'Started',
     finished: 'Finished',
@@ -531,10 +544,23 @@ const i18n = {
     runNext: '执行下一步',
     searchResults: '搜索结果',
     recentLogs: '最近日志',
+    latestFirst: '最新在前',
     moveLogRows: '移动日志行',
     jobLog: '任务日志',
     selectJob: '选择任务',
     selectJobHint: '选择一个任务查看 stdout 和 stderr',
+    runningJobs: '进行中',
+    failedJobs: '错误',
+    completedJobs: '已完成',
+    otherJobs: '其他',
+    workflowStep: '第',
+    remainingSteps: '剩余',
+    workflowProgress: '流程进度',
+    currentStepProgress: '当前步骤',
+    failedShort: '失败',
+    loadingMore: '继续加载中...',
+    scrollForMore: '下滑继续加载',
+    noMoreMedia: '已经到底了',
     command: '命令',
     started: '开始',
     finished: '结束',
@@ -878,6 +904,16 @@ const nav = [
   ['settings', 'settings', Settings],
 ];
 
+const workflowSteps = {
+  'workflow-new-downloads': ['scan', 'filename-analysis', 'keyword-classification', 'apply-move-plan', 'refresh-state', 'index-metadata'],
+  'workflow-review-cleanup': ['normalize', 'keyword-classification', 'review-cleanup', 'refresh-state', 'index-metadata'],
+  'workflow-face-balanced': ['extract-frames', 'face-scan', 'face-cluster', 'face-report', 'apply-face-groups'],
+  'workflow-vision-plan': ['extract-frames', 'vision-scan', 'index-vision', 'apply-vision-labels'],
+  'workflow-full-library': ['scan', 'filename-analysis', 'keyword-classification', 'apply-move-plan', 'normalize', 'review-cleanup', 'refresh-state', 'extract-frames', 'face-scan', 'face-cluster', 'face-report', 'apply-face-groups', 'vision-scan', 'index-vision', 'apply-vision-labels', 'dedupe', 'index-similarity', 'transcribe', 'index-metadata'],
+  'workflow-transcribe-sample': ['transcribe', 'index-metadata'],
+  'model-pull-recommended': ['model-download', 'model-download', 'model-download', 'model-download', 'model-download'],
+};
+
 function api(path, options) {
   return fetch(path, options).then(async response => {
     const data = await response.json().catch(() => ({}));
@@ -894,6 +930,51 @@ function Stat({ label, value, icon: Icon, tone = 'blue', sub = '', onClick }) {
 function JobBadge({ status }) {
   const Icon = status === 'done' ? CheckCircle2 : status === 'failed' ? XCircle : Activity;
   return <span className={`badge ${status}`}><Icon size={13} />{status}</span>;
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  return String(value).replace('T', ' ').replace(/\.\d+$/, '');
+}
+
+function sortJobsNewest(jobs) {
+  return [...(jobs || [])].sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+}
+
+function jobStageLabel(stage, t) {
+  if (!stage) return '-';
+  const stageToCommand = {
+    'filename-analysis': 'analyze-filenames',
+    'keyword-classification': 'classify-keywords',
+    'apply-move-plan': 'apply',
+    normalize: 'normalize-organized',
+    'review-cleanup': 'organize-review',
+    'face-report': 'face-cluster-report',
+    dedupe: 'dedupe-organized',
+    'index-vision': 'index-vision',
+    'index-similarity': 'index-similarity',
+    'index-metadata': 'index-metadata',
+    transcribe: 'transcribe',
+    'model-download': 'model-pull-recommended',
+  };
+  return t.commandNames?.[stageToCommand[stage] || stage] || stage;
+}
+
+function jobWorkflowInfo(job, t) {
+  const steps = workflowSteps[job?.command] || [];
+  if (!steps.length) return null;
+  const currentStage = job?.stage || '';
+  const index = Math.max(0, steps.findIndex(stage => stage === currentStage));
+  const doneIndex = job?.status === 'done' ? steps.length - 1 : index;
+  const stepNumber = Math.min(steps.length, doneIndex + 1);
+  const remaining = job?.status === 'done' ? 0 : Math.max(0, steps.length - stepNumber);
+  return {
+    stepNumber,
+    totalSteps: steps.length,
+    remaining,
+    currentStage,
+    label: jobStageLabel(currentStage, t),
+  };
 }
 
 function Empty({ label }) {
@@ -1232,10 +1313,23 @@ function App() {
       author: params.author || '',
       randomize: 'true',
       limit: String(params.limit || 80),
-      offset: '0',
+      offset: String(params.offset || 0),
     });
     const data = await api(`/api/media?${search.toString()}`);
-    setRandomResults(data);
+    if (params.append) {
+      const existing = randomResults.items || [];
+      const seen = new Set(existing.map(item => item.id));
+      const added = (data.items || []).filter(item => !seen.has(item.id));
+      setRandomResults(current => {
+        const currentExisting = current.items || [];
+        const currentSeen = new Set(currentExisting.map(item => item.id));
+        const currentAdded = (data.items || []).filter(item => !currentSeen.has(item.id));
+        return { ...data, items: [...currentExisting, ...currentAdded] };
+      });
+      return { ...data, added_count: added.length };
+    } else {
+      setRandomResults(data);
+    }
     return data;
   }
 
@@ -1750,23 +1844,36 @@ function jobPercent(job) {
 }
 
 function JobsPanel({ jobs, openJob, t }) {
-  return <div className="panel"><div className="panelHead"><h2>{t.jobs}</h2><span>{jobs.length}</span></div><div className="jobs">{jobs.map(job => {
-    const pct = jobPercent(job);
-    const processed = Number(job.processed || 0);
-    const total = Number(job.total || 0);
-    return (
-      <button className="job" key={job.id} onClick={() => openJob(job.id)}>
-        <div className="jobMain">
-          <strong>#{job.id} {t.commandNames?.[job.command] || job.command}</strong>
-          <p>{job.stage || job.message || job.created_at}</p>
-          {job.current_item && <small>{job.current_item}</small>}
-          <i className="jobProgress"><b style={{ width: `${pct}%` }} /></i>
-          <small>{pct}% {total ? `${processed}/${total}` : ''} {Number(job.failed_count || 0) ? ` failed ${job.failed_count}` : ''}</small>
-        </div>
-        <JobBadge status={job.status} />
-      </button>
-    );
-  })}</div></div>;
+  const sorted = sortJobsNewest(jobs);
+  const groups = [
+    [t.runningJobs, sorted.filter(job => ['queued', 'running'].includes(job.status))],
+    [t.failedJobs, sorted.filter(job => ['failed', 'cancelled'].includes(job.status))],
+    [t.completedJobs, sorted.filter(job => job.status === 'done')],
+    [t.otherJobs, sorted.filter(job => !['queued', 'running', 'failed', 'cancelled', 'done'].includes(job.status))],
+  ].filter(([, rows]) => rows.length);
+  return <div className="panel"><div className="panelHead"><h2>{t.jobs}</h2><span>{jobs.length}</span></div><div className="jobGroups">{groups.map(([label, rows]) => (
+    <section className="jobGroup" key={label}>
+      <div className="jobGroupHead"><strong>{label}</strong><span>{rows.length}</span></div>
+      <div className="jobs">{rows.map(job => {
+        const pct = jobPercent(job);
+        const processed = Number(job.processed || 0);
+        const total = Number(job.total || 0);
+        const workflow = jobWorkflowInfo(job, t);
+        return (
+          <button className="job" key={job.id} onClick={() => openJob(job.id)}>
+            <div className="jobMain">
+              <strong>#{job.id} {t.commandNames?.[job.command] || job.command}</strong>
+              <p>{workflow ? `${workflow.label} · ${t.workflowStep} ${workflow.stepNumber}/${workflow.totalSteps} · ${t.remainingSteps} ${workflow.remaining}` : (job.stage || job.message || job.created_at)}</p>
+              {job.current_item && <small>{job.current_item}</small>}
+              <i className="jobProgress"><b style={{ width: `${pct}%` }} /></i>
+              <small>{t.currentStepProgress}: {pct}% {total ? `${processed}/${total}` : ''} {Number(job.failed_count || 0) ? `${t.failedShort} ${job.failed_count}` : ''}</small>
+            </div>
+            <JobBadge status={job.status} />
+          </button>
+        );
+      })}</div>
+    </section>
+  ))}</div></div>;
 }
 
 function jobNextStep(command, t) {
@@ -1805,11 +1912,12 @@ function LogPanel({ selectedJob, jobLog, start, cancelJob, setActive, t }) {
   const canStop = selectedJob && ['queued', 'running'].includes(selectedJob.status);
   const canResume = selectedJob && ['cancelled', 'failed'].includes(selectedJob.status);
   const pct = selectedJob ? jobPercent(selectedJob) : 0;
+  const workflow = selectedJob ? jobWorkflowInfo(selectedJob, t) : null;
   return <div className="panel"><div className="panelHead"><h2>{selectedJob ? `Job #${selectedJob.id}` : t.jobLog}</h2><span>{selectedJob?.status || t.selectJob}</span></div>{!selectedJob ? <Empty label={t.selectJobHint} /> : <div className="logBlock">
     <div className="jobDetailHero">
       <strong>{pct}%</strong>
       <i className="jobProgress"><b style={{ width: `${pct}%` }} /></i>
-      <span>{selectedJob.stage || selectedJob.message || '-'}</span>
+      <span>{workflow ? `${workflow.label} · ${t.workflowStep} ${workflow.stepNumber}/${workflow.totalSteps} · ${t.remainingSteps} ${workflow.remaining}` : (selectedJob.stage || selectedJob.message || '-')}</span>
     </div>
     <div className="nextActions">
       {canStop && <button onClick={() => cancelJob(selectedJob.id)}><Archive size={15} />{t.stopJob || 'Stop'}</button>}
@@ -1819,6 +1927,7 @@ function LogPanel({ selectedJob, jobLog, start, cancelJob, setActive, t }) {
     <div className="list">
       <div className="row"><span>{t.command}</span><strong>{selectedJob.command}</strong></div>
       <div className="row"><span>stage</span><strong>{selectedJob.stage || '-'}</strong></div>
+      {workflow && <div className="row"><span>{t.workflowProgress}</span><strong>{workflow.stepNumber}/{workflow.totalSteps} · {t.remainingSteps} {workflow.remaining}</strong></div>}
       <div className="row"><span>processed</span><strong>{selectedJob.processed || 0}/{selectedJob.total || 0}</strong></div>
       <div className="row"><span>current</span><strong>{selectedJob.current_item || '-'}</strong></div>
       <div className="row"><span>failed/skipped</span><strong>{selectedJob.failed_count || 0}/{selectedJob.skipped_count || 0}</strong></div>
@@ -1972,11 +2081,36 @@ function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
 
 function RandomFlowPanel({ mediaResults, loadRandomMedia, t }) {
   const [filters, setFilters] = useState({ media_type: 'all', tag: '', author: '', q: '' });
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [exhausted, setExhausted] = useState(false);
+  const sentinelRef = useRef(null);
   const activeFilters = [filters.media_type !== 'all' ? filters.media_type : '', filters.q, filters.tag, filters.author].filter(Boolean);
+  const items = mediaResults.items || [];
+  const hasMore = !exhausted && Number(mediaResults.total || 0) > items.length;
   function run(event) {
     event?.preventDefault();
+    setExhausted(false);
     loadRandomMedia(filters);
   }
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const data = await loadRandomMedia({ ...filters, append: true, limit: 80, offset: items.length });
+      if (!data.items?.length || Number(data.added_count || 0) === 0) setExhausted(true);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node) return undefined;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) loadMore();
+    }, { rootMargin: '800px 0px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [items.length, hasMore, loadingMore, filters.media_type, filters.q, filters.tag, filters.author]);
   return (
     <section className="panel">
       <div className="panelHead"><h2>{t.randomFlow}</h2><button className="panelButton" onClick={run}><Shuffle size={16} />{t.randomize}</button><span>{mediaResults.total || 0}</span></div>
@@ -1992,7 +2126,8 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, t }) {
         <button type="submit"><Shuffle size={16} />{t.randomize}</button>
       </form>
       {activeFilters.length > 0 && <div className="hintBox smallHint"><span>{t.searchResults}: {activeFilters.join(' / ')}</span></div>}
-      <MediaGrid items={mediaResults.items || []} t={t} />
+      <MediaGrid items={items} t={t} />
+      <div className="infiniteSentinel" ref={sentinelRef}>{loadingMore ? t.loadingMore : hasMore ? t.scrollForMore : t.noMoreMedia}</div>
     </section>
   );
 }
@@ -2485,7 +2620,11 @@ function CollectionViewer({ title, subtitle, items, close, t }) {
 }
 
 function LogsPanel({ jobs, applied, openJob, setActive, t }) {
-  return <section className="panel"><div className="panelHead"><h2>{t.recentLogs}</h2><span>{applied.rows} {t.moveLogRows}</span></div><div className="jobs">{jobs.map(job => <button className="job" key={job.id} onClick={() => { openJob(job.id); setActive('jobs'); }}><div className="jobMain"><strong>#{job.id} {job.command}</strong><p>{job.stdout || job.stderr || job.message || job.created_at}</p></div><JobBadge status={job.status} /></button>)}</div></section>;
+  const sorted = sortJobsNewest(jobs);
+  return <section className="panel"><div className="panelHead"><h2>{t.recentLogs}</h2><span>{t.latestFirst} · {applied.rows} {t.moveLogRows}</span></div><div className="jobs">{sorted.map(job => {
+    const stamp = formatDateTime(job.finished_at || job.heartbeat_at || job.started_at || job.created_at);
+    return <button className="job logJob" key={job.id} onClick={() => { openJob(job.id); setActive('jobs'); }}><div className="jobMain"><strong>#{job.id} {t.commandNames?.[job.command] || job.command}</strong><p>{job.stdout || job.stderr || job.message || job.created_at}</p><small>{stamp}</small></div><JobBadge status={job.status} /></button>;
+  })}</div></section>;
 }
 
 function FieldLabel({ label, help }) {
