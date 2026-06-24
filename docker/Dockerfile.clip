@@ -39,7 +39,12 @@ RUN apt-get update \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends clinfo \
-    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then apt-get install -y --no-install-recommends ocl-icd-libopencl1 mesa-opencl-icd libze1; fi \
+    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        printf '%s\n' 'deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware' > /etc/apt/sources.list.d/bookworm-intel-opencl.list \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends intel-opencl-icd libze1 \
+        && rm -f /etc/apt/sources.list.d/bookworm-intel-opencl.list; \
+    fi \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=python-build /opt/venv /opt/venv
