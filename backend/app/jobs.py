@@ -27,6 +27,7 @@ ALLOWED_COMMANDS = {
     "model-pull-openclip-vit-h": [["__model_pull__", "openclip-vit-h"]],
     "model-pull-insightface-buffalo-l": [["__model_pull__", "insightface-buffalo-l"]],
     "model-pull-faster-whisper-small": [["__model_pull__", "faster-whisper-small"]],
+    "model-pull-funasr-nano-onnx": [["__model_pull__", "funasr-nano-onnx"]],
     "model-pull-sensevoice-small-gguf": [["__model_pull__", "sensevoice-small-gguf"]],
     "model-pull-sensevoice-fsmn-vad-gguf": [["__model_pull__", "sensevoice-fsmn-vad-gguf"]],
     "model-pull-sensevoice-llamacpp-runtime": [["__model_pull__", "sensevoice-llamacpp-runtime"]],
@@ -173,6 +174,8 @@ def hardware_env(settings: dict) -> dict[str, str]:
     openvino = settings.get("openvino_device") or os.environ.get("OPENVINO_DEVICE", "")
     whisper = settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", "cpu")
     asr_engine = settings.get("asr_engine") or os.environ.get("ASR_ENGINE", "auto")
+    transcript_engine = settings.get("transcript_engine") or os.environ.get("TRANSCRIPT_ENGINE", asr_engine)
+    audio_tag_mode = settings.get("audio_tag_mode") or os.environ.get("AUDIO_TAG_MODE", "sensevoice-sample")
     if compute == "cpu":
         ffmpeg = "none"
         face = "CPUExecutionProvider"
@@ -196,6 +199,9 @@ def hardware_env(settings: dict) -> dict[str, str]:
     env["WHISPER_DEVICE"] = whisper
     env.setdefault("WHISPER_COMPUTE_TYPE", "int8")
     env["ASR_ENGINE"] = asr_engine
+    env["TRANSCRIPT_ENGINE"] = transcript_engine
+    env["AUDIO_TAG_MODE"] = audio_tag_mode
+    env["AUDIO_TAG_SAMPLE_SECONDS"] = str(settings.get("audio_tag_sample_seconds") or os.environ.get("AUDIO_TAG_SAMPLE_SECONDS", "30"))
     env["SENSEVOICE_GGUF_BIN"] = settings.get("sensevoice_gguf_bin") or os.environ.get("SENSEVOICE_GGUF_BIN", "llama-sensevoice")
     env["SENSEVOICE_GGUF_MODEL"] = settings.get("sensevoice_gguf_model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "/models/sensevoice/SenseVoiceSmall.gguf")
     if settings.get("sensevoice_gguf_command") or os.environ.get("SENSEVOICE_GGUF_COMMAND"):
@@ -404,7 +410,7 @@ def run_job(job_id: int, command: str) -> None:
             "COMPUTE_DEVICE", "FFMPEG_HWACCEL", "FACE_PROVIDERS", "OPENVINO_DEVICE",
             "OPENCLIP_MODEL", "OPENCLIP_PRETRAINED", "OPENCLIP_STRONG_MODEL",
             "OPENCLIP_STRONG_PRETRAINED", "OPENCLIP_STRONG_THRESHOLD", "OPENCLIP_STRONG_LOW_CONF_ONLY",
-            "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE", "ASR_ENGINE", "SENSEVOICE_GGUF_BIN",
+            "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE", "ASR_ENGINE", "TRANSCRIPT_ENGINE", "AUDIO_TAG_MODE", "AUDIO_TAG_SAMPLE_SECONDS", "SENSEVOICE_GGUF_BIN",
             "SENSEVOICE_GGUF_MODEL", "SENSEVOICE_GGUF_COMMAND", "TRANSCRIBE_MAX_SECONDS",
         }
     })

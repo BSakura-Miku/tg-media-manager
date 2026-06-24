@@ -1062,13 +1062,17 @@ def audio_tags_for_transcript(text: str, language: str, source: str) -> list[dic
     return list(tags.values())
 
 
-def extract_audio_wav(video: Path, wav: Path) -> tuple[bool, str]:
-    cmd = ["ffmpeg", "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "16000"]
-    max_seconds = (os.environ.get("TRANSCRIBE_MAX_SECONDS", "0") or "0").strip()
+def configured_seconds(env_name: str, default: int = 0) -> int:
+    value = (os.environ.get(env_name, str(default)) or str(default)).strip()
     try:
-        seconds = int(max_seconds)
+        return max(0, int(value))
     except ValueError:
-        seconds = 0
+        return default
+
+
+def extract_audio_wav(video: Path, wav: Path, max_seconds: int | None = None) -> tuple[bool, str]:
+    cmd = ["ffmpeg", "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "16000"]
+    seconds = configured_seconds("TRANSCRIBE_MAX_SECONDS", 0) if max_seconds is None else max(0, int(max_seconds))
     if seconds > 0:
         cmd.extend(["-t", str(seconds)])
     cmd.append(str(wav))
@@ -1152,6 +1156,74 @@ def transcribe_with_sensevoice_gguf(wav: Path) -> dict | None:
         "language": language,
         "segments": segments,
         "engine": "sensevoice-gguf",
+        "raw": proc.stdout[-2000:],
+    }
+
+
+def funasr_nano_command(wav: Path) -> list[str] | None:
+    template = os.environ.get("FUNASR_NANO_COMMAND", "").strip()
+    if template:
+        return [part.format(audio=str(wav), model=os.environ.get("FUNASR_NANO_MODEL", ""), model_dir=os.environ.get("FUNASR_NANO_MODEL_DIR", "/models/funasr-nano")) for part in shlex.split(template)]
+    found = shutil.which("sherpa-onnx-offline") or shutil.which("funasr-nano") or shutil.which("funasr-onnx")
+    model_dir = Path(os.environ.get("FUNASR_NANO_MODEL_DIR", "/models/funasr-nano"))
+    if found and model_dir.exists():
+        return [found, "--model-dir", str(model_dir), "--tokens", str(model_dir / "tokens.txt"), str(wav)]
+    return None
+
+
+def parse_generic_asr_output(stdout: str) -> tuple[str, str, list[dict]]:
+    text = stdout.strip()
+    language = ""
+    segments: list[dict] = []
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            language = str(data.get("language") or data.get("lang") or "")
+            raw_segments = data.get("segments") or data.get("sentence_info") or data.get("timestamps") or []
+            if isinstance(raw_segments, list):
+                for item in raw_segments:
+                    if not isinstance(item, dict):
+                        continue
+                    segment_text = str(item.get("text") or item.get("sentence") or "").strip()
+                    if not segment_text:
+                        continue
+                    start = float(item.get("start", item.get("start_ms", 0)) or 0)
+                    end = float(item.get("end", item.get("end_ms", 0)) or 0)
+                    if start > 1000 or end > 1000:
+                        start /= 1000
+                        end /= 1000
+                    segments.append({"start": round(start, 2), "end": round(end, 2), "text": segment_text})
+            text = str(data.get("text") or data.get("result") or data.get("transcript") or "\n".join(item["text"] for item in segments)).strip()
+        elif isinstance(data, list):
+            parts = []
+            for item in data:
+                if isinstance(item, dict):
+                    parts.append(str(item.get("text") or item.get("sentence") or ""))
+            text = "\n".join(part for part in parts if part).strip()
+    except Exception:
+        pass
+    text = re.sub(r"\s+", " ", text).strip()
+    if not segments and text:
+        segments = [{"start": 0, "end": 0, "text": text}]
+    return text, language, segments
+
+
+def transcribe_with_funasr_nano_onnx(wav: Path) -> dict | None:
+    cmd = funasr_nano_command(wav)
+    if not cmd:
+        return None
+    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
+    if proc.returncode != 0:
+        return {"ok": False, "error": proc.stderr[-1000:] or f"exit {proc.returncode}", "engine": "funasr-nano-onnx"}
+    text, language, segments = parse_generic_asr_output(proc.stdout)
+    return {
+        "ok": True,
+        "text": text,
+        "tag_text": text,
+        "language": language,
+        "segments": segments,
+        "engine": "funasr-nano-onnx",
+        "model": os.environ.get("FUNASR_NANO_MODEL_DIR", "/models/funasr-nano"),
         "raw": proc.stdout[-2000:],
     }
 
@@ -1240,7 +1312,23 @@ def subtitle_for_media(media_id: int, mode: str = "original") -> tuple[str, Path
     return transcript_to_vtt(segments, str(transcript["text"] or ""), mode), None
 
 
-def save_transcript(conn, media_id: int, result: dict, model_name: str) -> None:
+def save_audio_tags(conn, media_id: int, tag_text: str, language: str, source: str, replace: bool = True) -> int:
+    if replace:
+        conn.execute("DELETE FROM media_tags WHERE media_id=? AND source=?", (media_id, source))
+    inserted = 0
+    for tag in audio_tags_for_transcript(tag_text, language, source):
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (media_id, tag["tag"], tag["category"], tag["confidence"], tag["source"], tag["state"]),
+        )
+        inserted += 1
+    return inserted
+
+
+def save_transcript(conn, media_id: int, result: dict, model_name: str, include_text_tags: bool = True) -> None:
     text = str(result.get("text") or "")
     language = str(result.get("language") or "")
     segments = result.get("segments") or []
@@ -1259,16 +1347,11 @@ def save_transcript(conn, media_id: int, result: dict, model_name: str) -> None:
         """,
         (media_id, language, text, json.dumps(segments, ensure_ascii=False), model_name, engine),
     )
-    conn.execute("DELETE FROM media_tags WHERE media_id=? AND source IN ('audio', 'sensevoice-gguf', 'faster-whisper')", (media_id,))
-    tag_text = str(result.get("tag_text") or text)
-    for tag in audio_tags_for_transcript(tag_text, language, "audio"):
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (media_id, tag["tag"], tag["category"], tag["confidence"], tag["source"], tag["state"]),
-        )
+    conn.execute("DELETE FROM media_tags WHERE media_id=? AND source IN ('audio', 'sensevoice-gguf', 'faster-whisper', 'transcript', 'sensevoice-audio', 'funasr-nano-onnx')", (media_id,))
+    if include_text_tags:
+        tag_text = str(result.get("tag_text") or text)
+        tag_source = "sensevoice-audio" if engine == "sensevoice-gguf" else "transcript"
+        save_audio_tags(conn, media_id, tag_text, language, tag_source, replace=False)
     conn.execute(
         "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'transcribe', ?)",
         (media_id, f"segments={len(segments)} model={model_name} engine={engine}"),
@@ -1297,11 +1380,19 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
         return {"ok": True, "processed": 0, "segments": 0}
     total = len(rows)
     print("TGMM_PROGRESS " + json.dumps({"stage": "transcribe", "processed": 0, "total": total, "progress": 0, "message": "loading model"}, ensure_ascii=False), flush=True)
-    asr_engine = os.environ.get("ASR_ENGINE", "auto").strip().lower()
+    legacy_engine = os.environ.get("ASR_ENGINE", "auto").strip().lower()
+    transcript_engine = os.environ.get("TRANSCRIPT_ENGINE", legacy_engine).strip().lower()
+    audio_tag_mode = os.environ.get("AUDIO_TAG_MODE", "sensevoice-sample").strip().lower()
+    audio_tag_sample_seconds = configured_seconds("AUDIO_TAG_SAMPLE_SECONDS", 30)
+    if transcript_engine == "whisper":
+        transcript_engine = "faster-whisper"
+    if transcript_engine == "sensevoice":
+        transcript_engine = "sensevoice-gguf"
     sensevoice_available = sensevoice_command(Path("__probe__.wav")) is not None
+    funasr_available = funasr_nano_command(Path("__probe__.wav")) is not None
     model = None
     model_name = os.environ.get("WHISPER_MODEL", model_size)
-    should_load_whisper = asr_engine in {"faster-whisper", "whisper"} or (asr_engine == "auto" and not sensevoice_available)
+    should_load_whisper = transcript_engine in {"faster-whisper", "whisper"} or (transcript_engine == "auto" and not funasr_available and not sensevoice_available)
     if should_load_whisper:
         try:
             from faster_whisper import WhisperModel  # type: ignore
@@ -1309,7 +1400,7 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
             compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
             model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=os.environ.get("MODEL_ROOT", "/models"))
         except Exception as exc:
-            if asr_engine != "auto":
+            if transcript_engine != "auto":
                 return {
                     "ok": False,
                     "error": "faster-whisper is not installed in this image. Install the transcribe extra or build a transcribe-enabled image.",
@@ -1336,16 +1427,24 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                     continue
                 try:
                     result = None
-                    if asr_engine in {"auto", "sensevoice", "sensevoice-gguf"} and sensevoice_available:
+                    if transcript_engine in {"auto", "funasr-nano-onnx", "funasr-nano"} and funasr_available:
+                        result = transcribe_with_funasr_nano_onnx(wav)
+                        if result and not result.get("ok"):
+                            if transcript_engine != "auto":
+                                errors.append({"id": row["id"], "error": result.get("error", "funasr-nano failed")})
+                                continue
+                            warnings.append({"id": row["id"], "warning": "funasr-nano fallback", "detail": result.get("error", "funasr-nano failed")})
+                            result = None
+                    if result is None and transcript_engine in {"auto", "sensevoice", "sensevoice-gguf"} and sensevoice_available:
                         result = transcribe_with_sensevoice_gguf(wav)
                         if result and not result.get("ok"):
-                            if asr_engine != "auto":
+                            if transcript_engine != "auto":
                                 errors.append({"id": row["id"], "error": result.get("error", "sensevoice failed")})
                                 continue
                             warnings.append({"id": row["id"], "warning": "sensevoice fallback", "detail": result.get("error", "sensevoice failed")})
                             result = None
                     if result is None:
-                        if asr_engine == "auto" and model is None:
+                        if transcript_engine == "auto" and model is None:
                             try:
                                 from faster_whisper import WhisperModel  # type: ignore
                                 device = os.environ.get("WHISPER_DEVICE", "cpu")
@@ -1357,7 +1456,25 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                             errors.append({"id": row["id"], "error": "no ASR engine available"})
                             continue
                         result = transcribe_with_faster_whisper(wav, model, model_name)
-                    save_transcript(conn, int(row["id"]), result, result.get("model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "SenseVoiceSmall.gguf"))
+                    save_transcript(conn, int(row["id"]), result, result.get("model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "SenseVoiceSmall.gguf"), include_text_tags=audio_tag_mode != "off")
+                    if result.get("engine") != "sensevoice-gguf" and audio_tag_mode in {"sensevoice-sample", "sensevoice-full"} and sensevoice_available:
+                        tag_wav = wav
+                        if audio_tag_mode == "sensevoice-sample" and audio_tag_sample_seconds > 0:
+                            tag_wav = tmp_root / f"{row['id']}.tags.wav"
+                            tag_ok, tag_audio_error = extract_audio_wav(path, tag_wav, audio_tag_sample_seconds)
+                            if not tag_ok:
+                                warnings.append({"id": row["id"], "warning": "audio tag sample failed", "detail": tag_audio_error})
+                                tag_wav = None
+                        if tag_wav is not None:
+                            tag_result = transcribe_with_sensevoice_gguf(tag_wav)
+                            if tag_result and tag_result.get("ok"):
+                                tags_inserted = save_audio_tags(conn, int(row["id"]), str(tag_result.get("tag_text") or tag_result.get("text") or ""), str(tag_result.get("language") or result.get("language") or ""), "sensevoice-audio", replace=True)
+                                conn.execute(
+                                    "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'audio_tag', ?)",
+                                    (int(row["id"]), f"engine=sensevoice-gguf mode={audio_tag_mode} tags={tags_inserted}"),
+                                )
+                            elif tag_result:
+                                warnings.append({"id": row["id"], "warning": "sensevoice audio tag failed", "detail": tag_result.get("error", "")})
                     conn.commit()
                     processed += 1
                     segment_count += len(result.get("segments") or [])

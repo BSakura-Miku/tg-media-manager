@@ -122,6 +122,9 @@ class SettingsRequest(BaseModel):
     face_providers: str = "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device: str = "cpu"
     asr_engine: str = "auto"
+    transcript_engine: str = "auto"
+    audio_tag_mode: str = "sensevoice-sample"
+    audio_tag_sample_seconds: int = 30
     sensevoice_gguf_bin: str = "llama-sensevoice"
     sensevoice_gguf_model: str = "/models/sensevoice/SenseVoiceSmall.gguf"
     sensevoice_gguf_command: str = ""
@@ -639,6 +642,9 @@ def default_settings() -> dict:
         "face_providers": settings.get("face_providers") or os.environ.get("FACE_PROVIDERS", "OpenVINOExecutionProvider,CPUExecutionProvider"),
         "whisper_device": settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", "cpu"),
         "asr_engine": settings.get("asr_engine") or os.environ.get("ASR_ENGINE", "auto"),
+        "transcript_engine": settings.get("transcript_engine") or os.environ.get("TRANSCRIPT_ENGINE", settings.get("asr_engine") or os.environ.get("ASR_ENGINE", "auto")),
+        "audio_tag_mode": settings.get("audio_tag_mode") or os.environ.get("AUDIO_TAG_MODE", "sensevoice-sample"),
+        "audio_tag_sample_seconds": setting_int("audio_tag_sample_seconds", "AUDIO_TAG_SAMPLE_SECONDS", 30, 0, 3600),
         "sensevoice_gguf_bin": settings.get("sensevoice_gguf_bin") or os.environ.get("SENSEVOICE_GGUF_BIN", "llama-sensevoice"),
         "sensevoice_gguf_model": settings.get("sensevoice_gguf_model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "/models/sensevoice/SenseVoiceSmall.gguf"),
         "sensevoice_gguf_command": settings.get("sensevoice_gguf_command") or os.environ.get("SENSEVOICE_GGUF_COMMAND", ""),
@@ -709,6 +715,14 @@ def api_save_settings(req: SettingsRequest) -> dict:
         asr_engine = "sensevoice-gguf"
     if asr_engine == "whisper":
         asr_engine = "faster-whisper"
+    transcript_engine = req.transcript_engine if req.transcript_engine in {"auto", "funasr-nano-onnx", "funasr-nano", "sensevoice-gguf", "sensevoice", "faster-whisper", "whisper"} else asr_engine
+    if transcript_engine == "sensevoice":
+        transcript_engine = "sensevoice-gguf"
+    if transcript_engine == "whisper":
+        transcript_engine = "faster-whisper"
+    if transcript_engine == "funasr-nano":
+        transcript_engine = "funasr-nano-onnx"
+    audio_tag_mode = req.audio_tag_mode if req.audio_tag_mode in {"off", "sensevoice-sample", "sensevoice-full"} else "sensevoice-sample"
     sensevoice_gguf_bin = (req.sensevoice_gguf_bin or "llama-sensevoice").strip()
     sensevoice_gguf_model = (req.sensevoice_gguf_model or "/models/sensevoice/SenseVoiceSmall.gguf").strip()
     if sensevoice_gguf_model and not sensevoice_gguf_model.startswith("/"):
@@ -724,6 +738,7 @@ def api_save_settings(req: SettingsRequest) -> dict:
     frames_per_video = clamp_int(req.frames_per_video, 3, 1, 12)
     frame_checkpoint_every = clamp_int(req.frame_checkpoint_every, 100, 10, 1000)
     transcribe_max_seconds = clamp_int(req.transcribe_max_seconds, 0, 0, 86400)
+    audio_tag_sample_seconds = clamp_int(req.audio_tag_sample_seconds, 30, 0, 3600)
     source_dirs = ",".join(part.strip().strip("/") for part in req.source_dirs.split(",") if part.strip())
     monitor_dirs = ",".join(part.strip().strip("/") for part in req.monitor_dirs.split(",") if part.strip())
     try:
@@ -749,6 +764,9 @@ def api_save_settings(req: SettingsRequest) -> dict:
         "face_providers": face_providers,
         "whisper_device": whisper_device,
         "asr_engine": asr_engine,
+        "transcript_engine": transcript_engine,
+        "audio_tag_mode": audio_tag_mode,
+        "audio_tag_sample_seconds": audio_tag_sample_seconds,
         "sensevoice_gguf_bin": sensevoice_gguf_bin,
         "sensevoice_gguf_model": sensevoice_gguf_model,
         "sensevoice_gguf_command": sensevoice_gguf_command,
