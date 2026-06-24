@@ -1,4 +1,4 @@
-.PHONY: dev build build-amd64 build-arm build-vision-amd64 build-clip-amd64 build-transcribe-amd64 push-base-amd64 push-vision-amd64 push-clip-amd64 push-transcribe-amd64 save-amd64 save-vision-amd64 up down logs
+.PHONY: dev build build-amd64 build-arm build-vision-amd64 build-clip-amd64 build-transcribe-amd64 push-base-amd64 push-vision-amd64 push-clip-amd64 push-transcribe-amd64 save-amd64 save-vision-amd64 up down logs phase-audit
 
 IMAGE ?= tg-media-manager
 TAG ?= latest
@@ -57,3 +57,6 @@ down:
 
 logs:
 	docker compose logs -f --tail=200
+
+phase-audit:
+	python3 scripts/phase_audit.py

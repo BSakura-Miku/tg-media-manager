@@ -191,11 +191,28 @@ Scope:
 
 ## Current Priorities
 
-Next implementation sequence:
+Current execution status is tracked in:
 
-1. Phase 1 author page and thumbnail fixes.
-2. Phase 1 job-flow next-step buttons.
-3. Phase 1 dashboard redesign.
-4. Phase 2 SQLite metadata schema draft.
-5. Phase 2 virtual media viewer/search foundation.
+```text
+docs/phase-execution-plan.md
+```
 
+Phase execution sequence:
+
+1. Phase 1: UX and workflow foundation.
+2. Phase 2: metadata database and virtual classification.
+3. Phase 3: vision tags and video understanding.
+4. Phase 4: dedupe, similarity, and version review.
+5. Phase 5: privacy, compliance, models, and performance.
+
+Run the local phase audit with:
+
+```bash
+make phase-audit
+```
+
+After the NAS full-library job finishes, run the same audit with the NAS database and media root:
+
+```bash
+python3 scripts/phase_audit.py --db /volume1/docker/tg-media-manager/data/tg_media_manager.sqlite3 --media-root /volume4/BS-Secondary/BS-Media2/BS-Lsp/Tgdownloads/LSP
+```
