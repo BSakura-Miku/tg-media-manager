@@ -6,9 +6,11 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.request
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from .db import get_settings
 
@@ -78,6 +80,33 @@ MODEL_REGISTRY = {
         "default_url": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF/resolve/main/sensevoice-small.gguf",
         "url_env": "SENSEVOICE_GGUF_URL",
         "sha256_env": "SENSEVOICE_GGUF_SHA256",
+        "recommended": True,
+    },
+    "sensevoice-fsmn-vad-gguf": {
+        "name": "FSMN VAD GGUF",
+        "category": "speech",
+        "kind": "file",
+        "description": "Voice activity detection model required by the FunASR llama.cpp SenseVoice runtime.",
+        "description_zh": "FunASR llama.cpp SenseVoice 运行时需要的语音活动检测模型。",
+        "path": "sensevoice/fsmn-vad.gguf",
+        "official_url": "https://huggingface.co/FunAudioLLM/fsmn-vad-GGUF",
+        "default_url": "https://huggingface.co/FunAudioLLM/fsmn-vad-GGUF/resolve/main/fsmn-vad.gguf",
+        "url_env": "SENSEVOICE_VAD_GGUF_URL",
+        "sha256_env": "SENSEVOICE_VAD_GGUF_SHA256",
+        "recommended": True,
+    },
+    "sensevoice-llamacpp-runtime": {
+        "name": "FunASR llama.cpp runtime",
+        "category": "speech",
+        "kind": "archive",
+        "description": "Linux x64 command-line runtime for SenseVoice GGUF transcription.",
+        "description_zh": "SenseVoice GGUF 转写所需的 Linux x64 命令行运行时。",
+        "path": "sensevoice/bin/llama-funasr-sensevoice",
+        "archive_member": "llama-funasr-sensevoice",
+        "official_url": "https://github.com/FunAudioLLM/SenseVoice/releases/tag/runtime-llamacpp-v0.1.2",
+        "default_url": "https://github.com/FunAudioLLM/SenseVoice/releases/download/runtime-llamacpp-v0.1.2/funasr-llamacpp-linux-x64.tar.gz",
+        "url_env": "SENSEVOICE_RUNTIME_URL",
+        "sha256_env": "SENSEVOICE_RUNTIME_SHA256",
         "recommended": True,
     },
     "custom-detector-onnx": {
@@ -172,13 +201,14 @@ def _configured_sha256(model_id: str, spec: dict, settings: dict | None = None) 
 def _model_status(model_id: str, spec: dict) -> dict:
     settings = get_settings()
     path = _safe_path(str(spec["path"]))
-    url = _configured_url(model_id, spec, settings) if spec.get("kind") == "file" else ""
-    url_source = _configured_url_source(model_id, spec, settings) if spec.get("kind") == "file" else ""
-    sha256 = _configured_sha256(model_id, spec, settings) if spec.get("kind") == "file" else ""
+    downloadable = spec.get("kind") in {"file", "archive"}
+    url = _configured_url(model_id, spec, settings) if downloadable else ""
+    url_source = _configured_url_source(model_id, spec, settings) if downloadable else ""
+    sha256 = _configured_sha256(model_id, spec, settings) if downloadable else ""
     present = _is_present(path, str(spec["kind"]))
     if spec["kind"] == "runtime-cache" and spec.get("command") in {"openclip", "faster-whisper"}:
         present = _marker_path(model_id).exists()
-    status = "ready" if present else ("needs_url" if spec["kind"] == "file" and not url else "missing")
+    status = "ready" if present else ("needs_url" if downloadable and not url else "missing")
     return {
         "id": model_id,
         "name": spec["name"],
@@ -195,7 +225,7 @@ def _model_status(model_id: str, spec: dict) -> dict:
         "url_configured": bool(url),
         "url_source": url_source,
         "source_url": url,
-        "source_editable": spec.get("kind") == "file",
+        "source_editable": downloadable,
         "official_url": spec.get("official_url", ""),
         "sha256_env": spec.get("sha256_env", ""),
         "sha256": sha256,
@@ -302,6 +332,54 @@ def _download_file(model_id: str, spec: dict) -> dict:
     return {"ok": True, "model": model_id, "path": str(path), "bytes": path.stat().st_size}
 
 
+def _download_archive(model_id: str, spec: dict) -> dict:
+    settings = get_settings()
+    url = _configured_url(model_id, spec, settings)
+    if not url:
+        raise RuntimeError(f"No source URL configured for {model_id}; set it in the Web Models page, then pull again")
+    path = _safe_path(str(spec["path"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    member_name = str(spec.get("archive_member") or path.name)
+    with TemporaryDirectory(prefix="tgmm_model_") as tmpdir:
+        archive = Path(tmpdir) / "model-archive.tar.gz"
+        req = urllib.request.Request(url, headers={"User-Agent": "tg-media-manager/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as response, archive.open("wb") as fh:
+            total = int(response.headers.get("Content-Length") or 0)
+            done = 0
+            last_emit = 0.0
+            while True:
+                if _cancelled():
+                    raise KeyboardInterrupt("cancelled")
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                done += len(chunk)
+                now = time.time()
+                if total and now - last_emit > 1:
+                    _progress("model-download", done, total, archive.name)
+                    last_emit = now
+        _verify_sha256(archive, _configured_sha256(model_id, spec, settings))
+        with tarfile.open(archive, "r:gz") as tar:
+            selected = None
+            for member in tar.getmembers():
+                if Path(member.name).name == member_name and member.isfile():
+                    selected = member
+                    break
+            if selected is None:
+                raise RuntimeError(f"{member_name} not found in {url}")
+            extracted = tar.extractfile(selected)
+            if extracted is None:
+                raise RuntimeError(f"Unable to extract {member_name}")
+            part = path.with_suffix(path.suffix + ".part")
+            with part.open("wb") as fh:
+                shutil.copyfileobj(extracted, fh)
+            part.chmod(0o755)
+            part.replace(path)
+    _progress("model-download", 1, 1, path.name)
+    return {"ok": True, "model": model_id, "path": str(path), "bytes": path.stat().st_size}
+
+
 def _run_cache_command(model_id: str, spec: dict) -> dict:
     root = model_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -359,4 +437,6 @@ def pull_model(model_id: str) -> dict:
         raise ValueError("Unknown model")
     if spec["kind"] == "file":
         return _download_file(model_id, spec)
+    if spec["kind"] == "archive":
+        return _download_archive(model_id, spec)
     return _run_cache_command(model_id, spec)

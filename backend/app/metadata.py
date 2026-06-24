@@ -1082,9 +1082,16 @@ def sensevoice_command(wav: Path) -> list[str] | None:
     template = os.environ.get("SENSEVOICE_GGUF_COMMAND", "")
     if template:
         return [part.format(audio=str(wav), model=model, bin=binary) for part in shlex.split(template)]
-    found = shutil.which(binary) or shutil.which("sensevoice-cli") or shutil.which("llama-sensevoice")
+    model_root = Path(os.environ.get("MODEL_ROOT", "/models"))
+    runtime = model_root / "sensevoice" / "bin" / "llama-funasr-sensevoice"
+    vad = model_root / "sensevoice" / "fsmn-vad.gguf"
+    if runtime.exists() and Path(model).exists() and vad.exists():
+        return [str(runtime), "-m", model, "--vad", str(vad), "-a", str(wav)]
+    found = shutil.which(binary) or shutil.which("sensevoice-cli") or shutil.which("llama-sensevoice") or shutil.which("llama-funasr-sensevoice")
     if not found or not Path(model).exists():
         return None
+    if Path(found).name == "llama-funasr-sensevoice" and vad.exists():
+        return [found, "-m", model, "--vad", str(vad), "-a", str(wav)]
     return [found, "-m", model, "-f", str(wav), "--language", "auto"]
 
 
