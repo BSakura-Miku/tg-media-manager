@@ -127,7 +127,7 @@ Expected outputs:
 
 ## Known Deferred Work
 
-- Dashboard storage card should show capacity plus count per media type, for example `Videos 300 GB (1,000 items)`, `Photos 80 GB (6,000 items)`. The ring chart should be based on bytes, not item counts. This requires backend summary fields aggregated from `media_items.size_bytes` by `media_type`, plus a frontend formatting pass after the current NAS full-library job finishes.
+- Dashboard storage card should show capacity plus count per media type, for example `Videos 300 GB (1,000 items)`, `Photos 80 GB (6,000 items)`. In Simplified Chinese, video counts must use `部` and photo counts must use `张`, for example `视频 300 GB（1,000 部）` and `图片 80 GB（6,000 张）`. The ring chart should be based on bytes, not item counts. This requires backend summary fields aggregated from `media_items.size_bytes` by `media_type`, plus a frontend formatting pass after the current NAS full-library job finishes.
 - Web model-pack manifest installer is recorded in `docs/architecture-model-management.md` but not fully implemented yet.
 - Local model upload through the Web UI is still future work.
 - Non-Chinese subtitle translation depends on a future local translation model/runtime selection.
