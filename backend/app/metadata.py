@@ -1346,6 +1346,7 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                             continue
                         result = transcribe_with_faster_whisper(wav, model, model_name)
                     save_transcript(conn, int(row["id"]), result, result.get("model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "SenseVoiceSmall.gguf"))
+                    conn.commit()
                     processed += 1
                     segment_count += len(result.get("segments") or [])
                 except Exception as exc:

@@ -1411,6 +1411,9 @@ def vision_scan(config: Config, limit: int | None) -> None:
     frame_index = config.manifests / "frame_index.csv"
     if not frame_index.exists():
         raise SystemExit("frame_index.csv not found. Run extract-frames first.")
+    frame_rows = list(dict_rows_from_csv(frame_index))
+    total = min(limit or len(frame_rows), len(frame_rows))
+    progress_event("vision-scan", 0, total, message="loading OpenCLIP model")
     strong_mode = os.environ.get("OPENCLIP_STRONG_MODE", "").lower() in {"1", "true", "yes", "on"}
     low_confidence_only = strong_mode and os.environ.get("OPENCLIP_STRONG_LOW_CONF_ONLY", "true").lower() not in {"0", "false", "no", "off"}
     try:
@@ -1447,7 +1450,10 @@ def vision_scan(config: Config, limit: int | None) -> None:
     rows = list(preserved_rows)
     embedding_rows = list(preserved_embedding_rows)
     scanned = 0
-    for frame_row in dict_rows_from_csv(frame_index):
+    for frame_row in frame_rows:
+        if cancel_requested():
+            progress_event("vision-scan", scanned, total, message="cancel requested")
+            break
         frame_paths = [p for p in frame_row.get("frames", "").split("|") if p]
         if low_confidence_only and existing_labels.get(frame_row.get("media_path", ""), 0.0) >= low_confidence_threshold:
             continue
@@ -1498,6 +1504,8 @@ def vision_scan(config: Config, limit: int | None) -> None:
                 "embedding": best[3],
             })
         scanned += 1
+        if scanned % 25 == 0 or scanned == total:
+            progress_event("vision-scan", scanned, total, current=frame_row.get("media_path", ""), label=best[0], score=round(best[1], 4), message=f"vision scanned {scanned}/{total}")
         if scanned % 100 == 0:
             print(f"vision scanned {scanned} media", flush=True)
         if limit and scanned >= limit:
@@ -1608,11 +1616,18 @@ def face_scan(config: Config, limit: int | None) -> None:
         backend_name, backend = load_face_backend()
     except RuntimeError as exc:
         raise SystemExit(str(exc))
+    frame_rows = list(dict_rows_from_csv(frame_index))
+    total_frames = sum(len([p for p in row.get("frames", "").split("|") if p]) for row in frame_rows)
+    total = min(limit or total_frames, total_frames)
+    progress_event("face-scan", 0, total, backend=backend_name, message="starting")
     rows = []
     scanned = 0
-    for frame_row in dict_rows_from_csv(frame_index):
+    for frame_row in frame_rows:
         frame_paths = [p for p in frame_row.get("frames", "").split("|") if p]
         for frame_rel in frame_paths:
+            if cancel_requested():
+                progress_event("face-scan", scanned, total, message="cancel requested")
+                break
             frame_path = config.library_root / frame_rel
             if not frame_path.exists():
                 continue
@@ -1644,10 +1659,14 @@ def face_scan(config: Config, limit: int | None) -> None:
                     "error": "",
                 })
             scanned += 1
+            if scanned % 25 == 0 or scanned == total:
+                progress_event("face-scan", scanned, total, current=frame_row.get("media_path", ""), faces=len(faces), message=f"face scanned {scanned}/{total}")
             if scanned % 100 == 0:
                 print(f"face scanned {scanned} frames", flush=True)
             if limit and scanned >= limit:
                 break
+        if cancel_requested():
+            break
         if limit and scanned >= limit:
             break
     out = config.manifests / "face_index.csv"
