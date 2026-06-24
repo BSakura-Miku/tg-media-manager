@@ -174,6 +174,40 @@ def _marker_path(model_id: str) -> Path:
     return _safe_path(f".tgmm-models/{model_id}.ready")
 
 
+def _runtime_cache_size(spec: dict) -> tuple[int, str]:
+    root = model_root()
+    command = spec.get("command")
+    if command == "openclip":
+        known_dirs = {
+            ("ViT-L-14", "laion2b_s32b_b82k"): "huggingface/hub/models--laion--CLIP-ViT-L-14-laion2B-s32B-b82K",
+            ("ViT-H-14", "laion2b_s32b_b79k"): "huggingface/hub/models--laion--CLIP-ViT-H-14-laion2B-s32B-b79K",
+        }
+        cache_dir = known_dirs.get((spec.get("model"), spec.get("pretrained")))
+        if cache_dir:
+            size = _dir_size(root / cache_dir)
+            if size:
+                return size, "OpenCLIP Hugging Face cache"
+        paths = [
+            root / "torch",
+            root / "huggingface",
+            root / "cache" / "open_clip",
+            root / "cache" / "huggingface",
+            root / "cache" / "torch",
+        ]
+        size = sum(_dir_size(path) for path in paths)
+        return size, "shared OpenCLIP/Torch cache"
+    if command == "faster-whisper":
+        paths = [
+            root / "whisper",
+            root / f"models--Systran--faster-whisper-{spec.get('model', 'small')}",
+        ]
+        return sum(_dir_size(path) for path in paths), "faster-whisper cache"
+    if command == "insightface":
+        path = root / str(spec["path"])
+        return _dir_size(path), "InsightFace model cache"
+    return 0, "runtime cache"
+
+
 def source_setting_key(model_id: str) -> str:
     return f"model_url_{model_id}"
 
@@ -219,8 +253,11 @@ def _model_status(model_id: str, spec: dict) -> dict:
     url_source = _configured_url_source(model_id, spec, settings) if downloadable else ""
     sha256 = _configured_sha256(model_id, spec, settings) if downloadable else ""
     present = _is_present(path, str(spec["kind"]))
+    bytes_used = _dir_size(path)
+    size_note = ""
     if spec["kind"] == "runtime-cache" and spec.get("command") in {"openclip", "faster-whisper"}:
-        present = _marker_path(model_id).exists()
+        bytes_used, size_note = _runtime_cache_size(spec)
+        present = _marker_path(model_id).exists() and bytes_used > 0
     status = "ready" if present else ("needs_url" if downloadable and not url else "missing")
     return {
         "id": model_id,
@@ -233,7 +270,8 @@ def _model_status(model_id: str, spec: dict) -> dict:
         "path": str(path),
         "status": status,
         "present": present,
-        "bytes": _dir_size(path),
+        "bytes": bytes_used,
+        "size_note": size_note,
         "url_env": spec.get("url_env", ""),
         "url_configured": bool(url),
         "url_source": url_source,

@@ -2718,7 +2718,7 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
             </div>
             <p>{description}</p>
             <div className="modelMeta">
-              <div><span>{t.modelSize}</span><strong>{prettyBytes(model.bytes)}</strong></div>
+              <div><span>{t.modelSize}</span><strong>{prettyBytes(model.bytes)}</strong>{model.size_note && <small>{model.size_note}</small>}</div>
               <div><span>{t.modelPath}</span><strong title={model.path}>{model.path}</strong></div>
               {model.url_env && <div><span>URL env</span><strong>{model.url_env}{model.url_configured ? '' : ' unset'}</strong></div>}
               {model.official_url && <div><span>{t.modelOfficialRef}</span><a href={model.official_url} target="_blank" rel="noreferrer">{model.official_url}</a></div>}
