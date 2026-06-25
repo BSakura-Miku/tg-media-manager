@@ -399,15 +399,22 @@ def rebuild_metadata_index(root: Path | None = None, progress: ProgressCallback 
         else:
             conn.execute("DELETE FROM media_items")
         conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("rebuild_metadata_index", f"indexed={indexed} root={root}"))
-    if progress:
-        progress("index-vision", indexed, total, "_MANIFESTS/vision_labels.csv")
-    vision = import_vision_outputs(root)
+    vision = import_vision_outputs(root, progress=progress, cancel_check=cancel_check)
+    if vision.get("cancelled"):
+        return {
+            "indexed": indexed,
+            "total": total,
+            "vision": vision,
+            "cancelled": True,
+            "root": str(root),
+            "elapsed_seconds": round(time.time() - started, 3),
+        }
     if progress:
         progress("index-metadata", total, total, "")
     return {"indexed": indexed, "total": total, "vision": vision, "root": str(root), "elapsed_seconds": round(time.time() - started, 3)}
 
 
-def import_vision_outputs(root: Path | None = None) -> dict:
+def import_vision_outputs(root: Path | None = None, progress: ProgressCallback | None = None, cancel_check: CancelCheck | None = None) -> dict:
     init_db()
     root = root or output_root()
     manifests = root / "_MANIFESTS"
@@ -417,64 +424,91 @@ def import_vision_outputs(root: Path | None = None) -> dict:
     imported_tags = 0
     timeline_segments = 0
     with connect() as conn:
-        for row in labels:
-            media_path = row.get("media_path", "")
-            label = row.get("category", "")
-            if not media_path or not label:
-                continue
-            media = conn.execute("SELECT id FROM media_items WHERE relative_path=?", (media_path,)).fetchone()
-            if media is None:
-                continue
-            try:
-                confidence = float(row.get("score") or 0)
-            except Exception:
-                confidence = 0.0
-            state = "confirmed" if confidence >= 0.70 else "pending"
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
-                VALUES (?, ?, ?, ?, 'vision', ?)
-                """,
-                (int(media["id"]), label, category_for_tag(label), confidence, state),
-            )
-            imported_tags += 1
-        for row in frames:
-            media_path = row.get("media_path", "")
-            media = conn.execute("SELECT id, media_type FROM media_items WHERE relative_path=?", (media_path,)).fetchone()
-            if media is None:
-                continue
-            media_id = int(media["id"])
-            conn.execute("DELETE FROM media_timeline_segments WHERE media_id=? AND source='keyframe'", (media_id,))
-            frame_paths = [item for item in (row.get("frames") or "").split("|") if item]
-            if not frame_paths:
-                continue
-            label_row = label_by_path.get(media_path, {})
-            label = label_row.get("category") or "关键帧"
-            try:
-                confidence = float(label_row.get("score") or 0)
-            except Exception:
-                confidence = 0.0
-            if media["media_type"] == "video":
-                raw_times = [item for item in (row.get("frame_times") or "").split("|") if item]
-                for idx, frame in enumerate(frame_paths):
-                    try:
-                        start = float(raw_times[idx]) if idx < len(raw_times) else float(idx * 7)
-                    except Exception:
-                        start = float(idx * 7)
-                    try:
-                        next_start = float(raw_times[idx + 1]) if idx + 1 < len(raw_times) else start + 7
-                    except Exception:
-                        next_start = start + 7
-                    end = max(start + 1, next_start)
-                    conn.execute(
-                        """
-                        INSERT INTO media_timeline_segments (media_id, start_seconds, end_seconds, label, confidence, source, representative_frame)
-                        VALUES (?, ?, ?, ?, ?, 'keyframe', ?)
-                        """,
-                        (media_id, start, end, label, confidence, frame),
-                    )
-                    timeline_segments += 1
+        media_rows = conn.execute("SELECT id, relative_path, media_type FROM media_items").fetchall()
+    media_by_path = {row["relative_path"]: {"id": int(row["id"]), "media_type": row["media_type"]} for row in media_rows}
+    total = len(labels) + len(frames)
+    done = 0
+    if progress:
+        progress("index-vision", 0, total, "_MANIFESTS/vision_labels.csv")
+    batch_size = 500
+    for batch_start in range(0, len(labels), batch_size):
+        if cancel_check and cancel_check():
+            return {"vision_tags": imported_tags, "timeline_segments": timeline_segments, "cancelled": True}
+        batch = labels[batch_start:batch_start + batch_size]
+        with connect() as conn:
+            for row in batch:
+                media_path = row.get("media_path", "")
+                label = row.get("category", "")
+                if not media_path or not label:
+                    continue
+                media = media_by_path.get(media_path)
+                if media is None:
+                    continue
+                try:
+                    confidence = float(row.get("score") or 0)
+                except Exception:
+                    confidence = 0.0
+                state = "confirmed" if confidence >= 0.70 else "pending"
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+                    VALUES (?, ?, ?, ?, 'vision', ?)
+                    """,
+                    (media["id"], label, category_for_tag(label), confidence, state),
+                )
+                imported_tags += 1
+        done += len(batch)
+        if progress:
+            progress("index-vision", done, total, "_MANIFESTS/vision_labels.csv")
+    for batch_start in range(0, len(frames), batch_size):
+        if cancel_check and cancel_check():
+            return {"vision_tags": imported_tags, "timeline_segments": timeline_segments, "cancelled": True}
+        batch = frames[batch_start:batch_start + batch_size]
+        with connect() as conn:
+            for row in batch:
+                media_path = row.get("media_path", "")
+                media = media_by_path.get(media_path)
+                if media is None:
+                    continue
+                media_id = int(media["id"])
+                conn.execute("DELETE FROM media_timeline_segments WHERE media_id=? AND source='keyframe'", (media_id,))
+                frame_paths = [item for item in (row.get("frames") or "").split("|") if item]
+                if not frame_paths:
+                    continue
+                label_row = label_by_path.get(media_path, {})
+                label = label_row.get("category") or "关键帧"
+                try:
+                    confidence = float(label_row.get("score") or 0)
+                except Exception:
+                    confidence = 0.0
+                if media["media_type"] == "video":
+                    raw_times = [item for item in (row.get("frame_times") or "").split("|") if item]
+                    for idx, frame in enumerate(frame_paths):
+                        try:
+                            start = float(raw_times[idx]) if idx < len(raw_times) else float(idx * 7)
+                        except Exception:
+                            start = float(idx * 7)
+                        try:
+                            next_start = float(raw_times[idx + 1]) if idx + 1 < len(raw_times) else start + 7
+                        except Exception:
+                            next_start = start + 7
+                        end = max(start + 1, next_start)
+                        conn.execute(
+                            """
+                            INSERT INTO media_timeline_segments (media_id, start_seconds, end_seconds, label, confidence, source, representative_frame)
+                            VALUES (?, ?, ?, ?, ?, 'keyframe', ?)
+                            """,
+                            (media_id, start, end, label, confidence, frame),
+                        )
+                        timeline_segments += 1
+        done += len(batch)
+        if progress:
+            current = batch[-1].get("media_path", "") if batch else "_MANIFESTS/frame_index.csv"
+            progress("index-vision", done, total, current)
+    with connect() as conn:
         conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("import_vision_outputs", f"vision_tags={imported_tags} timeline_segments={timeline_segments} root={root}"))
+    if progress:
+        progress("index-vision", total, total, "_MANIFESTS/frame_index.csv")
     return {"vision_tags": imported_tags, "timeline_segments": timeline_segments}
 
 
