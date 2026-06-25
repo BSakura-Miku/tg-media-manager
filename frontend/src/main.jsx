@@ -320,6 +320,8 @@ const i18n = {
     refreshGraph: 'Refresh graph',
     relatedTags: 'Related tags',
     transcript: 'Transcript',
+    transcriptSegments: 'Timed transcript',
+    textTranscriptOnly: 'Text transcript only; no reliable subtitle timestamps yet.',
     subtitles: 'Subtitles',
     originalSubtitles: 'Original subtitles',
     bilingualSubtitles: 'Bilingual subtitles',
@@ -742,6 +744,8 @@ const i18n = {
     refreshGraph: '刷新图谱',
     relatedTags: '关联标签',
     transcript: '转写文字',
+    transcriptSegments: '分段转写',
+    textTranscriptOnly: '当前只有文本转写，还没有可靠的字幕时间轴。',
     subtitles: '字幕',
     originalSubtitles: '原文字幕',
     bilingualSubtitles: '双语字幕',
@@ -2317,6 +2321,14 @@ function MediaViewer({ item, detail, reload, close, t }) {
   const data = detail || item;
   const tags = Array.isArray(data.tags) ? data.tags : String(data.tags || '').split(',').filter(Boolean).map(tag => ({ tag }));
   const timeline = Array.isArray(data.timeline) ? data.timeline : [];
+  const transcriptSegments = Array.isArray(data.transcript?.segments) ? data.transcript.segments : [];
+  const timedTranscriptSegments = transcriptSegments.filter(segment => {
+    const text = String(segment?.text || '').trim();
+    const start = Number(segment?.start ?? segment?.start_seconds ?? 0);
+    const end = Number(segment?.end ?? segment?.end_seconds ?? 0);
+    return text && Number.isFinite(start) && Number.isFinite(end) && end > start && !(start === 0 && end <= 4 && text.length > 240);
+  });
+  const hasPlayableSubtitles = data.media_type === 'video' && timedTranscriptSegments.length > 0;
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [manualTag, setManualTag] = useState('');
   const [manualCategory, setManualCategory] = useState('');
@@ -2413,8 +2425,8 @@ function MediaViewer({ item, detail, reload, close, t }) {
           <div className="viewerMedia">
             {data.media_type === 'video' ? (
               <video src={`/api/media/${data.id}/file`} controls poster={`/api/media/${data.id}/thumbnail`}>
-                {data.transcript?.text && <track kind="subtitles" srcLang={data.transcript?.language || 'und'} label={t.originalSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=original`} default />}
-                {data.transcript?.text && <track kind="subtitles" srcLang="zh" label={t.bilingualSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=bilingual`} />}
+                {hasPlayableSubtitles && <track kind="subtitles" srcLang={data.transcript?.language || 'und'} label={t.originalSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=original`} default />}
+                {hasPlayableSubtitles && <track kind="subtitles" srcLang="zh" label={t.bilingualSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=bilingual`} />}
               </video>
             ) : <img src={`/api/media/${data.id}/file`} alt={data.filename} />}
           </div>
@@ -2469,8 +2481,18 @@ function MediaViewer({ item, detail, reload, close, t }) {
               </>
             )}
             <h3>{t.transcript}</h3>
-            {data.media_type === 'video' && data.transcript?.text && <div className="hintBox smallHint"><span>{t.subtitles}</span><a href={`/api/media/${data.id}/subtitles.vtt?mode=bilingual`} target="_blank" rel="noreferrer">WebVTT</a></div>}
-            {data.transcript?.text ? <pre className="transcriptBlock">{data.transcript.text}</pre> : <div className="empty smallEmpty">{t.noTranscript}</div>}
+            {hasPlayableSubtitles && <div className="hintBox smallHint"><span>{t.subtitles}</span><a href={`/api/media/${data.id}/subtitles.vtt?mode=original`} target="_blank" rel="noreferrer">WebVTT</a></div>}
+            {data.media_type === 'video' && data.transcript?.text && !hasPlayableSubtitles && <div className="hintBox smallHint"><span>{t.textTranscriptOnly}</span></div>}
+            {timedTranscriptSegments.length > 0 ? (
+              <div className="transcriptSegments">
+                <h4>{t.transcriptSegments}</h4>
+                {timedTranscriptSegments.slice(0, 200).map((segment, index) => {
+                  const start = Number(segment.start ?? segment.start_seconds ?? 0);
+                  const end = Number(segment.end ?? segment.end_seconds ?? 0);
+                  return <div className="transcriptSegment" key={`${start}-${end}-${index}`}><span>{formatSeconds(start)} - {formatSeconds(end)}</span><p>{segment.text}</p></div>;
+                })}
+              </div>
+            ) : data.transcript?.text ? <pre className="transcriptBlock">{data.transcript.text}</pre> : <div className="empty smallEmpty">{t.noTranscript}</div>}
           </div>
         </div>
       </div>

@@ -1346,13 +1346,32 @@ def transcript_to_vtt(segments: list[dict], text: str = "", mode: str = "origina
     return "\n".join(rows)
 
 
+def timed_transcript_segments(segments: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for item in segments:
+        if not isinstance(item, dict) or not str(item.get("text") or "").strip():
+            continue
+        try:
+            start = float(item.get("start", item.get("start_seconds", 0)) or 0)
+            end = float(item.get("end", item.get("end_seconds", 0)) or 0)
+        except (TypeError, ValueError):
+            continue
+        if end <= start or (start == 0 and end <= 4 and len(str(item.get("text") or "")) > 240):
+            continue
+        out.append(item)
+    return out
+
+
 def write_subtitle_files(conn, media_id: int, segments: list[dict], text: str) -> None:
+    timed = timed_transcript_segments(segments)
+    if not timed:
+        return
     row = conn.execute("SELECT root FROM media_items WHERE id=?", (media_id,)).fetchone()
     root = Path(row["root"]) if row and row["root"] else output_root()
     out_dir = subtitle_dir(root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{media_id}.vtt").write_text(transcript_to_vtt(segments, text, "original"), encoding="utf-8")
-    (out_dir / f"{media_id}.bilingual.vtt").write_text(transcript_to_vtt(segments, text, "bilingual"), encoding="utf-8")
+    (out_dir / f"{media_id}.vtt").write_text(transcript_to_vtt(timed, text, "original"), encoding="utf-8")
+    (out_dir / f"{media_id}.bilingual.vtt").write_text(transcript_to_vtt(timed, text, "bilingual"), encoding="utf-8")
 
 
 def subtitle_for_media(media_id: int, mode: str = "original") -> tuple[str, Path | None]:
@@ -1363,16 +1382,19 @@ def subtitle_for_media(media_id: int, mode: str = "original") -> tuple[str, Path
     if media is None:
         raise KeyError("Media not found")
     root = Path(media["root"]) if media["root"] else output_root()
-    path = subtitle_dir(root) / f"{media_id}{suffix}"
-    if path.exists():
-        return path.read_text(encoding="utf-8", errors="replace"), path
     if transcript is None:
         return "", None
     try:
         segments = json.loads(transcript["segments_json"] or "[]")
     except Exception:
         segments = []
-    return transcript_to_vtt(segments, str(transcript["text"] or ""), mode), None
+    timed = timed_transcript_segments(segments)
+    if not timed:
+        return "", None
+    path = subtitle_dir(root) / f"{media_id}{suffix}"
+    if path.exists():
+        return path.read_text(encoding="utf-8", errors="replace"), path
+    return transcript_to_vtt(timed, str(transcript["text"] or ""), mode), None
 
 
 def save_audio_tags(conn, media_id: int, tag_text: str, language: str, source: str, replace: bool = True) -> int:
