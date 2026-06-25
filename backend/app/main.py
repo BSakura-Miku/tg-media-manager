@@ -407,6 +407,76 @@ def ffmpeg_hw_prefix() -> list[str]:
 
 THUMB_SIZE = (900, 900)
 MEDIA_THUMB_CACHE = "media_thumbs_v7"
+THUMB_CACHE_HEADERS = {"Cache-Control": "public, max-age=2592000, immutable"}
+_FRAME_INDEX_CACHE: dict[str, object] = {"mtime": -1.0, "rows": {}}
+_FRAME_INDEX_LOCK = threading.Lock()
+
+
+def frame_index_rows(root: Path) -> dict[str, dict]:
+    path = root / "_MANIFESTS" / "frame_index.csv"
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {}
+    with _FRAME_INDEX_LOCK:
+        if _FRAME_INDEX_CACHE.get("mtime") == mtime:
+            return dict(_FRAME_INDEX_CACHE.get("rows") or {})
+        rows = {row.get("media_path", ""): row for row in read_csv(path) if row.get("media_path")}
+        _FRAME_INDEX_CACHE["mtime"] = mtime
+        _FRAME_INDEX_CACHE["rows"] = rows
+        return dict(rows)
+
+
+def cached_media_record(media_id: int) -> dict:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, path, root, relative_path, filename, media_type, resolution, quality
+            FROM media_items
+            WHERE id=?
+            """,
+            (media_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Media not found")
+    data = dict(row)
+    root = Path(data.get("root") or output_root()).resolve()
+    path = Path(data["path"]).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Media path is outside library root") from exc
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Media file missing")
+    data["path"] = str(path)
+    data["root"] = str(root)
+    return data
+
+
+def frame_preview_paths(root: Path, relative_path: str) -> tuple[list[Path], Path | None]:
+    row = frame_index_rows(root).get(relative_path, {})
+    frames = []
+    for item in (row.get("frames") or "").split("|"):
+        if not item:
+            continue
+        frame = (root / item).resolve()
+        try:
+            frame.relative_to(root)
+        except ValueError:
+            continue
+        if frame.exists():
+            frames.append(frame)
+    sheet = None
+    sheet_rel = row.get("contact_sheet") or ""
+    if sheet_rel:
+        candidate = (root / sheet_rel).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            candidate = None
+        if candidate and candidate.exists():
+            sheet = candidate
+    return frames, sheet
 
 
 def trim_near_black_border(image):
@@ -1084,35 +1154,32 @@ def api_media_subtitles(media_id: int, mode: str = Query("original", pattern="^(
 
 @app.get("/api/media/{media_id}/thumbnail")
 def api_media_thumbnail(media_id: int):
-    detail = checked_media_detail(media_id)
+    detail = cached_media_record(media_id)
     path = Path(detail["path"])
-    thumb_dir = output_root() / "_MANIFESTS" / MEDIA_THUMB_CACHE
+    root = Path(detail.get("root") or output_root()).resolve()
+    thumb_dir = root / "_MANIFESTS" / MEDIA_THUMB_CACHE
     thumb = thumb_dir / f"{media_id}.jpg"
+    frame_previews, _ = frame_preview_paths(root, str(detail.get("relative_path") or ""))
+    if frame_previews:
+        return FileResponse(frame_previews[0], media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
     if thumb.exists():
-        return FileResponse(thumb, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
     thumb_dir.mkdir(parents=True, exist_ok=True)
     if detail.get("media_type") == "photo" and write_smart_thumbnail(path, thumb):
-        return FileResponse(thumb, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
     if detail.get("media_type") == "video" and run_ffmpeg_thumbnail(path, thumb, width=800, timeout=30):
-        return FileResponse(thumb, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
     raise HTTPException(status_code=404, detail="Thumbnail not found")
 
 
 @app.get("/api/media/{media_id}/contact-sheet")
 def api_media_contact_sheet(media_id: int):
-    detail = checked_media_detail(media_id)
-    sheet_rel = str(detail.get("contact_sheet") or "")
-    if not sheet_rel:
+    detail = cached_media_record(media_id)
+    root = Path(detail.get("root") or output_root()).resolve()
+    _, sheet = frame_preview_paths(root, str(detail.get("relative_path") or ""))
+    if sheet is None:
         raise HTTPException(status_code=404, detail="Contact sheet not found")
-    root = output_root().resolve()
-    sheet = (root / sheet_rel).resolve()
-    try:
-        sheet.relative_to(root)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Contact sheet path is outside library root") from exc
-    if not sheet.exists():
-        raise HTTPException(status_code=404, detail="Contact sheet missing")
-    return FileResponse(sheet, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    return FileResponse(sheet, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
 
 
 @app.get("/api/logs")
