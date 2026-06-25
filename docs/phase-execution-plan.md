@@ -21,6 +21,7 @@ Implemented:
 - Human-readable workflows such as full library, new downloads, review cleanup, face, vision, dedupe, transcription, and model downloads.
 - Job grouping by running, failed, completed, and other states.
 - Job detail progress with stage and workflow-step context.
+- Stop/cancel handling for internal transcription jobs, including cancel propagation into FFmpeg and ASR subprocesses.
 - Dark/light theme, bilingual UI, version display, and redesigned app shell.
 - Media viewer with playback, details, tags, favorite, safe-delete, manual tag, and manual author editing.
 - Dashboard storage card with capacity plus count per media type; Simplified Chinese uses `部` for videos and `张` for photos.
@@ -31,6 +32,7 @@ Validation after NAS full run:
 - Confirm long paths and job details do not overflow on desktop or mobile width.
 - Confirm recent media, random waterfall, authors, faces, and logs update from the current database.
 - Confirm dashboard storage shows examples like `视频 300 GB（1,000 部）` and `图片 80 GB（6,000 张）`, with the ring chart based on bytes.
+- Confirm Stop changes a running internal transcription job to `cancelled` quickly and that rerunning skips completed transcript rows.
 
 ## Phase 2: Metadata Database and Virtual Classification
 

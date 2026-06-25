@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -1097,14 +1098,49 @@ def configured_seconds(env_name: str, default: int = 0) -> int:
         return default
 
 
+def cancel_requested() -> bool:
+    cancel_file = os.environ.get("TGMM_CANCEL_FILE", "")
+    return bool(cancel_file and Path(cancel_file).exists())
+
+
+def run_cancelable_command(cmd: list[str]) -> tuple[int, str, str]:
+    proc = subprocess.Popen(
+        cmd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=0.5)
+            return proc.returncode or 0, stdout or "", stderr or ""
+        except subprocess.TimeoutExpired:
+            if not cancel_requested():
+                continue
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                proc.terminate()
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    proc.kill()
+                stdout, stderr = proc.communicate()
+            return 130, stdout or "", (stderr or "") + "\ncancelled"
+
+
 def extract_audio_wav(video: Path, wav: Path, max_seconds: int | None = None) -> tuple[bool, str]:
     cmd = ["ffmpeg", "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "16000"]
     seconds = configured_seconds("TRANSCRIBE_MAX_SECONDS", 0) if max_seconds is None else max(0, int(max_seconds))
     if seconds > 0:
         cmd.extend(["-t", str(seconds)])
     cmd.append(str(wav))
-    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
-    return proc.returncode == 0 and wav.exists() and wav.stat().st_size > 0, proc.stderr[-1000:]
+    returncode, _stdout, stderr = run_cancelable_command(cmd)
+    return returncode == 0 and wav.exists() and wav.stat().st_size > 0, stderr[-1000:]
 
 
 def sensevoice_command(wav: Path) -> list[str] | None:
@@ -1172,18 +1208,18 @@ def transcribe_with_sensevoice_gguf(wav: Path) -> dict | None:
     cmd = sensevoice_command(wav)
     if not cmd:
         return None
-    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
-    if proc.returncode != 0:
-        return {"ok": False, "error": proc.stderr[-1000:] or f"exit {proc.returncode}", "engine": "sensevoice-gguf"}
-    text, language, segments = parse_sensevoice_output(proc.stdout)
+    returncode, stdout, stderr = run_cancelable_command(cmd)
+    if returncode != 0:
+        return {"ok": False, "cancelled": returncode == 130, "error": stderr[-1000:] or f"exit {returncode}", "engine": "sensevoice-gguf"}
+    text, language, segments = parse_sensevoice_output(stdout)
     return {
         "ok": True,
         "text": text,
-        "tag_text": proc.stdout,
+        "tag_text": stdout,
         "language": language,
         "segments": segments,
         "engine": "sensevoice-gguf",
-        "raw": proc.stdout[-2000:],
+        "raw": stdout[-2000:],
     }
 
 
@@ -1239,10 +1275,10 @@ def transcribe_with_funasr_nano_onnx(wav: Path) -> dict | None:
     cmd = funasr_nano_command(wav)
     if not cmd:
         return None
-    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=None)
-    if proc.returncode != 0:
-        return {"ok": False, "error": proc.stderr[-1000:] or f"exit {proc.returncode}", "engine": "funasr-nano-onnx"}
-    text, language, segments = parse_generic_asr_output(proc.stdout)
+    returncode, stdout, stderr = run_cancelable_command(cmd)
+    if returncode != 0:
+        return {"ok": False, "cancelled": returncode == 130, "error": stderr[-1000:] or f"exit {returncode}", "engine": "funasr-nano-onnx"}
+    text, language, segments = parse_generic_asr_output(stdout)
     return {
         "ok": True,
         "text": text,
@@ -1251,7 +1287,7 @@ def transcribe_with_funasr_nano_onnx(wav: Path) -> dict | None:
         "segments": segments,
         "engine": "funasr-nano-onnx",
         "model": os.environ.get("FUNASR_NANO_MODEL_DIR", "/models/funasr-nano"),
-        "raw": proc.stdout[-2000:],
+        "raw": stdout[-2000:],
     }
 
 

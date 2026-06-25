@@ -376,10 +376,13 @@ def run_internal_with_progress(job_id: int, stage: str, fn, heartbeat_message: s
     thread.start()
     while thread.is_alive():
         elapsed = int(time.time() - started)
+        message = heartbeat_message or f"{stage} running ({elapsed}s)"
+        if is_cancel_requested(job_id):
+            message = f"{stage} cancel requested; waiting for current step"
         update_job_progress(
             job_id,
             stage=stage,
-            message=heartbeat_message or f"{stage} running ({elapsed}s)",
+            message=message,
             stdout=capture.snapshot()[-20000:],
         )
         thread.join(timeout=5)
@@ -404,6 +407,7 @@ def run_job(job_id: int, command: str) -> None:
         cancel.unlink()
     except OSError:
         pass
+    os.environ["TGMM_CANCEL_FILE"] = str(cancel)
     os.environ.update({
         key: value for key, value in env.items()
         if key in {
@@ -459,12 +463,12 @@ def run_job(job_id: int, command: str) -> None:
                 update_job_progress(job_id, stage="transcribe", message="transcribe sample running")
                 result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=5), "transcribe sample still running")
                 stdout_parts.append(f"$ transcribe-sample\n{captured}\n{result}")
-                returncode = 0 if result.get("ok") else 1
+                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
             elif step == ["__transcribe__"]:
                 update_job_progress(job_id, stage="transcribe", message="full transcribe running")
                 result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=None), "full transcribe still running")
                 stdout_parts.append(f"$ transcribe\n{captured}\n{result}")
-                returncode = 0 if result.get("ok") else 1
+                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
             elif step and step[0] == "__model_pull__":
                 model_id = step[1]
                 update_job_progress(job_id, stage="model-download", message=f"pulling {model_id}")
