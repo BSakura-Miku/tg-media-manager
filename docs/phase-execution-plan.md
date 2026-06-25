@@ -111,6 +111,8 @@ Validation after NAS full run:
 
 - Confirm all required model cards show correct status and nonzero size when cached.
 - Confirm video playback exposes subtitle tracks when transcript/subtitle files exist.
+- Confirm subtitles are time-aligned with playback, not only stored as one full-text transcript block.
+- Confirm transcript detail can show segment timestamps and that the selected subtitle track uses a consistent primary language.
 - Confirm CPU/GPU settings are reflected in jobs and do not stall progress.
 - Confirm audit logs are newest-first and include manual edits, favorites, deletes, merges, and workflow jobs.
 
@@ -134,5 +136,6 @@ Expected outputs:
 
 - Web model-pack manifest installer is recorded in `docs/architecture-model-management.md` but not fully implemented yet.
 - Local model upload through the Web UI is still future work.
-- Non-Chinese subtitle translation depends on a future local translation model/runtime selection.
+- Subtitle quality pass: current detail text is a plain transcript block and some ASR outputs fall back to a single untimed segment. Add timestamped segment display, reject or mark untimed ASR outputs, prefer a timestamp-capable subtitle engine for full subtitles, and keep mixed-language output out of the default subtitle track.
+- Non-Chinese subtitle translation depends on a future local translation model/runtime selection; translated/bilingual output should be optional and separate from the original-language track.
 - Vision calibrators exist as a training hook; production-quality custom model training/export remains a later cycle.
