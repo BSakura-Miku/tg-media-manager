@@ -15,6 +15,7 @@ from collections import defaultdict
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Callable
 
 from .db import connect, get_settings, init_db
 
@@ -351,29 +352,59 @@ def upsert_media(conn, root: Path, path: Path, media_type: str, manifest: dict, 
     return media_id
 
 
-def rebuild_metadata_index(root: Path | None = None) -> dict:
+ProgressCallback = Callable[[str, int, int, str], None]
+CancelCheck = Callable[[], bool]
+
+
+def rebuild_metadata_index(root: Path | None = None, progress: ProgressCallback | None = None, cancel_check: CancelCheck | None = None) -> dict:
     init_db()
     root = root or output_root()
     manifest_by_original, applied_by_new = manifest_maps(root)
     indexed = 0
     started = time.time()
+    entries = list(iter_media_files(root))
+    total = len(entries)
+    if progress:
+        progress("index-metadata", 0, total, "")
+    seen_paths: set[str] = set()
+    batch_size = 100
+    for batch_start in range(0, total, batch_size):
+        if cancel_check and cancel_check():
+            with connect() as conn:
+                conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("rebuild_metadata_index_cancelled", f"indexed={indexed}/{total} root={root}"))
+            return {
+                "indexed": indexed,
+                "total": total,
+                "cancelled": True,
+                "root": str(root),
+                "elapsed_seconds": round(time.time() - started, 3),
+            }
+        batch = entries[batch_start:batch_start + batch_size]
+        last_rel_path = ""
+        with connect() as conn:
+            for path, media_type in batch:
+                rel_path = safe_relative(root, path)
+                applied = applied_by_new.get(rel_path, {})
+                manifest = manifest_by_original.get(applied.get("original_path", ""), {})
+                upsert_media(conn, root, path, media_type, manifest, applied)
+                seen_paths.add(str(path))
+                indexed += 1
+                last_rel_path = rel_path
+        if progress:
+            progress("index-metadata", indexed, total, last_rel_path)
     with connect() as conn:
-        seen_paths = set()
-        for path, media_type in iter_media_files(root):
-            rel_path = safe_relative(root, path)
-            applied = applied_by_new.get(rel_path, {})
-            manifest = manifest_by_original.get(applied.get("original_path", ""), {})
-            upsert_media(conn, root, path, media_type, manifest, applied)
-            seen_paths.add(str(path))
-            indexed += 1
         if seen_paths:
             placeholders = ",".join("?" for _ in seen_paths)
             conn.execute(f"DELETE FROM media_items WHERE path NOT IN ({placeholders})", list(seen_paths))
         else:
             conn.execute("DELETE FROM media_items")
         conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("rebuild_metadata_index", f"indexed={indexed} root={root}"))
+    if progress:
+        progress("index-vision", indexed, total, "_MANIFESTS/vision_labels.csv")
     vision = import_vision_outputs(root)
-    return {"indexed": indexed, "vision": vision, "root": str(root), "elapsed_seconds": round(time.time() - started, 3)}
+    if progress:
+        progress("index-metadata", total, total, "")
+    return {"indexed": indexed, "total": total, "vision": vision, "root": str(root), "elapsed_seconds": round(time.time() - started, 3)}
 
 
 def import_vision_outputs(root: Path | None = None) -> dict:

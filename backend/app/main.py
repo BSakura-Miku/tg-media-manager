@@ -216,7 +216,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.0.1").lstrip("v") or "1.0.1"
+    app_version = os.environ.get("APP_SEMVER", "1.0.2").lstrip("v") or "1.0.2"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -942,6 +942,7 @@ def api_search(
 def api_media(
     q: str = Query("", max_length=200),
     media_type: str = Query("all"),
+    type_filter: str = Query("", alias="type"),
     tag: str = Query("", max_length=120),
     author: str = Query("", max_length=120),
     include_risk: bool = Query(False),
@@ -949,6 +950,8 @@ def api_media(
     limit: int = Query(80, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict:
+    if media_type == "all" and type_filter in {"photo", "video"}:
+        media_type = type_filter
     return media_query(q=q.strip(), media_type=media_type, tag=tag.strip(), author=author.strip(), limit=limit, offset=offset, include_risk=include_risk, randomize=randomize)
 
 

@@ -821,7 +821,7 @@ button:disabled { opacity: .55; cursor: wait; }
 .jobDetailHero { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; margin-bottom: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
 .jobDetailHero, .logBlock { min-width: 0; overflow: hidden; }
 .jobDetailHero strong { font-size: 22px; color: var(--text); }
-.jobDetailHero span { grid-column: 1 / -1; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobDetailHero span { grid-column: 1 / -1; color: var(--soft); overflow-wrap: anywhere; white-space: normal; }
 .badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line-strong); color: var(--soft); white-space: nowrap; }
 .badge.done { color: var(--good); border-color: color-mix(in srgb, var(--good) 55%, var(--line)); }
 .badge.failed { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); }
@@ -833,19 +833,23 @@ button:disabled { opacity: .55; cursor: wait; }
 .logBlock .list { min-width: 0; overflow: hidden; }
 .logBlock .row {
   display: grid;
-  grid-template-columns: minmax(86px, 140px) minmax(0, 1fr);
+  grid-template-columns: minmax(72px, 132px) minmax(0, 1fr);
   align-items: start;
   min-width: 0;
+  max-width: 100%;
   min-height: 38px;
   padding: 8px 10px;
+  overflow: hidden;
 }
 .logBlock .row span { white-space: nowrap; }
 .logBlock .row strong {
   min-width: 0;
+  max-width: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
   line-height: 1.35;
+  text-align: left;
 }
 .logBlock pre {
   min-height: 120px;

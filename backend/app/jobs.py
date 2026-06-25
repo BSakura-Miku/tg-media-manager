@@ -392,6 +392,25 @@ def run_internal_with_progress(job_id: int, stage: str, fn, heartbeat_message: s
     return result, capture.text()
 
 
+def metadata_progress_printer(stage: str, processed: int, total: int, current: str) -> None:
+    progress = int(processed / total * 100) if total else 0
+    print(
+        "TGMM_PROGRESS "
+        + json.dumps(
+            {
+                "stage": stage,
+                "processed": processed,
+                "total": total,
+                "progress": max(0, min(99, progress)),
+                "current": current,
+                "message": f"{stage}: {processed}/{total}" if total else stage,
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
+
+
 def run_job(job_id: int, command: str) -> None:
     settings = get_settings()
     media_root = settings.get("media_root") or os.environ.get("MEDIA_ROOT", "/media")
@@ -445,9 +464,14 @@ def run_job(job_id: int, command: str) -> None:
             stage = step_stage(step)
             update_job_progress(job_id, stage=stage, progress=int((index - 1) / max(1, total_steps) * 100), message=f"{stage} ({index}/{total_steps})")
             if step == ["__metadata_index__"]:
-                result = rebuild_metadata_index(Path(output_root))
-                stdout_parts.append(f"$ index-metadata\n{result}")
-                returncode = 0
+                result, captured = run_internal_with_progress(
+                    job_id,
+                    "index-metadata",
+                    lambda: rebuild_metadata_index(Path(output_root), progress=metadata_progress_printer, cancel_check=lambda: is_cancel_requested(job_id)),
+                    "index-metadata running",
+                )
+                stdout_parts.append(f"$ index-metadata\n{captured}\n{result}")
+                returncode = 130 if result.get("cancelled") else 0
             elif step == ["__vision_index__"]:
                 result = import_vision_outputs(Path(output_root))
                 stdout_parts.append(f"$ index-vision\n{result}")
