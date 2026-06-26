@@ -346,6 +346,8 @@ const i18n = {
     deleteMedia: 'Delete media',
     deleteMediaConfirm: 'Move this media to _REVIEW/Deleted? It will not be physically destroyed.',
     mediaDeleted: 'Moved to Deleted review folder',
+    rebuildThumbnail: 'Rebuild thumbnail',
+    thumbnailRebuilt: 'Thumbnail rebuilt',
     manualTag: 'Manual tag',
     addTag: 'Add tag',
     tagCategory: 'Category',
@@ -770,6 +772,8 @@ const i18n = {
     deleteMedia: '删除媒体',
     deleteMediaConfirm: '把这个媒体移动到 _REVIEW/Deleted？不会物理销毁文件。',
     mediaDeleted: '已移动到 Deleted 待审目录',
+    rebuildThumbnail: '重建缩略图',
+    thumbnailRebuilt: '缩略图已重建',
     manualTag: '手动标签',
     addTag: '添加标签',
     tagCategory: '分类',
@@ -974,7 +978,25 @@ function JobBadge({ status }) {
 
 function formatDateTime(value) {
   if (!value) return '-';
-  return String(value).replace('T', ' ').replace(/\.\d+$/, '');
+  const raw = String(value).trim().replace('T', ' ').replace(/\.\d+$/, '');
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return raw;
+  const [, year, month, day, hour, minute, second = '00'] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)));
+  try {
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(date).replace(/\//g, '-');
+  } catch {
+    return raw;
+  }
 }
 
 function sortJobsNewest(jobs) {
@@ -1109,10 +1131,11 @@ function initialAspect(item) {
 function MediaThumbImage({ item, className = 'mediaThumb', label = '' }) {
   const [aspect, setAspect] = useState(initialAspect(item));
   const badge = label || (item.media_type === 'video' ? 'VID' : 'IMG');
+  const revision = encodeURIComponent(item.updated_at || item.hash8 || item.mtime || '');
   return (
     <div className={className} style={{ '--thumb-ratio': String(aspect) }}>
       <img
-        src={`/api/media/${item.id}/thumbnail`}
+        src={`/api/media/${item.id}/thumbnail?v=${revision}`}
         alt={item.filename}
         loading="lazy"
         onLoad={event => {
@@ -1993,9 +2016,9 @@ function LogPanel({ selectedJob, jobLog, start, cancelJob, setActive, t }) {
       <div className="row"><span>processed</span><strong>{selectedJob.processed || 0}/{selectedJob.total || 0}</strong></div>
       <div className="row"><span>current</span><strong>{selectedJob.current_item || '-'}</strong></div>
       <div className="row"><span>failed/skipped</span><strong>{selectedJob.failed_count || 0}/{selectedJob.skipped_count || 0}</strong></div>
-      <div className="row"><span>heartbeat</span><strong>{selectedJob.heartbeat_at || '-'}</strong></div>
-      <div className="row"><span>{t.started}</span><strong>{selectedJob.started_at || '-'}</strong></div>
-      <div className="row"><span>{t.finished}</span><strong>{selectedJob.finished_at || '-'}</strong></div>
+      <div className="row"><span>heartbeat</span><strong>{formatDateTime(selectedJob.heartbeat_at)}</strong></div>
+      <div className="row"><span>{t.started}</span><strong>{formatDateTime(selectedJob.started_at)}</strong></div>
+      <div className="row"><span>{t.finished}</span><strong>{formatDateTime(selectedJob.finished_at)}</strong></div>
     </div>
     {next && <div className="hintBox"><strong>{t.jobNextStep}</strong><span>{next}</span>{actions.length > 0 && <div className="nextActions">{actions.map(([label, action]) => <button key={label} onClick={action}><Play size={15} />{label}</button>)}</div>}</div>}
     <h3>stdout</h3><pre>{jobLog?.stdout || '(empty)'}</pre><h3>stderr</h3><pre>{jobLog?.stderr || '(empty)'}</pre></div>}</div>;
@@ -2409,6 +2432,14 @@ function MediaViewer({ item, detail, reload, close, t }) {
       close();
     });
   }
+  async function rebuildThumbnail() {
+    if (!data.id) return;
+    await runViewerAction('thumbnail', async () => {
+      await api(`/api/media/${data.id}/thumbnail/rebuild`, { method: 'POST' });
+      setFeedbackMessage(t.thumbnailRebuilt);
+      await refreshDetail();
+    });
+  }
   return (
     <ModalPortal>
     <div className="viewerBackdrop" role="dialog" aria-modal="true">
@@ -2417,6 +2448,7 @@ function MediaViewer({ item, detail, reload, close, t }) {
           <h2>{t.mediaDetail}</h2>
           <div className="viewerActions">
             <button className={`iconButton ${isFavorite ? 'isFavorite' : ''}`} onClick={toggleFavorite} disabled={!!busyAction} title={isFavorite ? t.unfavorite : t.favorite}><Heart size={18} /></button>
+            <button className="iconButton" onClick={rebuildThumbnail} disabled={!!busyAction} title={t.rebuildThumbnail}><RefreshCw size={18} /></button>
             <button className="iconButton dangerIcon" onClick={deleteMedia} disabled={!!busyAction} title={t.deleteMedia}><Trash2 size={18} /></button>
             <button className="iconButton" onClick={close}><XCircle size={18} /></button>
           </div>

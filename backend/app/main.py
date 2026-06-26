@@ -216,7 +216,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.0.3").lstrip("v") or "1.0.3"
+    app_version = os.environ.get("APP_SEMVER", "1.0.4").lstrip("v") or "1.0.4"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -410,6 +410,8 @@ MEDIA_THUMB_CACHE = "media_thumbs_v7"
 THUMB_CACHE_HEADERS = {"Cache-Control": "public, max-age=2592000, immutable"}
 _FRAME_INDEX_CACHE: dict[str, object] = {"mtime": -1.0, "rows": {}}
 _FRAME_INDEX_LOCK = threading.Lock()
+_TAG_GRAPH_CACHE: dict[str, object] = {"expires": 0.0, "key": None, "data": None}
+_TAG_GRAPH_LOCK = threading.Lock()
 
 
 def frame_index_rows(root: Path) -> dict[str, dict]:
@@ -570,6 +572,43 @@ def thumbnail_content_score(src: Path) -> float:
         return 0.0
 
 
+def thumbnail_is_healthy(src: Path) -> bool:
+    if Image is None or ImageOps is None or not src.exists():
+        return False
+    try:
+        if src.stat().st_size < 900:
+            return False
+        with Image.open(src) as opened:
+            image = ImageOps.exif_transpose(opened).convert("RGB")
+            width, height = image.size
+            if width < 40 or height < 40:
+                return False
+            sample = image.resize((min(width, 96), min(height, 96)))
+            pixels = list(sample.getdata())
+            total = max(1, len(pixels))
+            green_dominant = sum(1 for r, g, b in pixels if g > 145 and g > r * 1.45 and g > b * 1.45) / total
+            magenta_dominant = sum(1 for r, g, b in pixels if r > 145 and b > 145 and g < min(r, b) * 0.65) / total
+            if green_dominant > 0.54 or magenta_dominant > 0.42:
+                return False
+            gray = ImageOps.grayscale(sample)
+            extrema = gray.getextrema()
+            if extrema[1] - extrema[0] < 8:
+                return False
+            rows = []
+            pix = gray.load()
+            sw, sh = gray.size
+            for y in range(sh):
+                values = [pix[x, y] for x in range(sw)]
+                rows.append(sum(values) / max(1, sw))
+            if len(rows) > 8:
+                jumps = sum(1 for a, b in zip(rows, rows[1:]) if abs(a - b) > 48)
+                if jumps / max(1, len(rows) - 1) > 0.28:
+                    return False
+            return True
+    except Exception:
+        return False
+
+
 def write_smart_thumbnail(src: Path, dest: Path, trim_borders: bool = False) -> bool:
     if Image is None or ImageOps is None:
         return False
@@ -582,7 +621,7 @@ def write_smart_thumbnail(src: Path, dest: Path, trim_borders: bool = False) -> 
             image.thumbnail(THUMB_SIZE, resampling)
             dest.parent.mkdir(parents=True, exist_ok=True)
             image.save(dest, "JPEG", quality=86, optimize=True)
-        return dest.exists() and dest.stat().st_size > 0
+        return thumbnail_is_healthy(dest)
     except Exception:
         return False
 
@@ -655,7 +694,7 @@ def run_ffmpeg_thumbnail(src: Path, dest: Path, width: int = 800, timeout: int =
                 proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
             except (subprocess.SubprocessError, OSError):
                 continue
-            if proc.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+            if proc.returncode == 0 and thumbnail_is_healthy(tmp):
                 candidates.append((thumbnail_content_score(tmp), tmp))
         if candidates:
             break
@@ -1031,7 +1070,17 @@ def api_tag_graph(
     limit_edges: int = Query(180, ge=0, le=500),
     min_edge: int = Query(2, ge=1, le=50),
 ) -> dict:
-    return tag_graph(limit_nodes=limit_nodes, limit_edges=limit_edges, min_edge=min_edge)
+    key = (limit_nodes, limit_edges, min_edge)
+    now = time.time()
+    with _TAG_GRAPH_LOCK:
+        if _TAG_GRAPH_CACHE.get("key") == key and float(_TAG_GRAPH_CACHE.get("expires") or 0) > now:
+            return dict(_TAG_GRAPH_CACHE.get("data") or {})
+    data = tag_graph(limit_nodes=limit_nodes, limit_edges=limit_edges, min_edge=min_edge)
+    with _TAG_GRAPH_LOCK:
+        _TAG_GRAPH_CACHE["key"] = key
+        _TAG_GRAPH_CACHE["data"] = data
+        _TAG_GRAPH_CACHE["expires"] = time.time() + 120
+    return data
 
 
 @app.get("/api/vision/calibrator/status")
@@ -1159,17 +1208,46 @@ def api_media_thumbnail(media_id: int):
     root = Path(detail.get("root") or output_root()).resolve()
     thumb_dir = root / "_MANIFESTS" / MEDIA_THUMB_CACHE
     thumb = thumb_dir / f"{media_id}.jpg"
-    frame_previews, _ = frame_preview_paths(root, str(detail.get("relative_path") or ""))
-    if frame_previews:
-        return FileResponse(frame_previews[0], media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
     if thumb.exists():
-        return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
+        if thumbnail_is_healthy(thumb):
+            return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
+        try:
+            thumb.unlink()
+        except OSError:
+            pass
     thumb_dir.mkdir(parents=True, exist_ok=True)
     if detail.get("media_type") == "photo" and write_smart_thumbnail(path, thumb):
         return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
+    frame_previews, _ = frame_preview_paths(root, str(detail.get("relative_path") or ""))
+    for frame in frame_previews:
+        if thumbnail_is_healthy(frame):
+            return FileResponse(frame, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
     if detail.get("media_type") == "video" and run_ffmpeg_thumbnail(path, thumb, width=800, timeout=30):
         return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
     raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+
+@app.post("/api/media/{media_id}/thumbnail/rebuild")
+def api_media_thumbnail_rebuild(media_id: int) -> dict:
+    detail = cached_media_record(media_id)
+    path = Path(detail["path"])
+    root = Path(detail.get("root") or output_root()).resolve()
+    thumb = root / "_MANIFESTS" / MEDIA_THUMB_CACHE / f"{media_id}.jpg"
+    try:
+        thumb.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not remove old thumbnail: {exc}") from exc
+    thumb.parent.mkdir(parents=True, exist_ok=True)
+    ok = False
+    if detail.get("media_type") == "photo":
+        ok = write_smart_thumbnail(path, thumb)
+    elif detail.get("media_type") == "video":
+        ok = run_ffmpeg_thumbnail(path, thumb, width=900, timeout=45)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Could not rebuild a healthy thumbnail")
+    return {"ok": True, "id": media_id, "thumbnail": str(thumb.relative_to(root))}
 
 
 @app.get("/api/media/{media_id}/contact-sheet")

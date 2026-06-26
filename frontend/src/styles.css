@@ -851,6 +851,14 @@ button:disabled { opacity: .55; cursor: wait; }
   line-height: 1.35;
   text-align: left;
 }
+.logBlock {
+  overflow-x: hidden;
+}
+.logBlock .list,
+.logBlock .row,
+.logBlock pre {
+  max-width: 100%;
+}
 .logBlock pre {
   min-height: 120px;
   max-height: 360px;
@@ -1066,16 +1074,24 @@ tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); col
   background: var(--panel-2);
 }
 .thumb {
+  position: relative;
   display: grid;
   place-items: center;
+  overflow: hidden;
   background: color-mix(in srgb, var(--button) 40%, var(--panel));
   border-bottom: 1px solid var(--line);
+}
+.faceCard .thumb::before,
+.faceCard .thumb::after {
+  display: none !important;
+  content: none !important;
 }
 .thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  filter: none;
 }
 .faceMeta {
   display: grid;
@@ -2661,6 +2677,13 @@ button:active {
 
 .recentMeta strong {
   max-width: 58%;
+}
+
+.faceCard .thumb::after,
+.faceCard .thumb::before {
+  display: none !important;
+  background: none !important;
+  opacity: 0 !important;
 }
 
 .mediaThumb span,

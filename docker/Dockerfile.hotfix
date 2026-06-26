@@ -2,6 +2,7 @@ ARG BASE_IMAGE=bsakuramiku/tg-media-manager:clip-amd64
 FROM ${BASE_IMAGE}
 
 COPY backend/ /app/backend/
+COPY frontend/dist/ /app/frontend/dist/
 
 ARG APP_VERSION=dev
 ARG APP_SEMVER=1.0.0
