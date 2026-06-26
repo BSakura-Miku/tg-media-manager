@@ -2749,3 +2749,126 @@ button:active {
   top: 10px;
   bottom: auto;
 }
+
+/* Design-system QA overrides: accessibility, touch, overflow, reduced motion */
+:where(button, a, input, select, textarea, [role="button"], [tabindex]):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 78%, white);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+button,
+.mediaCard,
+.recentCard,
+.authorCard,
+.faceCard,
+.tagNodeList button,
+.edgeList button {
+  touch-action: manipulation;
+}
+
+button,
+.iconButton,
+.panelButton,
+.statusTabs button,
+.segmented button {
+  height: auto;
+  min-height: 44px;
+}
+
+.iconButton {
+  min-width: 44px;
+}
+
+input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  accent-color: var(--accent);
+}
+
+.logBlock .row strong,
+.job small,
+.job p,
+.mediaMeta strong,
+.recentMeta strong {
+  overflow-wrap: anywhere;
+}
+
+.job small,
+.job p {
+  min-width: 0;
+}
+
+.logBlock pre {
+  overscroll-behavior: contain;
+}
+
+.mediaMeta,
+.recentMeta {
+  max-width: calc(100% - 16px);
+}
+
+.mediaMeta strong,
+.recentMeta strong,
+.mediaMeta .faceStats span,
+.recentMeta span {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .content {
+    padding-inline: 14px;
+  }
+
+  .mediaSearchBar,
+  .randomBar {
+    gap: 10px;
+  }
+
+  .mediaMeta,
+  .recentMeta {
+    left: 7px;
+    right: 7px;
+    bottom: 7px;
+  }
+
+  .mediaMeta strong,
+  .recentMeta strong,
+  .mediaMeta .faceStats span,
+  .recentMeta span {
+    min-height: 28px;
+    max-width: 76%;
+    padding-inline: 10px;
+    font-size: 12px;
+  }
+
+  .logBlock .row {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .logBlock .row span,
+  .logBlock .row strong {
+    text-align: left;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: .001ms !important;
+  }
+
+  button:hover,
+  .mediaCard:hover,
+  .recentCard:hover,
+  .authorCard:hover,
+  .faceCard:hover {
+    transform: none !important;
+  }
+}
