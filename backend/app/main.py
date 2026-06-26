@@ -216,7 +216,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.0.9").lstrip("v") or "1.0.9"
+    app_version = os.environ.get("APP_SEMVER", "1.0.10").lstrip("v") or "1.0.10"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -1273,6 +1273,59 @@ def api_media_contact_sheet(media_id: int):
     if sheet is None:
         raise HTTPException(status_code=404, detail="Contact sheet not found")
     return FileResponse(sheet, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
+
+
+@app.post("/api/media/{media_id}/contact-sheet/rebuild")
+def api_media_contact_sheet_rebuild(media_id: int) -> dict:
+    detail = cached_media_record(media_id)
+    if detail.get("media_type") != "video":
+        raise HTTPException(status_code=400, detail="Contact sheets are only available for videos")
+    root = Path(detail.get("root") or output_root()).resolve()
+    path = Path(detail["path"]).resolve()
+    try:
+        from backend.core.tg_media_library import Config, extract_one_media_frame_job, frame_cache_dir, media_cache_key
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Frame tools unavailable: {exc}") from exc
+
+    import csv
+    import shutil
+
+    settings = get_settings()
+    try:
+        frames = int(settings.get("frames_per_video") or os.environ.get("FRAMES_PER_VIDEO", "3"))
+    except (TypeError, ValueError):
+        frames = 3
+    frames = max(1, min(12, frames))
+    config = Config(root=root, output_root=root)
+    cache_dir = frame_cache_dir(config) / media_cache_key(path)
+    try:
+        shutil.rmtree(cache_dir)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not clear old video overview cache: {exc}") from exc
+
+    row = extract_one_media_frame_job(config, path, frames)
+    if row.get("error") or not row.get("contact_sheet"):
+        raise HTTPException(status_code=500, detail=row.get("error") or "Could not rebuild video overview")
+
+    frame_index = root / "_MANIFESTS" / "frame_index.csv"
+    frame_index.parent.mkdir(parents=True, exist_ok=True)
+    rows = [item for item in read_csv(frame_index) if item.get("media_path") != row.get("media_path")]
+    rows.append(row)
+    fieldnames = ["media_path", "cache_key", "kind", "frames", "frame_times", "contact_sheet", "error"]
+    with frame_index.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    _FRAME_INDEX_CACHE["mtime"] = 0.0
+    _FRAME_INDEX_CACHE["rows"] = {}
+    return {
+        "ok": True,
+        "id": media_id,
+        "contact_sheet": row.get("contact_sheet"),
+        "frames": len([item for item in (row.get("frames") or "").split("|") if item]),
+    }
 
 
 @app.get("/api/logs")

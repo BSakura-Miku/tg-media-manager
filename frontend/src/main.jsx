@@ -357,6 +357,8 @@ const i18n = {
     mediaDeleted: 'Moved to Deleted review folder',
     rebuildThumbnail: 'Rebuild thumbnail',
     thumbnailRebuilt: 'Thumbnail rebuilt',
+    rebuildVideoOverview: 'Rebuild video overview',
+    videoOverviewRebuilt: 'Video overview rebuilt',
     manualTag: 'Manual tag',
     addTag: 'Add tag',
     tagCategory: 'Category',
@@ -793,6 +795,8 @@ const i18n = {
     mediaDeleted: '已移动到 Deleted 待审目录',
     rebuildThumbnail: '重建缩略图',
     thumbnailRebuilt: '缩略图已重建',
+    rebuildVideoOverview: '重建视频概览',
+    videoOverviewRebuilt: '视频概览已重建',
     manualTag: '手动标签',
     addTag: '添加标签',
     tagCategory: '分类',
@@ -2559,6 +2563,15 @@ function MediaViewer({ item, detail, reload, close, t }) {
       await refreshDetail();
     });
   }
+  async function rebuildVideoOverview() {
+    if (!data.id || data.media_type !== 'video') return;
+    await runViewerAction('contact-sheet', async () => {
+      await api(`/api/media/${data.id}/contact-sheet/rebuild`, { method: 'POST' });
+      setContactSheetMissing(false);
+      setFeedbackMessage(t.videoOverviewRebuilt);
+      await refreshDetail();
+    });
+  }
   return (
     <ModalPortal>
     <div className="viewerBackdrop" role="dialog" aria-modal="true">
@@ -2568,6 +2581,7 @@ function MediaViewer({ item, detail, reload, close, t }) {
           <div className="viewerActions">
             <button className={`iconButton ${isFavorite ? 'isFavorite' : ''}`} onClick={toggleFavorite} disabled={!!busyAction} title={isFavorite ? t.unfavorite : t.favorite}><Heart size={18} /></button>
             <button className="iconButton" onClick={rebuildThumbnail} disabled={!!busyAction} title={t.rebuildThumbnail}><RefreshCw size={18} /></button>
+            {data.media_type === 'video' && <button className="iconButton" onClick={rebuildVideoOverview} disabled={!!busyAction} title={t.rebuildVideoOverview}><Film size={18} /></button>}
             <button className="iconButton dangerIcon" onClick={deleteMedia} disabled={!!busyAction} title={t.deleteMedia}><Trash2 size={18} /></button>
             <button className="iconButton" onClick={close} title={t.close}><XCircle size={18} /></button>
           </div>
@@ -2606,7 +2620,12 @@ function MediaViewer({ item, detail, reload, close, t }) {
                 <img src={`/api/media/${data.id}/contact-sheet`} alt={t.videoOverview} loading="lazy" onError={() => setContactSheetMissing(true)} />
               </section>
             )}
-            {data.media_type === 'video' && data.contact_sheet && contactSheetMissing && <div className="hintBox compact"><span>{t.videoOverviewMissing}</span></div>}
+            {data.media_type === 'video' && (!data.contact_sheet || contactSheetMissing) && (
+              <div className="hintBox compact videoOverviewAction">
+                <span>{t.videoOverviewMissing}</span>
+                <button onClick={rebuildVideoOverview} disabled={!!busyAction}><Film size={15} />{t.rebuildVideoOverview}</button>
+              </div>
+            )}
             <h3>{t.tags}</h3>
             <div className="tagCloud tagFeedbackCloud">
               {tags.map(tag => (

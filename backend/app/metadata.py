@@ -941,18 +941,23 @@ def media_detail(media_id: int) -> dict | None:
 def contact_sheet_for_media(data: dict) -> str:
     if data.get("media_type") != "video":
         return ""
-    root = output_root()
+    root = Path(data.get("root") or output_root()).resolve()
     relative_path = str(data.get("relative_path") or "")
     if not relative_path:
         return ""
     for row in read_csv(root / "_MANIFESTS" / "frame_index.csv"):
         if row.get("media_path") == relative_path:
             sheet = row.get("contact_sheet") or ""
-            if sheet and (root / sheet).exists():
+            if not sheet:
+                return ""
+            candidate = (root / sheet).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                return ""
+            if candidate.exists() and candidate.is_file():
                 return sheet
-            frame_paths = [item for item in (row.get("frames") or "").split("|") if item]
-            if len(frame_paths) > 1:
-                return frame_paths[0]
+            return ""
     return ""
 
 
