@@ -1,10 +1,8 @@
 .venv
 frontend/node_modules
-frontend/dist
 data
 models
 __pycache__
 *.pyc
 .DS_Store
 .git
-
