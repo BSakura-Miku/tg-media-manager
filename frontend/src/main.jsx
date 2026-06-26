@@ -340,6 +340,7 @@ const i18n = {
     videosOnly: 'Videos',
     openMedia: 'Open',
     mediaDetail: 'Media detail',
+    close: 'Close',
     originalName: 'Original name',
     sourceOriginalPath: 'Original source path',
     indexedName: 'Library filename',
@@ -363,6 +364,7 @@ const i18n = {
     manualEditSaved: 'Saved',
     trainVisionCalibrator: 'Train calibrator',
     videoOverview: 'Video overview',
+    videoOverviewMissing: 'Video overview is not available yet',
     timeline: 'Timeline',
     confidence: 'Confidence',
     noIndexHint: 'No indexed media yet. Run Rebuild index after scan/apply.',
@@ -774,6 +776,7 @@ const i18n = {
     videosOnly: '视频',
     openMedia: '打开',
     mediaDetail: '媒体详情',
+    close: '关闭',
     originalName: '原始文件名',
     sourceOriginalPath: '最初来源路径',
     indexedName: '库内文件名',
@@ -797,6 +800,7 @@ const i18n = {
     manualEditSaved: '已保存',
     trainVisionCalibrator: '训练校准器',
     videoOverview: '视频概览',
+    videoOverviewMissing: '暂时没有可用的视频概览',
     timeline: '时间轴',
     confidence: '置信度',
     noIndexHint: '还没有索引媒体。扫描/整理后先点重建索引。',
@@ -2463,8 +2467,17 @@ function MediaViewer({ item, detail, reload, close, t }) {
   const [manualCategory, setManualCategory] = useState('');
   const [authorDraft, setAuthorDraft] = useState(data.author || '');
   const [busyAction, setBusyAction] = useState('');
+  const [contactSheetMissing, setContactSheetMissing] = useState(false);
   const isFavorite = tags.some(tag => tag.tag === 'Favorite' && tag.state !== 'rejected');
   useEffect(() => setAuthorDraft(data.author || ''), [data.id, data.author]);
+  useEffect(() => setContactSheetMissing(false), [data.id]);
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') close();
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [close]);
   async function refreshDetail() {
     if (reload && data.id) await reload(data.id);
   }
@@ -2556,7 +2569,7 @@ function MediaViewer({ item, detail, reload, close, t }) {
             <button className={`iconButton ${isFavorite ? 'isFavorite' : ''}`} onClick={toggleFavorite} disabled={!!busyAction} title={isFavorite ? t.unfavorite : t.favorite}><Heart size={18} /></button>
             <button className="iconButton" onClick={rebuildThumbnail} disabled={!!busyAction} title={t.rebuildThumbnail}><RefreshCw size={18} /></button>
             <button className="iconButton dangerIcon" onClick={deleteMedia} disabled={!!busyAction} title={t.deleteMedia}><Trash2 size={18} /></button>
-            <button className="iconButton" onClick={close}><XCircle size={18} /></button>
+            <button className="iconButton" onClick={close} title={t.close}><XCircle size={18} /></button>
           </div>
         </div>
         <div className="viewerBody">
@@ -2587,12 +2600,13 @@ function MediaViewer({ item, detail, reload, close, t }) {
               <div className="row"><span>{t.thumbnail}</span><strong>{data.resolution || data.quality || '-'}</strong></div>
               <div className="row"><span>{t.media}</span><strong>{data.media_type}</strong></div>
             </div>
-            {data.media_type === 'video' && data.contact_sheet && (
+            {data.media_type === 'video' && data.contact_sheet && !contactSheetMissing && (
               <section className="videoOverview">
                 <h3>{t.videoOverview}</h3>
-                <img src={`/api/media/${data.id}/contact-sheet`} alt={t.videoOverview} loading="lazy" />
+                <img src={`/api/media/${data.id}/contact-sheet`} alt={t.videoOverview} loading="lazy" onError={() => setContactSheetMissing(true)} />
               </section>
             )}
+            {data.media_type === 'video' && data.contact_sheet && contactSheetMissing && <div className="hintBox compact"><span>{t.videoOverviewMissing}</span></div>}
             <h3>{t.tags}</h3>
             <div className="tagCloud tagFeedbackCloud">
               {tags.map(tag => (

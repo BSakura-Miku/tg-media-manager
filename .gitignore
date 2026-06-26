@@ -6,4 +6,5 @@ models/
 __pycache__/
 *.pyc
 .DS_Store
-
+docs/ui-audit/**/*.png
+docs/ui-audit/**/*.json
