@@ -829,7 +829,17 @@ def soft_delete_media(media_id: int) -> dict:
     return {"ok": True, "media_id": media_id, "path": relative_path}
 
 
-def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str = "", limit: int = 100, offset: int = 0, include_risk: bool = False, randomize: bool = False) -> dict:
+def media_query(
+    q: str = "",
+    media_type: str = "all",
+    tag: str = "",
+    author: str = "",
+    limit: int = 100,
+    offset: int = 0,
+    include_risk: bool = False,
+    randomize: bool = False,
+    random_seed: int = 0,
+) -> dict:
     clauses = []
     params: list[object] = []
     if not include_risk:
@@ -850,7 +860,13 @@ def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str
         like = f"%{q}%"
         params.extend([like, like, like, like, like, like, like, like, like])
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    order = "RANDOM()" if randomize else "m.mtime DESC, m.id DESC"
+    if randomize:
+        seed = abs(int(random_seed or 0)) % 2147483647
+        if seed == 0:
+            seed = 1103515245
+        order = f"(((m.id * 1103515245) + {seed}) % 2147483647), m.id DESC"
+    else:
+        order = "m.mtime DESC, m.id DESC"
     with connect() as conn:
         total = int(conn.execute(f"SELECT COUNT(*) AS c FROM media_items m {where}", params).fetchone()["c"])
         rows = conn.execute(
@@ -865,7 +881,7 @@ def media_query(q: str = "", media_type: str = "all", tag: str = "", author: str
             """,
             [*params, limit, offset],
         ).fetchall()
-    return {"total": total, "limit": limit, "offset": offset, "items": [dict(row) for row in rows]}
+    return {"total": total, "limit": limit, "offset": offset, "random_seed": random_seed if randomize else 0, "items": [dict(row) for row in rows]}
 
 
 def risk_queue(limit: int = 100) -> dict:

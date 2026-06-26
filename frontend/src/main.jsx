@@ -1200,22 +1200,26 @@ function initialAspect(item) {
 
 function MediaThumbImage({ item, className = 'mediaThumb', label = '' }) {
   const [aspect, setAspect] = useState(initialAspect(item));
+  const [failed, setFailed] = useState(false);
   const badge = label || (item.media_type === 'video' ? 'VID' : 'IMG');
   const revision = encodeURIComponent(item.updated_at || item.hash8 || item.mtime || '');
   return (
     <div className={className} style={{ '--thumb-ratio': String(aspect) }}>
-      <img
-        src={`/api/media/${item.id}/thumbnail?v=${revision}`}
-        alt={item.filename}
-        loading="lazy"
-        onLoad={event => {
-          const img = event.currentTarget;
-          if (img.naturalWidth && img.naturalHeight) {
-            setAspect(Math.max(0.38, Math.min(3.2, img.naturalWidth / img.naturalHeight)));
-          }
-        }}
-        onError={event => { event.currentTarget.style.display = 'none'; }}
-      />
+      {!failed ? (
+        <img
+          src={`/api/media/${item.id}/thumbnail?v=${revision}`}
+          alt={item.filename}
+          loading="lazy"
+          decoding="async"
+          onLoad={event => {
+            const img = event.currentTarget;
+            if (img.naturalWidth && img.naturalHeight) {
+              setAspect(Math.max(0.38, Math.min(3.2, img.naturalWidth / img.naturalHeight)));
+            }
+          }}
+          onError={() => setFailed(true)}
+        />
+      ) : <div className="thumbFallback">{badge}</div>}
       <span>{badge}</span>
     </div>
   );
@@ -1294,7 +1298,7 @@ function App() {
   async function refresh() {
     const [s, j, a, f, suggestions, cfg, mon, modelCatalog, ver] = await Promise.all([
       api('/api/summary'),
-      api('/api/jobs'),
+      api('/api/jobs?limit=120'),
       api('/api/authors').catch(() => []),
       api('/api/face-groups').catch(() => []),
       api('/api/face-merge-suggestions').catch(() => []),
@@ -1341,9 +1345,13 @@ function App() {
         loadModels().catch(() => {});
       }
     }).catch(exc => setError(exc.message));
+  }, []);
+
+  useEffect(() => {
+    if (!auth.authenticated) return undefined;
     const id = setInterval(() => refresh().catch(() => {}), 4000);
     return () => clearInterval(id);
-  }, []);
+  }, [auth.authenticated]);
 
   async function login(password) {
     setError('');
@@ -1430,6 +1438,7 @@ function App() {
       tag: params.tag || '',
       author: params.author || '',
       randomize: params.randomize ? 'true' : 'false',
+      seed: String(params.seed || 0),
       limit: String(params.limit || 80),
       offset: String(params.offset || 0),
     });
@@ -1445,6 +1454,7 @@ function App() {
       tag: params.tag || '',
       author: params.author || '',
       randomize: 'true',
+      seed: String(params.seed || 0),
       limit: String(params.limit || 80),
       offset: String(params.offset || 0),
     });
@@ -2261,20 +2271,23 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, t }) {
   const [filters, setFilters] = useState({ media_type: 'all', tag: '', author: '', q: '' });
   const [loadingMore, setLoadingMore] = useState(false);
   const [exhausted, setExhausted] = useState(false);
+  const [seed, setSeed] = useState(() => Math.floor(Math.random() * 2147483646) + 1);
   const sentinelRef = useRef(null);
   const activeFilters = [filters.media_type !== 'all' ? filters.media_type : '', filters.q, filters.tag, filters.author].filter(Boolean);
   const items = mediaResults.items || [];
   const hasMore = !exhausted && Number(mediaResults.total || 0) > items.length;
   function run(event) {
     event?.preventDefault();
+    const nextSeed = Math.floor(Math.random() * 2147483646) + 1;
+    setSeed(nextSeed);
     setExhausted(false);
-    loadRandomMedia(filters);
+    loadRandomMedia({ ...filters, seed: nextSeed });
   }
   async function loadMore() {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
     try {
-      const data = await loadRandomMedia({ ...filters, append: true, limit: 80, offset: items.length });
+      const data = await loadRandomMedia({ ...filters, append: true, limit: 80, offset: items.length, seed });
       if (!data.items?.length || Number(data.added_count || 0) === 0) setExhausted(true);
     } finally {
       setLoadingMore(false);
@@ -2288,7 +2301,7 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, t }) {
     }, { rootMargin: '800px 0px' });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [items.length, hasMore, loadingMore, filters.media_type, filters.q, filters.tag, filters.author]);
+  }, [items.length, hasMore, loadingMore, filters.media_type, filters.q, filters.tag, filters.author, seed]);
   return (
     <section className="panel">
       <div className="panelHead"><h2>{t.randomFlow}</h2><button className="panelButton" onClick={run}><Shuffle size={16} />{t.randomize}</button><span>{mediaResults.total || 0}</span></div>

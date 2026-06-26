@@ -216,7 +216,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.0.5").lstrip("v") or "1.0.5"
+    app_version = os.environ.get("APP_SEMVER", "1.0.6").lstrip("v") or "1.0.6"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -260,9 +260,13 @@ def api_summary() -> dict:
 
 
 @app.get("/api/jobs")
-def api_jobs() -> list[dict]:
+def api_jobs(limit: int = Query(120, ge=1, le=300), status: str = Query("", max_length=40)) -> list[dict]:
+    allowed = {"queued", "running", "done", "failed", "cancelled"}
     with connect() as conn:
-        rows = conn.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT 50").fetchall()
+        if status in allowed:
+            rows = conn.execute("SELECT * FROM jobs WHERE status=? ORDER BY id DESC LIMIT ?", (status, limit)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return rows_to_dicts(rows)
 
 
@@ -1056,12 +1060,13 @@ def api_media(
     author: str = Query("", max_length=120),
     include_risk: bool = Query(False),
     randomize: bool = Query(False),
+    seed: int = Query(0, ge=0),
     limit: int = Query(80, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict:
     if media_type == "all" and type_filter in {"photo", "video"}:
         media_type = type_filter
-    return media_query(q=q.strip(), media_type=media_type, tag=tag.strip(), author=author.strip(), limit=limit, offset=offset, include_risk=include_risk, randomize=randomize)
+    return media_query(q=q.strip(), media_type=media_type, tag=tag.strip(), author=author.strip(), limit=limit, offset=offset, include_risk=include_risk, randomize=randomize, random_seed=seed)
 
 
 @app.get("/api/tags/graph")
