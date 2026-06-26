@@ -149,10 +149,18 @@ const i18n = {
     jobLog: 'Job Log',
     selectJob: 'select a job',
     selectJobHint: 'Select a job to inspect stdout and stderr',
+    normalJobs: 'Normal',
     runningJobs: 'Running',
+    allJobs: 'All',
+    warningJobs: 'Warnings',
+    errorJobs: 'Errors',
     failedJobs: 'Errors',
     completedJobs: 'Completed',
     otherJobs: 'Other',
+    jobHistoryHint: 'Failed records can include old restarts or manual stops. They are kept as audit history; use the filters to separate warnings from real errors.',
+    jobInterruptedHint: 'Interrupted by service restart. Cached outputs were kept and the job can be rerun.',
+    jobCancelledHint: 'Cancelled by user. Finished cache files were kept and the workflow can resume later.',
+    jobStaleHint: 'No heartbeat for a while. The worker may be stalled or the browser is showing stale data.',
     workflowStep: 'Step',
     remainingSteps: 'remaining',
     workflowProgress: 'Workflow progress',
@@ -575,10 +583,18 @@ const i18n = {
     jobLog: '任务日志',
     selectJob: '选择任务',
     selectJobHint: '选择一个任务查看 stdout 和 stderr',
+    normalJobs: '正常',
     runningJobs: '进行中',
+    allJobs: '全部',
+    warningJobs: '警告',
+    errorJobs: '错误',
     failedJobs: '错误',
     completedJobs: '已完成',
     otherJobs: '其他',
+    jobHistoryHint: '失败记录里可能包含旧版本重启中断或手动停止。它们会保留作为审计历史，可以用筛选区分警告和真实错误。',
+    jobInterruptedHint: '服务重启导致中断。已完成的缓存会保留，可以重新运行继续补齐。',
+    jobCancelledHint: '用户手动停止。已完成的缓存会保留，后续可继续跑。',
+    jobStaleHint: '一段时间没有心跳。可能是任务卡住，也可能是页面状态未刷新。',
     workflowStep: '第',
     remainingSteps: '剩余',
     workflowProgress: '流程进度',
@@ -971,9 +987,10 @@ function Stat({ label, value, icon: Icon, tone = 'blue', sub = '', onClick }) {
   return <Tag className={`stat ${tone} ${onClick ? 'clickable' : ''}`} onClick={onClick || undefined}><div className="statIcon"><Icon size={24} /></div><div><div className="statValue">{value ?? 0}</div><div className="statLabel">{label}</div>{sub && <div className="statSub">{sub}</div>}</div></Tag>;
 }
 
-function JobBadge({ status }) {
-  const Icon = status === 'done' ? CheckCircle2 : status === 'failed' ? XCircle : Activity;
-  return <span className={`badge ${status}`}><Icon size={13} />{status}</span>;
+function JobBadge({ status, kind, label }) {
+  const tone = kind || (status === 'done' ? 'completed' : status === 'failed' ? 'error' : status);
+  const Icon = tone === 'completed' ? CheckCircle2 : tone === 'error' ? XCircle : Activity;
+  return <span className={`badge ${tone} ${status}`}><Icon size={13} />{label || status}</span>;
 }
 
 function formatDateTime(value) {
@@ -1001,6 +1018,59 @@ function formatDateTime(value) {
 
 function sortJobsNewest(jobs) {
   return [...(jobs || [])].sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+}
+
+function parseJobTime(value) {
+  if (!value) return null;
+  const raw = String(value).trim().replace('T', ' ').replace(/\.\d+$/, '');
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second = '00'] = match;
+  return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
+}
+
+function jobTextBlob(job) {
+  return [job?.message, job?.stdout, job?.stderr].filter(Boolean).join('\n').toLowerCase();
+}
+
+function isInterruptedJob(job) {
+  return job?.status === 'failed' && jobTextBlob(job).includes('interrupted by service restart');
+}
+
+function isCancelledJob(job) {
+  return job?.status === 'cancelled' || jobTextBlob(job).includes('cancel');
+}
+
+function isStaleJob(job) {
+  if (!['queued', 'running'].includes(job?.status)) return false;
+  const stamp = parseJobTime(job.heartbeat_at || job.started_at || job.created_at);
+  if (!stamp) return false;
+  return Date.now() - stamp > 10 * 60 * 1000;
+}
+
+function jobKind(job) {
+  if (job?.status === 'done') return 'completed';
+  if (['queued', 'running'].includes(job?.status)) return isStaleJob(job) ? 'warning' : 'running';
+  if (isCancelledJob(job) || isInterruptedJob(job)) return 'warning';
+  if (job?.status === 'failed') return 'error';
+  return 'warning';
+}
+
+function jobKindLabel(kind, t) {
+  return {
+    all: t.allJobs,
+    running: t.normalJobs || t.runningJobs,
+    warning: t.warningJobs,
+    error: t.errorJobs,
+    completed: t.completedJobs,
+  }[kind] || kind;
+}
+
+function jobDiagnostic(job, t) {
+  if (isStaleJob(job)) return t.jobStaleHint;
+  if (isInterruptedJob(job)) return t.jobInterruptedHint;
+  if (isCancelledJob(job)) return t.jobCancelledHint;
+  return job?.message || job?.stderr || job?.stdout || job?.created_at || '';
 }
 
 function jobStageLabel(stage, t) {
@@ -1924,36 +1994,55 @@ function SourcePanel({ leftovers, title }) {
 
 function jobPercent(job) {
   const value = Number(job.progress || 0);
+  const processed = Number(job.processed || 0);
+  const total = Number(job.total || 0);
+  const derived = total > 0 ? Math.floor((processed / total) * 100) : 0;
   if (job.status === 'done') return 100;
-  return Math.max(0, Math.min(100, value));
+  return Math.max(0, Math.min(100, Math.max(value, derived)));
 }
 
 function JobsPanel({ jobs, openJob, t }) {
+  const [filter, setFilter] = useState('all');
   const sorted = sortJobsNewest(jobs);
+  const filters = ['all', 'running', 'warning', 'error', 'completed'];
+  const counts = filters.reduce((acc, key) => {
+    acc[key] = key === 'all' ? sorted.length : sorted.filter(job => jobKind(job) === key).length;
+    return acc;
+  }, {});
+  const filtered = filter === 'all' ? sorted : sorted.filter(job => jobKind(job) === filter);
   const groups = [
-    [t.runningJobs, sorted.filter(job => ['queued', 'running'].includes(job.status))],
-    [t.failedJobs, sorted.filter(job => ['failed', 'cancelled'].includes(job.status))],
-    [t.completedJobs, sorted.filter(job => job.status === 'done')],
-    [t.otherJobs, sorted.filter(job => !['queued', 'running', 'failed', 'cancelled', 'done'].includes(job.status))],
+    ['running', filtered.filter(job => jobKind(job) === 'running')],
+    ['warning', filtered.filter(job => jobKind(job) === 'warning')],
+    ['error', filtered.filter(job => jobKind(job) === 'error')],
+    ['completed', filtered.filter(job => jobKind(job) === 'completed')],
+    ['other', filtered.filter(job => !['running', 'warning', 'error', 'completed'].includes(jobKind(job)))],
   ].filter(([, rows]) => rows.length);
-  return <div className="panel"><div className="panelHead"><h2>{t.jobs}</h2><span>{jobs.length}</span></div><div className="jobGroups">{groups.map(([label, rows]) => (
-    <section className="jobGroup" key={label}>
-      <div className="jobGroupHead"><strong>{label}</strong><span>{rows.length}</span></div>
+  return <div className="panel"><div className="panelHead"><h2>{t.jobs}</h2><span>{jobs.length}</span></div>
+    <div className="statusTabs" role="tablist" aria-label={t.jobs}>
+      {filters.map(key => <button key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{jobKindLabel(key, t)}<span>{counts[key] || 0}</span></button>)}
+    </div>
+    <div className="hintBox compact"><span>{t.jobHistoryHint}</span></div>
+    <div className="jobGroups">{groups.map(([kind, rows]) => (
+    <section className="jobGroup" key={kind}>
+      <div className="jobGroupHead"><strong>{kind === 'other' ? t.otherJobs : jobKindLabel(kind, t)}</strong><span>{rows.length}</span></div>
       <div className="jobs">{rows.map(job => {
         const pct = jobPercent(job);
         const processed = Number(job.processed || 0);
         const total = Number(job.total || 0);
         const workflow = jobWorkflowInfo(job, t);
+        const kind = jobKind(job);
+        const diagnostic = jobDiagnostic(job, t);
         return (
-          <button className="job" key={job.id} onClick={() => openJob(job.id)}>
+          <button className={`job ${kind}`} key={job.id} onClick={() => openJob(job.id)}>
             <div className="jobMain">
               <strong>#{job.id} {t.commandNames?.[job.command] || job.command}</strong>
               <p>{workflow ? `${workflow.label} · ${t.workflowStep} ${workflow.stepNumber}/${workflow.totalSteps} · ${t.remainingSteps} ${workflow.remaining}` : (job.stage || job.message || job.created_at)}</p>
+              {diagnostic && kind !== 'running' && <small className="jobDiagnostic">{diagnostic}</small>}
               {job.current_item && <small>{job.current_item}</small>}
               <i className="jobProgress"><b style={{ width: `${pct}%` }} /></i>
               <small>{t.currentStepProgress}: {pct}% {total ? `${processed}/${total}` : ''} {Number(job.failed_count || 0) ? `${t.failedShort} ${job.failed_count}` : ''}</small>
             </div>
-            <JobBadge status={job.status} />
+            <JobBadge status={job.status} kind={kind} label={jobKindLabel(kind, t)} />
           </button>
         );
       })}</div>
@@ -1998,12 +2087,15 @@ function LogPanel({ selectedJob, jobLog, start, cancelJob, setActive, t }) {
   const canResume = selectedJob && ['cancelled', 'failed'].includes(selectedJob.status);
   const pct = selectedJob ? jobPercent(selectedJob) : 0;
   const workflow = selectedJob ? jobWorkflowInfo(selectedJob, t) : null;
+  const kind = selectedJob ? jobKind(selectedJob) : '';
+  const diagnostic = selectedJob ? jobDiagnostic(selectedJob, t) : '';
   return <div className="panel"><div className="panelHead"><h2>{selectedJob ? `Job #${selectedJob.id}` : t.jobLog}</h2><span>{selectedJob?.status || t.selectJob}</span></div>{!selectedJob ? <Empty label={t.selectJobHint} /> : <div className="logBlock">
     <div className="jobDetailHero">
       <strong>{pct}%</strong>
       <i className="jobProgress"><b style={{ width: `${pct}%` }} /></i>
       <span>{workflow ? `${workflow.label} · ${t.workflowStep} ${workflow.stepNumber}/${workflow.totalSteps} · ${t.remainingSteps} ${workflow.remaining}` : (selectedJob.stage || selectedJob.message || '-')}</span>
     </div>
+    {diagnostic && kind !== 'running' && <div className={`hintBox compact ${kind}`}><span>{diagnostic}</span></div>}
     <div className="nextActions">
       {canStop && <button onClick={() => cancelJob(selectedJob.id)}><Archive size={15} />{t.stopJob || 'Stop'}</button>}
       {canResume && <button onClick={() => start(selectedJob.command)}><Play size={15} />{t.resumeJob || 'Resume'}</button>}
@@ -2011,6 +2103,7 @@ function LogPanel({ selectedJob, jobLog, start, cancelJob, setActive, t }) {
     </div>
     <div className="list">
       <div className="row"><span>{t.command}</span><strong>{selectedJob.command}</strong></div>
+      <div className="row"><span>status</span><strong>{jobKindLabel(kind, t)} · {selectedJob.status}</strong></div>
       <div className="row"><span>stage</span><strong>{selectedJob.stage || '-'}</strong></div>
       {workflow && <div className="row"><span>{t.workflowProgress}</span><strong>{workflow.stepNumber}/{workflow.totalSteps} · {t.remainingSteps} {workflow.remaining}</strong></div>}
       <div className="row"><span>processed</span><strong>{selectedJob.processed || 0}/{selectedJob.total || 0}</strong></div>
@@ -2738,10 +2831,22 @@ function CollectionViewer({ title, subtitle, items, close, t }) {
 }
 
 function LogsPanel({ jobs, applied, openJob, setActive, t }) {
+  const [filter, setFilter] = useState('all');
   const sorted = sortJobsNewest(jobs);
-  return <section className="panel"><div className="panelHead"><h2>{t.recentLogs}</h2><span>{t.latestFirst} · {applied.rows} {t.moveLogRows}</span></div><div className="jobs">{sorted.map(job => {
+  const filters = ['all', 'running', 'warning', 'error', 'completed'];
+  const counts = filters.reduce((acc, key) => {
+    acc[key] = key === 'all' ? sorted.length : sorted.filter(job => jobKind(job) === key).length;
+    return acc;
+  }, {});
+  const visible = filter === 'all' ? sorted : sorted.filter(job => jobKind(job) === filter);
+  return <section className="panel"><div className="panelHead"><h2>{t.recentLogs}</h2><span>{t.latestFirst} · {applied.rows} {t.moveLogRows}</span></div>
+    <div className="statusTabs" role="tablist" aria-label={t.recentLogs}>
+      {filters.map(key => <button key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{jobKindLabel(key, t)}<span>{counts[key] || 0}</span></button>)}
+    </div>
+    <div className="jobs">{visible.map(job => {
+    const kind = jobKind(job);
     const stamp = formatDateTime(job.finished_at || job.heartbeat_at || job.started_at || job.created_at);
-    return <button className="job logJob" key={job.id} onClick={() => { openJob(job.id); setActive('jobs'); }}><div className="jobMain"><strong>#{job.id} {t.commandNames?.[job.command] || job.command}</strong><p>{job.stdout || job.stderr || job.message || job.created_at}</p><small>{stamp}</small></div><JobBadge status={job.status} /></button>;
+    return <button className={`job logJob ${kind}`} key={job.id} onClick={() => { openJob(job.id); setActive('jobs'); }}><div className="jobMain"><strong>#{job.id} {t.commandNames?.[job.command] || job.command}</strong><p>{jobDiagnostic(job, t)}</p><small>{stamp}</small></div><JobBadge status={job.status} kind={kind} label={jobKindLabel(kind, t)} /></button>;
   })}</div></section>;
 }
 
