@@ -216,7 +216,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.0.6").lstrip("v") or "1.0.6"
+    app_version = os.environ.get("APP_SEMVER", "1.0.7").lstrip("v") or "1.0.7"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -259,21 +259,31 @@ def api_summary() -> dict:
     return summary()
 
 
+JOB_SUMMARY_COLUMNS = """
+    id, command, status, progress, message, created_at, started_at, finished_at,
+    stage, current_item, processed, total, success_count, failed_count,
+    skipped_count, cancel_requested, heartbeat_at
+"""
+
+
 @app.get("/api/jobs")
 def api_jobs(limit: int = Query(120, ge=1, le=300), status: str = Query("", max_length=40)) -> list[dict]:
     allowed = {"queued", "running", "done", "failed", "cancelled"}
     with connect() as conn:
         if status in allowed:
-            rows = conn.execute("SELECT * FROM jobs WHERE status=? ORDER BY id DESC LIMIT ?", (status, limit)).fetchall()
+            rows = conn.execute(
+                f"SELECT {JOB_SUMMARY_COLUMNS} FROM jobs WHERE status=? ORDER BY id DESC LIMIT ?",
+                (status, limit),
+            ).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            rows = conn.execute(f"SELECT {JOB_SUMMARY_COLUMNS} FROM jobs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return rows_to_dicts(rows)
 
 
 @app.get("/api/jobs/{job_id}")
 def api_job(job_id: int) -> dict:
     with connect() as conn:
-        row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        row = conn.execute(f"SELECT {JOB_SUMMARY_COLUMNS} FROM jobs WHERE id=?", (job_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return dict(row)
@@ -1268,7 +1278,7 @@ def api_media_contact_sheet(media_id: int):
 @app.get("/api/logs")
 def api_logs(limit: int = Query(20, ge=1, le=100)) -> dict:
     with connect() as conn:
-        rows = conn.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        rows = conn.execute(f"SELECT {JOB_SUMMARY_COLUMNS} FROM jobs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return {"jobs": rows_to_dicts(rows)}
 
 
