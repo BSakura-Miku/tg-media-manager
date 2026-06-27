@@ -2299,6 +2299,12 @@ main {
   isolation: isolate;
 }
 
+main > .content {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
 aside,
 .panel,
 .stat,
@@ -2459,6 +2465,18 @@ button:active {
 .recentGrid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: start;
+}
+
+@media (min-width: 1680px) {
+  .dashboardMain {
+    grid-template-columns: minmax(640px, 1.18fr) minmax(520px, .82fr);
+  }
+  .dashboardBottom {
+    grid-template-columns: minmax(640px, 1.18fr) minmax(520px, .82fr);
+  }
+  .recentGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .recentCard {
