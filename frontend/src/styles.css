@@ -2356,8 +2356,35 @@ button:active {
 
 .mediaGrid {
   display: block;
-  column-count: 4;
+  column-width: var(--media-card-width, 280px);
+  column-count: auto;
   column-gap: 18px;
+}
+
+.mediaZoomControl {
+  min-height: 40px;
+  display: inline-grid;
+  grid-template-columns: auto minmax(140px, 220px) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel-2) 72%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.mediaZoomControl input {
+  width: 100%;
+  min-width: 120px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  accent-color: var(--accent);
+  background: transparent;
 }
 
 .mediaCard {
@@ -2582,17 +2609,21 @@ button:active {
 }
 
 @media (max-width: 1220px) {
-  .mediaGrid { column-count: 3; }
+  .mediaGrid { column-width: min(var(--media-card-width, 260px), 260px); }
 }
 
 @media (max-width: 920px) {
-  .mediaGrid { column-count: 2; }
+  .mediaGrid { column-width: min(var(--media-card-width, 240px), 240px); }
   .recentGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 620px) {
   .mediaGrid,
-  .recentGrid { column-count: 1; grid-template-columns: 1fr; }
+  .recentGrid { column-count: 1; column-width: auto; grid-template-columns: 1fr; }
+  .mediaZoomControl {
+    width: 100%;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
 }
 
 /* Final interaction/readability overrides */

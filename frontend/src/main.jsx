@@ -340,6 +340,9 @@ const i18n = {
     videosOnly: 'Videos',
     openMedia: 'Open',
     mediaDetail: 'Media detail',
+    mediaZoom: 'Media zoom',
+    smallerCards: 'Smaller',
+    largerCards: 'Larger',
     close: 'Close',
     originalName: 'Original name',
     sourceOriginalPath: 'Original source path',
@@ -778,6 +781,9 @@ const i18n = {
     videosOnly: '视频',
     openMedia: '打开',
     mediaDetail: '媒体详情',
+    mediaZoom: '媒体缩放',
+    smallerCards: '更小',
+    largerCards: '更大',
     close: '关闭',
     originalName: '原始文件名',
     sourceOriginalPath: '最初来源路径',
@@ -1301,6 +1307,10 @@ function App() {
   const [version, setVersion] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'zh-CN');
+  const [mediaZoom, setMediaZoom] = useState(() => {
+    const value = Number(localStorage.getItem('mediaZoom') || 280);
+    return Number.isFinite(value) ? Math.max(180, Math.min(420, value)) : 280;
+  });
   const t = i18n[language] || i18n['zh-CN'];
 
   async function refresh() {
@@ -1339,6 +1349,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem('language', language);
   }, [language]);
+
+  useEffect(() => {
+    localStorage.setItem('mediaZoom', String(mediaZoom));
+  }, [mediaZoom]);
 
   useEffect(() => {
     api('/api/auth/status').then(status => {
@@ -1736,9 +1750,9 @@ function App() {
         )}
 
         {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} cancelJob={cancelJob} setActive={setActive} t={t} /></section>}
-        {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} t={t} />}
+        {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
         {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} loadMedia={loadMedia} setActive={setActive} t={t} />}
-        {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} t={t} />}
+        {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
         {active === 'models' && <ModelsPanel catalog={models} drafts={modelDrafts} setDrafts={setModelDrafts} manifestDraft={manifestDraft} setManifestDraft={setManifestDraft} saveModelSource={saveModelSource} saveManifestSource={saveManifestSource} pullModel={pullModel} deleteModel={deleteModel} start={start} busy={busy || hasRunning} t={t} />}
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} t={t} />}
@@ -2275,7 +2289,18 @@ function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
   );
 }
 
-function RandomFlowPanel({ mediaResults, loadRandomMedia, t }) {
+function MediaZoomControl({ value, setValue, t }) {
+  const zoom = Number(value || 280);
+  return (
+    <label className="mediaZoomControl" title={`${t.mediaZoom}: ${zoom}px`}>
+      <span>{t.smallerCards}</span>
+      <input type="range" min="180" max="420" step="10" value={zoom} onChange={event => setValue(Number(event.target.value))} aria-label={t.mediaZoom} />
+      <span>{t.largerCards}</span>
+    </label>
+  );
+}
+
+function RandomFlowPanel({ mediaResults, loadRandomMedia, mediaZoom, setMediaZoom, t }) {
   const [filters, setFilters] = useState({ media_type: 'all', tag: '', author: '', q: '' });
   const [loadingMore, setLoadingMore] = useState(false);
   const [exhausted, setExhausted] = useState(false);
@@ -2312,7 +2337,7 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, t }) {
   }, [items.length, hasMore, loadingMore, filters.media_type, filters.q, filters.tag, filters.author, seed]);
   return (
     <section className="panel">
-      <div className="panelHead"><h2>{t.randomFlow}</h2><button className="panelButton" onClick={run}><Shuffle size={16} />{t.randomize}</button><span>{mediaResults.total || 0}</span></div>
+      <div className="panelHead"><h2>{t.randomFlow}</h2><div className="panelActions"><MediaZoomControl value={mediaZoom} setValue={setMediaZoom} t={t} /><button className="panelButton" onClick={run}><Shuffle size={16} />{t.randomize}</button></div><span>{mediaResults.total || 0}</span></div>
       <form className="mediaSearchBar randomBar" onSubmit={run}>
         <select value={filters.media_type} onChange={event => setFilters({ ...filters, media_type: event.target.value })}>
           <option value="all">{t.allMedia}</option>
@@ -2325,13 +2350,13 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, t }) {
         <button type="submit"><Shuffle size={16} />{t.randomize}</button>
       </form>
       {activeFilters.length > 0 && <div className="hintBox smallHint"><span>{t.searchResults}: {activeFilters.join(' / ')}</span></div>}
-      <MediaGrid items={items} t={t} />
+      <MediaGrid items={items} mediaZoom={mediaZoom} t={t} />
       <div className="infiniteSentinel" ref={sentinelRef}>{loadingMore ? t.loadingMore : hasMore ? t.scrollForMore : t.noMoreMedia}</div>
     </section>
   );
 }
 
-function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loadSimilarity, start, performSearch, setQuery, setSource, t }) {
+function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loadSimilarity, start, performSearch, setQuery, setSource, mediaZoom, setMediaZoom, t }) {
   const [mediaQuery, setMediaQuery] = useState('');
   const [mediaType, setMediaType] = useState('all');
   const quick = [
@@ -2352,7 +2377,7 @@ function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loa
   return (
     <>
       <section className="panel">
-        <div className="panelHead"><h2>{t.virtualLibrary}</h2><button className="panelButton" onClick={() => start('index-metadata')}><Database size={16} />{t.rebuildIndex}</button><span>{mediaResults.total || 0}</span></div>
+        <div className="panelHead"><h2>{t.virtualLibrary}</h2><div className="panelActions"><MediaZoomControl value={mediaZoom} setValue={setMediaZoom} t={t} /><button className="panelButton" onClick={() => start('index-metadata')}><Database size={16} />{t.rebuildIndex}</button></div><span>{mediaResults.total || 0}</span></div>
         {Number(mediaResults.total || 0) === 0 && <div className="hintBox"><span>{t.noIndexHint}</span></div>}
         <form className="mediaSearchBar" onSubmit={runMediaSearch}>
           <select value={mediaType} onChange={event => { setMediaType(event.target.value); loadMedia({ q: mediaQuery, media_type: event.target.value }); }}>
@@ -2363,7 +2388,7 @@ function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loa
           <input value={mediaQuery} onChange={event => setMediaQuery(event.target.value)} placeholder={t.mediaSearch} />
           <button type="submit"><Search size={16} />{t.searchResults}</button>
         </form>
-        <MediaGrid items={mediaResults.items || []} loadMedia={loadMedia} t={t} />
+        <MediaGrid items={mediaResults.items || []} loadMedia={loadMedia} mediaZoom={mediaZoom} t={t} />
       </section>
       <SimilarityPanel groups={similarityResults.groups || []} start={start} refresh={loadSimilarity} t={t} />
       <section className="panel">
@@ -2401,7 +2426,7 @@ function SimilarityCard({ group }) {
   );
 }
 
-function MediaGrid({ items, t }) {
+function MediaGrid({ items, mediaZoom, t }) {
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
   async function open(item) {
@@ -2418,7 +2443,7 @@ function MediaGrid({ items, t }) {
   if (!items?.length) return <Empty label={t.noRows} />;
   return (
     <>
-      <div className="mediaGrid">
+      <div className="mediaGrid" style={{ '--media-card-width': `${Number(mediaZoom || 280)}px` }}>
         {items.map(item => (
           <button className="mediaCard" key={item.id} onClick={() => open(item)}>
             <MediaThumbImage item={item} />
