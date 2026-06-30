@@ -60,6 +60,8 @@ make save-amd64
 make save-vision-amd64
 ```
 
+When creating a small hotfix context from macOS, prefix manual `tar` commands with `COPYFILE_DISABLE=1` to avoid Apple extended-attribute headers in the NAS extraction log.
+
 NAS compose is designed to live at:
 
 ```text
