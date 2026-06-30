@@ -2,14 +2,19 @@
 
 Status: waiting for the current NAS full-library job to finish.
 
+Recent fixes already shipped locally:
+
+- v1.0.14: media library pagination, thumbnail cache revision `media_thumbs_v8`, first-screen thumbnail priority loading, author/face collection zoom consistency, job detail overflow guard.
+- v1.0.15: proactive infinite loading for media library and random waterfall, so pages keep loading when the user gets near the bottom.
+
 Do not restart or update the NAS container while the long-running index job is active. Use this file as the unified queue for fixes and optimizations to apply after the run completes.
 
 ## UI Fixes
 
 - Face groups: remove the black translucent horizontal overlay from face-group thumbnails. Face cards should keep the image unobstructed and move metadata into compact chips or a separate lower area.
 - Media cards: keep metadata readable without blocking the center of images or videos. Prefer small bottom chips and progressive hover/detail disclosure.
-- Job detail panel: ensure long command, current path, heartbeat, and stdout lines wrap or scroll inside the card instead of overflowing to the right.
-- Dashboard storage card: show capacity plus count, for example `视频 300 GB（1,000 部）` and `图片 80 GB（6,000 张）`.
+- Job detail panel: keep watching for new overflow cases after more NAS jobs finish; the current long command/path overflow is fixed in v1.0.14.
+- Dashboard storage card: capacity plus count is implemented, for example `视频 300 GB（1,000 部）` and `图片 80 GB（6,000 张）`.
 
 ## Thumbnail And Preview Pipeline
 
@@ -26,6 +31,7 @@ Do not restart or update the NAS container while the long-running index job is a
 - Precompute/cache the tag graph response; `/api/tags/graph` is still much slower than media and thumbnail endpoints.
 - Keep using existing extracted frames for media thumbnails and contact sheets; avoid generating thumbnails during page load.
 - Add thumbnail prewarm after frame extraction so media library and waterfall pages are fast on first open.
+- Add a generated thumbnail health manifest so `/api/media/{id}/thumbnail` can avoid reopening cached JPEGs on every request.
 - Make metadata indexing use chunked writes and heartbeat updates throughout every heavy stage.
 - Consider parallelism for safe CPU-bound indexing steps while avoiding NAS disk I/O saturation.
 - Add a Web performance panel showing API latency, thumbnail cache hits, model device, worker counts, and current job throughput.

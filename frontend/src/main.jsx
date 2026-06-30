@@ -1476,10 +1476,7 @@ function App() {
         const added = (data.items || []).filter(item => !seen.has(item.id));
         return { ...data, items: [...existing, ...added] };
       });
-      const existing = mediaResults.items || [];
-      const seen = new Set(existing.map(item => item.id));
-      const added = (data.items || []).filter(item => !seen.has(item.id));
-      return { ...data, added_count: added.length };
+      return { ...data, added_count: (data.items || []).length };
     }
     setMediaResults(data);
     return data;
@@ -1498,16 +1495,13 @@ function App() {
     });
     const data = await api(`/api/media?${search.toString()}`);
     if (params.append) {
-      const existing = randomResults.items || [];
-      const seen = new Set(existing.map(item => item.id));
-      const added = (data.items || []).filter(item => !seen.has(item.id));
       setRandomResults(current => {
         const currentExisting = current.items || [];
         const currentSeen = new Set(currentExisting.map(item => item.id));
         const currentAdded = (data.items || []).filter(item => !currentSeen.has(item.id));
         return { ...data, items: [...currentExisting, ...currentAdded] };
       });
-      return { ...data, added_count: added.length };
+      return { ...data, added_count: (data.items || []).length };
     } else {
       setRandomResults(data);
     }

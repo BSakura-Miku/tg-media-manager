@@ -2751,6 +2751,8 @@ button:active {
   display: block;
   overflow: hidden;
   padding: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: 320px 420px;
 }
 
 .mediaCard .mediaThumb,
