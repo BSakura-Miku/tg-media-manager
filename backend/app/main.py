@@ -216,7 +216,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.0.18").lstrip("v") or "1.0.18"
+    app_version = os.environ.get("APP_SEMVER", "1.0.19").lstrip("v") or "1.0.19"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {

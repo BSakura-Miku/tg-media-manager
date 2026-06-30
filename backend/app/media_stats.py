@@ -192,8 +192,15 @@ def summary() -> dict:
     library = output_root()
     manifests = library / "_MANIFESTS"
     state = read_json(manifests / "library_state.json")
-    rollup = applied_rollup(library)
-    top = state.get("top") or (rollup["top"] if rollup else {
+    rollup_cache: dict | None = None
+
+    def rollup() -> dict | None:
+        nonlocal rollup_cache
+        if rollup_cache is None:
+            rollup_cache = applied_rollup(library) or {}
+        return rollup_cache or None
+
+    top = state.get("top") or ((rollup() or {}).get("top") or {
         "actors": 0,
         "keywords": 0,
         "unknown": 0,
@@ -219,11 +226,11 @@ def summary() -> dict:
         "source_leftovers": state.get("source_leftovers") or source_leftovers,
         "media_types": state.get("media_types") or indexed_media_counts(),
         "media_storage": media_storage,
-        "keywords": state.get("keywords") or (rollup["keywords"] if rollup else immediate_counts(library / "_REVIEW" / "Keywords")),
-        "actors_sample": state.get("actors_sample") or (rollup["actors_sample"] if rollup else immediate_counts(library / "Actors")[:80]),
+        "keywords": state.get("keywords") or ((rollup() or {}).get("keywords") or immediate_counts(library / "_REVIEW" / "Keywords")),
+        "actors_sample": state.get("actors_sample") or ((rollup() or {}).get("actors_sample") or immediate_counts(library / "Actors")[:80]),
         "library_state": state,
         "summary_json": read_json(manifests / "summary.json"),
-        "applied": {"rows": rollup["rows"], "status": rollup["status"]} if rollup else applied_status(root),
+        "applied": state.get("applied") or ({"rows": rollup()["rows"], "status": rollup()["status"]} if rollup() else applied_status(root)),
         "vision": {
             "cached_media": len([p for p in (manifests / "vision_cache").iterdir() if p.is_dir()]) if (manifests / "vision_cache").exists() else 0,
             "frame_index_rows": csv_count(manifests / "frame_index.csv"),
