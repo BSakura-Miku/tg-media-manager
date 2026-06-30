@@ -216,7 +216,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.0.13").lstrip("v") or "1.0.13"
+    app_version = os.environ.get("APP_SEMVER", "1.0.14").lstrip("v") or "1.0.14"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -420,7 +420,7 @@ def ffmpeg_hw_prefix() -> list[str]:
 
 
 THUMB_SIZE = (900, 900)
-MEDIA_THUMB_CACHE = "media_thumbs_v7"
+MEDIA_THUMB_CACHE = "media_thumbs_v8"
 THUMB_CACHE_HEADERS = {"Cache-Control": "public, max-age=2592000, immutable"}
 _FRAME_INDEX_CACHE: dict[str, object] = {"mtime": -1.0, "rows": {}}
 _FRAME_INDEX_LOCK = threading.Lock()

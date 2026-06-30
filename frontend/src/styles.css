@@ -912,7 +912,12 @@ button:disabled { opacity: .55; cursor: wait; }
   padding: 8px 10px;
   overflow: hidden;
 }
-.logBlock .row span { white-space: nowrap; }
+.logBlock .row span {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .logBlock .row strong {
   min-width: 0;
   max-width: 100%;
@@ -921,6 +926,7 @@ button:disabled { opacity: .55; cursor: wait; }
   word-break: break-word;
   line-height: 1.35;
   text-align: left;
+  contain: inline-size;
 }
 .logBlock {
   overflow-x: hidden;
@@ -942,6 +948,7 @@ button:disabled { opacity: .55; cursor: wait; }
   border-radius: 6px;
   font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 .nextActions {
@@ -2364,12 +2371,13 @@ button:active {
   column-width: var(--media-card-width, 280px);
   column-count: auto;
   column-gap: 18px;
+  min-height: 180px;
 }
 
 .mediaZoomControl {
   min-height: 40px;
   display: inline-grid;
-  grid-template-columns: auto minmax(140px, 220px) auto;
+  grid-template-columns: auto minmax(96px, 220px) auto;
   align-items: center;
   gap: 8px;
   padding: 0 10px;
@@ -2380,11 +2388,12 @@ button:active {
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
+  max-width: min(100%, 360px);
 }
 
 .mediaZoomControl input {
   width: 100%;
-  min-width: 120px;
+  min-width: 96px;
   height: 28px;
   padding: 0;
   border: 0;
@@ -2438,6 +2447,7 @@ button:active {
   object-position: center;
   transform: none;
   transition: transform .7s var(--ease-out), filter .7s var(--ease-out);
+  content-visibility: auto;
 }
 
 .thumbFallback {

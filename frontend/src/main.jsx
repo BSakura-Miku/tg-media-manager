@@ -40,6 +40,8 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
+const THUMBNAIL_REVISION = 'v8';
+
 const i18n = {
   en: {
     locale: 'en',
@@ -1212,19 +1214,21 @@ function initialAspect(item) {
   return item?.media_type === 'video' ? 16 / 9 : 4 / 5;
 }
 
-function MediaThumbImage({ item, className = 'mediaThumb', label = '' }) {
+function MediaThumbImage({ item, className = 'mediaThumb', label = '', priority = false }) {
   const [aspect, setAspect] = useState(initialAspect(item));
   const [failed, setFailed] = useState(false);
   const badge = label || (item.media_type === 'video' ? 'VID' : 'IMG');
   const revision = encodeURIComponent(item.updated_at || item.hash8 || item.mtime || '');
+  const thumbRevision = `${revision}-${THUMBNAIL_REVISION}`;
   return (
     <div className={className} style={{ '--thumb-ratio': String(aspect) }}>
       {!failed ? (
         <img
-          src={`/api/media/${item.id}/thumbnail?v=${revision}`}
+          src={`/api/media/${item.id}/thumbnail?v=${thumbRevision}`}
           alt={item.filename}
-          loading="lazy"
+          loading={priority ? 'eager' : 'lazy'}
           decoding="async"
+          fetchPriority={priority ? 'high' : 'auto'}
           onLoad={event => {
             const img = event.currentTarget;
             if (img.naturalWidth && img.naturalHeight) {
@@ -1465,6 +1469,18 @@ function App() {
       offset: String(params.offset || 0),
     });
     const data = await api(`/api/media?${search.toString()}`);
+    if (params.append) {
+      setMediaResults(current => {
+        const existing = current.items || [];
+        const seen = new Set(existing.map(item => item.id));
+        const added = (data.items || []).filter(item => !seen.has(item.id));
+        return { ...data, items: [...existing, ...added] };
+      });
+      const existing = mediaResults.items || [];
+      const seen = new Set(existing.map(item => item.id));
+      const added = (data.items || []).filter(item => !seen.has(item.id));
+      return { ...data, added_count: added.length };
+    }
     setMediaResults(data);
     return data;
   }
@@ -1754,8 +1770,8 @@ function App() {
         {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} loadMedia={loadMedia} setActive={setActive} t={t} />}
         {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
         {active === 'models' && <ModelsPanel catalog={models} drafts={modelDrafts} setDrafts={setModelDrafts} manifestDraft={manifestDraft} setManifestDraft={setManifestDraft} saveModelSource={saveModelSource} saveManifestSource={saveManifestSource} pullModel={pullModel} deleteModel={deleteModel} start={start} busy={busy || hasRunning} t={t} />}
-        {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} t={t} />}
-        {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} t={t} />}
+        {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} mediaZoom={mediaZoom} t={t} />}
+        {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} mediaZoom={mediaZoom} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
         {active === 'settings' && <SettingsPanel settings={settings} setSettings={setSettings} saveSettings={saveSettings} browse={browse} directories={directories} browsePath={browsePath} monitor={monitor} checkMonitorNow={checkMonitorNow} t={t} />}
       </section>
@@ -2359,6 +2375,11 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, mediaZoom, setMediaZoo
 function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loadSimilarity, start, performSearch, setQuery, setSource, mediaZoom, setMediaZoom, t }) {
   const [mediaQuery, setMediaQuery] = useState('');
   const [mediaType, setMediaType] = useState('all');
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [exhausted, setExhausted] = useState(false);
+  const sentinelRef = useRef(null);
+  const items = mediaResults.items || [];
+  const hasMore = !exhausted && Number(mediaResults.total || 0) > items.length;
   const quick = [
     ['filename_words', 'JK'],
     ['face_merge_suggestions', 'FaceGroup'],
@@ -2372,15 +2393,35 @@ function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loa
   }
   function runMediaSearch(event) {
     event?.preventDefault();
-    loadMedia({ q: mediaQuery, media_type: mediaType });
+    setExhausted(false);
+    loadMedia({ q: mediaQuery, media_type: mediaType, limit: 64, offset: 0 });
   }
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const data = await loadMedia({ q: mediaQuery, media_type: mediaType, append: true, limit: 64, offset: items.length });
+      if (!data.items?.length || Number(data.added_count || 0) === 0) setExhausted(true);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node) return undefined;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) loadMore();
+    }, { rootMargin: '900px 0px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [items.length, hasMore, loadingMore, mediaQuery, mediaType]);
   return (
     <>
       <section className="panel">
         <div className="panelHead"><h2>{t.virtualLibrary}</h2><div className="panelActions"><MediaZoomControl value={mediaZoom} setValue={setMediaZoom} t={t} /><button className="panelButton" onClick={() => start('index-metadata')}><Database size={16} />{t.rebuildIndex}</button></div><span>{mediaResults.total || 0}</span></div>
         {Number(mediaResults.total || 0) === 0 && <div className="hintBox"><span>{t.noIndexHint}</span></div>}
         <form className="mediaSearchBar" onSubmit={runMediaSearch}>
-          <select value={mediaType} onChange={event => { setMediaType(event.target.value); loadMedia({ q: mediaQuery, media_type: event.target.value }); }}>
+          <select value={mediaType} onChange={event => { setMediaType(event.target.value); setExhausted(false); loadMedia({ q: mediaQuery, media_type: event.target.value, limit: 64, offset: 0 }); }}>
             <option value="all">{t.allMedia}</option>
             <option value="photo">{t.photosOnly}</option>
             <option value="video">{t.videosOnly}</option>
@@ -2388,7 +2429,8 @@ function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loa
           <input value={mediaQuery} onChange={event => setMediaQuery(event.target.value)} placeholder={t.mediaSearch} />
           <button type="submit"><Search size={16} />{t.searchResults}</button>
         </form>
-        <MediaGrid items={mediaResults.items || []} loadMedia={loadMedia} mediaZoom={mediaZoom} t={t} />
+        <MediaGrid items={items} loadMedia={loadMedia} mediaZoom={mediaZoom} t={t} />
+        <div className="infiniteSentinel" ref={sentinelRef}>{loadingMore ? t.loadingMore : hasMore ? t.scrollForMore : t.noMoreMedia}</div>
       </section>
       <SimilarityPanel groups={similarityResults.groups || []} start={start} refresh={loadSimilarity} t={t} />
       <section className="panel">
@@ -2417,7 +2459,7 @@ function SimilarityCard({ group }) {
       <div className="similarityItems">
         {(group.items || []).slice(0, 4).map(item => (
           <div className="similarityItem" key={item.id}>
-            <img src={`/api/media/${item.id}/thumbnail`} alt={item.filename} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} />
+            <img src={`/api/media/${item.id}/thumbnail?v=${THUMBNAIL_REVISION}`} alt={item.filename} loading="lazy" decoding="async" onError={event => { event.currentTarget.style.display = 'none'; }} />
             <div><strong>{item.role}</strong><span>{item.filename}</span></div>
           </div>
         ))}
@@ -2444,9 +2486,9 @@ function MediaGrid({ items, mediaZoom, t }) {
   return (
     <>
       <div className="mediaGrid" style={{ '--media-card-width': `${Number(mediaZoom || 280)}px` }}>
-        {items.map(item => (
+        {items.map((item, index) => (
           <button className="mediaCard" key={item.id} onClick={() => open(item)}>
-            <MediaThumbImage item={item} />
+            <MediaThumbImage item={item} priority={index < 8} />
             <div className="mediaMeta">
               <strong>{item.author || item.person || item.filename}</strong>
               <p>{item.filename}</p>
@@ -2614,7 +2656,7 @@ function MediaViewer({ item, detail, reload, close, t }) {
         <div className="viewerBody">
           <div className="viewerMedia">
             {data.media_type === 'video' ? (
-              <video src={`/api/media/${data.id}/file`} controls poster={`/api/media/${data.id}/thumbnail`}>
+              <video src={`/api/media/${data.id}/file`} controls poster={`/api/media/${data.id}/thumbnail?v=${THUMBNAIL_REVISION}`}>
                 {hasPlayableSubtitles && <track kind="subtitles" srcLang={data.transcript?.language || 'und'} label={t.originalSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=original`} default />}
                 {hasPlayableSubtitles && <track kind="subtitles" srcLang="zh" label={t.bilingualSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=bilingual`} />}
               </video>
@@ -2704,7 +2746,7 @@ function formatSeconds(value) {
   return `${minutes}:${String(remain).padStart(2, '0')}`;
 }
 
-function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, t }) {
+function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, mediaZoom, t }) {
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState('files');
   const [scope, setScope] = useState('all');
@@ -2769,7 +2811,7 @@ function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, t }) 
       ) : (
         <AuthorTable authors={filtered} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />
       )}
-      {selected && <CollectionViewer title={selected.name} subtitle={`${selected.files} ${t.media}`} items={media.items || []} close={() => setSelected(null)} t={t} />}
+      {selected && <CollectionViewer title={selected.name} subtitle={`${selected.files} ${t.media}`} items={media.items || []} mediaZoom={mediaZoom} close={() => setSelected(null)} t={t} />}
     </>
   );
 }
@@ -2824,7 +2866,7 @@ function AuthorTableRow({ author, renameAuthor, excludeAuthor, t }) {
   );
 }
 
-function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFaces, t }) {
+function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFaces, mediaZoom, t }) {
   const [selected, setSelected] = useState(null);
   const [media, setMedia] = useState({ items: [], total: 0 });
   async function openFace(face) {
@@ -2844,7 +2886,7 @@ function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFa
         <div className="panelHead"><h2>{t.faces}</h2><button className="panelButton" onClick={() => mergeNamedFaces('')}><Users size={16} />{t.mergeSameName}</button><span>{faces.length}</span></div>
         {!faces.length ? <Empty label={t.noRows} /> : <div className="faceGrid">{faces.map(face => <FaceCard face={face} key={face.face_group} openFace={openFace} nameFace={nameFace} t={t} />)}</div>}
       </section>
-      {selected && <CollectionViewer title={selected.actor_name || selected.face_group} subtitle={selected.face_group} items={media.items || []} close={() => setSelected(null)} t={t} />}
+      {selected && <CollectionViewer title={selected.actor_name || selected.face_group} subtitle={selected.face_group} items={media.items || []} mediaZoom={mediaZoom} close={() => setSelected(null)} t={t} />}
     </>
   );
 }
@@ -2886,14 +2928,14 @@ function FaceCard({ face, openFace, nameFace, t }) {
   );
 }
 
-function CollectionViewer({ title, subtitle, items, close, t }) {
+function CollectionViewer({ title, subtitle, items, mediaZoom, close, t }) {
   return (
     <ModalPortal>
     <div className="viewerBackdrop" role="dialog" aria-modal="true">
       <div className="viewerPanel collectionPanel">
         <div className="viewerHead"><div><h2>{title}</h2><p>{subtitle}</p></div><button className="iconButton" onClick={close}><XCircle size={18} /></button></div>
         <div className="collectionBody">
-          <MediaGrid items={items} t={t} />
+          <MediaGrid items={items} mediaZoom={mediaZoom} t={t} />
         </div>
       </div>
     </div>
