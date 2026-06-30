@@ -216,7 +216,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.0.17").lstrip("v") or "1.0.17"
+    app_version = os.environ.get("APP_SEMVER", "1.0.18").lstrip("v") or "1.0.18"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -426,6 +426,47 @@ _FRAME_INDEX_CACHE: dict[str, object] = {"mtime": -1.0, "rows": {}}
 _FRAME_INDEX_LOCK = threading.Lock()
 _TAG_GRAPH_CACHE: dict[str, object] = {"expires": 0.0, "key": None, "data": None}
 _TAG_GRAPH_LOCK = threading.Lock()
+
+
+def thumbnail_health_marker(thumb: Path) -> Path:
+    return thumb.with_name(f"{thumb.name}.ok")
+
+
+def thumbnail_signature(thumb: Path) -> str:
+    stat = thumb.stat()
+    return f"{stat.st_size}:{stat.st_mtime_ns}"
+
+
+def remove_thumbnail_health_marker(thumb: Path) -> None:
+    try:
+        thumbnail_health_marker(thumb).unlink()
+    except OSError:
+        pass
+
+
+def mark_thumbnail_healthy(thumb: Path) -> None:
+    try:
+        marker = thumbnail_health_marker(thumb)
+        marker.write_text(thumbnail_signature(thumb), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def cached_thumbnail_is_healthy(thumb: Path) -> bool:
+    if not thumb.exists():
+        remove_thumbnail_health_marker(thumb)
+        return False
+    marker = thumbnail_health_marker(thumb)
+    try:
+        if marker.exists() and marker.read_text(encoding="utf-8").strip() == thumbnail_signature(thumb):
+            return True
+    except OSError:
+        pass
+    if thumbnail_is_healthy(thumb):
+        mark_thumbnail_healthy(thumb)
+        return True
+    remove_thumbnail_health_marker(thumb)
+    return False
 
 
 def frame_index_rows(root: Path) -> dict[str, dict]:
@@ -1224,20 +1265,23 @@ def api_media_thumbnail(media_id: int):
     thumb_dir = root / "_MANIFESTS" / MEDIA_THUMB_CACHE
     thumb = thumb_dir / f"{media_id}.jpg"
     if thumb.exists():
-        if thumbnail_is_healthy(thumb):
+        if cached_thumbnail_is_healthy(thumb):
             return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
         try:
             thumb.unlink()
         except OSError:
             pass
+        remove_thumbnail_health_marker(thumb)
     thumb_dir.mkdir(parents=True, exist_ok=True)
     if detail.get("media_type") == "photo" and write_smart_thumbnail(path, thumb):
+        mark_thumbnail_healthy(thumb)
         return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
     frame_previews, _ = frame_preview_paths(root, str(detail.get("relative_path") or ""))
     for frame in frame_previews:
         if thumbnail_is_healthy(frame):
             return FileResponse(frame, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
     if detail.get("media_type") == "video" and run_ffmpeg_thumbnail(path, thumb, width=800, timeout=30):
+        mark_thumbnail_healthy(thumb)
         return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
     raise HTTPException(status_code=404, detail="Thumbnail not found")
 
@@ -1248,6 +1292,7 @@ def api_media_thumbnail_rebuild(media_id: int) -> dict:
     path = Path(detail["path"])
     root = Path(detail.get("root") or output_root()).resolve()
     thumb = root / "_MANIFESTS" / MEDIA_THUMB_CACHE / f"{media_id}.jpg"
+    remove_thumbnail_health_marker(thumb)
     try:
         thumb.unlink()
     except FileNotFoundError:
@@ -1262,6 +1307,7 @@ def api_media_thumbnail_rebuild(media_id: int) -> dict:
         ok = run_ffmpeg_thumbnail(path, thumb, width=900, timeout=45)
     if not ok:
         raise HTTPException(status_code=500, detail="Could not rebuild a healthy thumbnail")
+    mark_thumbnail_healthy(thumb)
     return {"ok": True, "id": media_id, "thumbnail": str(thumb.relative_to(root))}
 
 
