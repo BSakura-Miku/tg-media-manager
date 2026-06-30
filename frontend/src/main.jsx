@@ -2350,10 +2350,12 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, mediaZoom, setMediaZoo
     window.addEventListener('scroll', checkNearBottom, { passive: true });
     window.addEventListener('resize', checkNearBottom);
     window.setTimeout(checkNearBottom, 250);
+    const interval = window.setInterval(checkNearBottom, 1000);
     return () => {
       observer.disconnect();
       window.removeEventListener('scroll', checkNearBottom);
       window.removeEventListener('resize', checkNearBottom);
+      window.clearInterval(interval);
     };
   }, [items.length, hasMore, loadingMore, filters.media_type, filters.q, filters.tag, filters.author, seed]);
   return (
@@ -2425,10 +2427,12 @@ function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loa
     window.addEventListener('scroll', checkNearBottom, { passive: true });
     window.addEventListener('resize', checkNearBottom);
     window.setTimeout(checkNearBottom, 250);
+    const interval = window.setInterval(checkNearBottom, 1000);
     return () => {
       observer.disconnect();
       window.removeEventListener('scroll', checkNearBottom);
       window.removeEventListener('resize', checkNearBottom);
+      window.clearInterval(interval);
     };
   }, [items.length, hasMore, loadingMore, mediaQuery, mediaType]);
   return (
