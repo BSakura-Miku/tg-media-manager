@@ -2348,8 +2348,19 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, mediaZoom, setMediaZoo
     const observer = new IntersectionObserver(entries => {
       if (entries.some(entry => entry.isIntersecting)) loadMore();
     }, { rootMargin: '800px 0px' });
+    const checkNearBottom = () => {
+      const remaining = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+      if (remaining < 1200) loadMore();
+    };
     observer.observe(node);
-    return () => observer.disconnect();
+    window.addEventListener('scroll', checkNearBottom, { passive: true });
+    window.addEventListener('resize', checkNearBottom);
+    window.setTimeout(checkNearBottom, 250);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('scroll', checkNearBottom);
+      window.removeEventListener('resize', checkNearBottom);
+    };
   }, [items.length, hasMore, loadingMore, filters.media_type, filters.q, filters.tag, filters.author, seed]);
   return (
     <section className="panel">
@@ -2412,8 +2423,19 @@ function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loa
     const observer = new IntersectionObserver(entries => {
       if (entries.some(entry => entry.isIntersecting)) loadMore();
     }, { rootMargin: '900px 0px' });
+    const checkNearBottom = () => {
+      const remaining = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+      if (remaining < 1200) loadMore();
+    };
     observer.observe(node);
-    return () => observer.disconnect();
+    window.addEventListener('scroll', checkNearBottom, { passive: true });
+    window.addEventListener('resize', checkNearBottom);
+    window.setTimeout(checkNearBottom, 250);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('scroll', checkNearBottom);
+      window.removeEventListener('resize', checkNearBottom);
+    };
   }, [items.length, hasMore, loadingMore, mediaQuery, mediaType]);
   return (
     <>
