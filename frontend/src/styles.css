@@ -880,6 +880,13 @@ button:disabled { opacity: .55; cursor: wait; }
 .job.warning { border-color: color-mix(in srgb, #f6b44b 48%, var(--line)); background: color-mix(in srgb, #f6b44b 7%, var(--panel-2)); }
 .job.error { border-color: color-mix(in srgb, var(--bad) 48%, var(--line)); background: color-mix(in srgb, var(--bad) 7%, var(--panel-2)); }
 .job.completed { opacity: .92; }
+.job.selected {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 15%, transparent), color-mix(in srgb, var(--aqua) 8%, transparent)),
+    var(--panel-2);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 85%, white), 0 12px 26px rgba(48, 105, 210, .12);
+}
 .jobMain { min-width: 0; flex: 1; display: grid; gap: 4px; }
 .job strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text); }
 .job p { min-width: 0; margin-top: 3px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2897,6 +2904,42 @@ input[type="checkbox"] {
   overscroll-behavior: contain;
 }
 
+.logBlock .row {
+  min-width: 0;
+}
+
+.logBlock .row strong {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  text-align: right;
+}
+
+.panelActions,
+.viewerActions {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.panelActions > *,
+.viewerActions > * {
+  min-width: 0;
+}
+
+.miniButton {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.tagFeedbackCloud button {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+}
+
 .mediaMeta,
 .recentMeta {
   max-width: calc(100% - 16px);
@@ -2944,6 +2987,42 @@ input[type="checkbox"] {
   .logBlock .row span,
   .logBlock .row strong {
     text-align: left;
+  }
+}
+
+@media (max-width: 1320px) {
+  .dashboardMain,
+  .dashboardBottom,
+  .graphLayout,
+  .settingsLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .authorToolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .viewerPanel {
+    width: 100%;
+    max-height: calc(100dvh - 20px);
+  }
+
+  .viewerHead {
+    align-items: flex-start;
+  }
+
+  .viewerActions {
+    justify-content: flex-end;
+  }
+
+  .viewerMedia {
+    min-height: 200px;
+  }
+
+  .authorToolbar {
+    grid-template-columns: 1fr;
   }
 }
 

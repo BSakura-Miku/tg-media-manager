@@ -499,7 +499,7 @@ def run_job(job_id: int, command: str) -> None:
                 os.environ["TGMM_CANCEL_FILE"] = str(cancel_file(job_id))
                 result, captured = run_internal_with_progress(job_id, "model-download", lambda: pull_model(model_id), f"pulling {model_id}; third-party download may report only when finished")
                 stdout_parts.append(f"$ model-pull {model_id}\n{captured}\n{result}")
-                returncode = 0 if result.get("ok") else 1
+                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
             else:
                 dynamic_step = apply_dynamic_step_args(step, settings)
                 step_args = [*base_args, *dynamic_step]

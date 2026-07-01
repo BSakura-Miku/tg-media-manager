@@ -41,6 +41,7 @@ import {
 import './styles.css';
 
 const THUMBNAIL_REVISION = 'v8';
+const DEFAULT_MEDIA_FILTERS = { q: '', media_type: 'all', tag: '', author: '' };
 
 const i18n = {
   en: {
@@ -169,8 +170,11 @@ const i18n = {
     currentStepProgress: 'Current step',
     failedShort: 'failed',
     loadingMore: 'Loading more...',
+    loadingDetail: 'Loading details...',
+    loadFailed: 'Load failed',
     scrollForMore: 'Scroll to load more',
     noMoreMedia: 'No more media',
+    activeFilters: 'Active filters',
     command: 'Command',
     started: 'Started',
     finished: 'Finished',
@@ -382,6 +386,9 @@ const i18n = {
     mergeSameNameDone: 'Same-name FaceGroups merged',
     faceMergeHelp: 'Lower distance means more similar. Review thumbnails, then merge only obvious same-person groups.',
     jobNextStep: 'Next step',
+    runningJobGuard: 'Another job is running. Stop it or wait for it to finish before starting a new job.',
+    cancelRequested: 'Stop request sent. Waiting for the current step to exit safely.',
+    cacheDeleted: 'Cache deleted',
     faceSampleNext: 'Sample scan only creates face_index.csv. Run Cluster Balanced, then Face Report, then review Face Groups.',
     frameSampleNext: 'Frame sample only creates thumbnails. Run Face Sample or Vision Sample next.',
     visionSampleNext: 'Vision sample creates scene labels. Run Vision Plan to preview moves, then Vision Apply if it looks right.',
@@ -610,8 +617,11 @@ const i18n = {
     currentStepProgress: '当前步骤',
     failedShort: '失败',
     loadingMore: '继续加载中...',
+    loadingDetail: '正在加载详情...',
+    loadFailed: '加载失败',
     scrollForMore: '下滑继续加载',
     noMoreMedia: '已经到底了',
+    activeFilters: '当前筛选',
     command: '命令',
     started: '开始',
     finished: '结束',
@@ -823,6 +833,9 @@ const i18n = {
     mergeSameNameDone: '同名人脸组已合并',
     faceMergeHelp: '距离越小越像。先看缩略图，只有明显同一个人再合并。',
     jobNextStep: '下一步',
+    runningJobGuard: '已有任务正在运行。请先停止或等待完成后再启动新任务。',
+    cancelRequested: '已发送停止请求，正在等待当前步骤安全退出。',
+    cacheDeleted: '缓存已删除',
     faceSampleNext: '样本扫描只会生成 face_index.csv。接着点 Cluster Balanced，再点 Face Report，然后去人脸组检查。',
     frameSampleNext: '抽帧样本只生成缩略图缓存。下一步点 Face Sample 或 Vision Sample。',
     visionSampleNext: '视觉样本会生成场景标签。下一步点 Vision Plan 预览移动，再确认是否 Vision Apply。',
@@ -1293,6 +1306,7 @@ function App() {
   const [results, setResults] = useState([]);
   const [mediaResults, setMediaResults] = useState({ total: 0, items: [] });
   const [randomResults, setRandomResults] = useState({ total: 0, items: [] });
+  const [mediaFilters, setMediaFilters] = useState(DEFAULT_MEDIA_FILTERS);
   const [similarityResults, setSimilarityResults] = useState({ groups: [] });
   const [tagGraph, setTagGraph] = useState({ nodes: [], edges: [] });
   const [authors, setAuthors] = useState([]);
@@ -1307,6 +1321,10 @@ function App() {
   const [browsePath, setBrowsePath] = useState('/media');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [cancelingJobId, setCancelingJobId] = useState(null);
+  const modelDraftDirtyRef = useRef(false);
+  const manifestDraftDirtyRef = useRef(false);
   const [auth, setAuth] = useState({ enabled: false, authenticated: true, local_only: true });
   const [version, setVersion] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
@@ -1336,8 +1354,8 @@ function App() {
     setFaceSuggestions(suggestions);
     setMonitor(mon);
     setModels(modelCatalog);
-    setManifestDraft(modelCatalog?.manifest_url || '');
-    setModelDrafts(Object.fromEntries((modelCatalog?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
+    if (!manifestDraftDirtyRef.current) setManifestDraft(modelCatalog?.manifest_url || '');
+    if (!modelDraftDirtyRef.current) setModelDrafts(Object.fromEntries((modelCatalog?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
     if (ver) setVersion(ver);
     if (cfg) {
       setSettings(cfg);
@@ -1379,6 +1397,12 @@ function App() {
     return () => clearInterval(id);
   }, [auth.authenticated]);
 
+  useEffect(() => {
+    if (!auth.authenticated || active !== 'jobs' || !selectedJob?.id) return undefined;
+    const id = setInterval(() => openJob(selectedJob.id).catch(() => {}), 4000);
+    return () => clearInterval(id);
+  }, [auth.authenticated, active, selectedJob?.id]);
+
   async function login(password) {
     setError('');
     await api('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
@@ -1404,6 +1428,11 @@ function App() {
   }
 
   async function start(command) {
+    if (jobs.some(job => job.status === 'running' || job.status === 'queued')) {
+      setActive('jobs');
+      setError(t.runningJobGuard);
+      return;
+    }
     if (command.startsWith('workflow-')) {
       const ok = window.confirm(t.workflowConfirm);
       if (!ok) return;
@@ -1436,9 +1465,18 @@ function App() {
   async function cancelJob(id) {
     const ok = window.confirm(language === 'zh-CN' ? '停止当前任务？已写入的缓存会保留，下次可以继续。' : 'Stop this job? Completed cache files will be kept and can be resumed later.');
     if (!ok) return;
-    await api(`/api/jobs/${id}/cancel`, { method: 'POST' });
-    await refresh();
-    await openJob(id);
+    setCancelingJobId(id);
+    setError('');
+    try {
+      await api(`/api/jobs/${id}/cancel`, { method: 'POST' });
+      setMessage(t.cancelRequested);
+      await refresh();
+      await openJob(id);
+    } catch (exc) {
+      setError(exc.message);
+    } finally {
+      setCancelingJobId(null);
+    }
   }
 
   async function runSearch(event) {
@@ -1448,35 +1486,47 @@ function App() {
 
   async function performSearch(nextQuery, nextSource) {
     setError('');
+    setSearchLoading(true);
     try {
       const data = await api(`/api/search?q=${encodeURIComponent(nextQuery)}&source=${encodeURIComponent(nextSource)}&limit=200`);
       setResults(data.results);
       setActive('library');
     } catch (exc) {
       setError(exc.message);
+    } finally {
+      setSearchLoading(false);
     }
   }
 
   async function loadMedia(params = {}) {
+    const filters = {
+      q: params.q ?? '',
+      media_type: params.media_type ?? 'all',
+      tag: params.tag ?? '',
+      author: params.author ?? '',
+    };
     const search = new URLSearchParams({
-      q: params.q || '',
-      media_type: params.media_type || 'all',
-      tag: params.tag || '',
-      author: params.author || '',
+      q: filters.q,
+      media_type: filters.media_type,
+      tag: filters.tag,
+      author: filters.author,
       randomize: params.randomize ? 'true' : 'false',
       seed: String(params.seed || 0),
       limit: String(params.limit || 80),
       offset: String(params.offset || 0),
     });
+    if (!params.append) setMediaFilters(filters);
     const data = await api(`/api/media?${search.toString()}`);
     if (params.append) {
+      let addedCount = 0;
       setMediaResults(current => {
         const existing = current.items || [];
         const seen = new Set(existing.map(item => item.id));
         const added = (data.items || []).filter(item => !seen.has(item.id));
+        addedCount = added.length;
         return { ...data, items: [...existing, ...added] };
       });
-      return { ...data, added_count: (data.items || []).length };
+      return { ...data, added_count: addedCount };
     }
     setMediaResults(data);
     return data;
@@ -1495,17 +1545,44 @@ function App() {
     });
     const data = await api(`/api/media?${search.toString()}`);
     if (params.append) {
+      let addedCount = 0;
       setRandomResults(current => {
         const currentExisting = current.items || [];
         const currentSeen = new Set(currentExisting.map(item => item.id));
         const currentAdded = (data.items || []).filter(item => !currentSeen.has(item.id));
+        addedCount = currentAdded.length;
         return { ...data, items: [...currentExisting, ...currentAdded] };
       });
-      return { ...data, added_count: (data.items || []).length };
+      return { ...data, added_count: addedCount };
     } else {
       setRandomResults(data);
     }
     return data;
+  }
+
+  function removeMediaFromLists(mediaId) {
+    const remove = current => {
+      const items = (current.items || []).filter(item => item.id !== mediaId);
+      const delta = (current.items || []).length - items.length;
+      return { ...current, items, total: Math.max(0, Number(current.total || 0) - delta) };
+    };
+    setMediaResults(remove);
+    setRandomResults(remove);
+  }
+
+  function patchMediaInLists(media) {
+    if (!media?.id) return;
+    const patch = current => ({
+      ...current,
+      items: (current.items || []).map(item => item.id === media.id ? { ...item, ...media } : item),
+    });
+    setMediaResults(patch);
+    setRandomResults(patch);
+  }
+
+  async function openFilteredMedia(filters) {
+    await loadMedia({ ...DEFAULT_MEDIA_FILTERS, ...filters, limit: 100, offset: 0 });
+    setActive('library');
   }
 
   async function loadTagGraph(params = {}) {
@@ -1528,8 +1605,8 @@ function App() {
   async function loadModels() {
     const data = await api('/api/models');
     setModels(data);
-    setManifestDraft(data?.manifest_url || '');
-    setModelDrafts(Object.fromEntries((data?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
+    if (!manifestDraftDirtyRef.current) setManifestDraft(data?.manifest_url || '');
+    if (!modelDraftDirtyRef.current) setModelDrafts(Object.fromEntries((data?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
     return data;
   }
 
@@ -1647,6 +1724,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_id: modelId, url: draft?.url || '', sha256: draft?.sha256 || '' }),
       });
+      modelDraftDirtyRef.current = false;
       setModels(data);
       setMessage(t.modelSourceSaved);
       await loadModels();
@@ -1663,6 +1741,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url || '' }),
       });
+      manifestDraftDirtyRef.current = false;
       setModels(data);
       setManifestDraft(data?.manifest_url || '');
       setMessage(t.modelSourceSaved);
@@ -1678,7 +1757,7 @@ function App() {
     try {
       await api(`/api/models/${encodeURIComponent(modelId)}`, { method: 'DELETE' });
       await loadModels();
-      setMessage(t.modelMissing);
+      setMessage(t.cacheDeleted);
     } catch (exc) {
       setError(exc.message);
     }
@@ -1759,13 +1838,13 @@ function App() {
           </>
         )}
 
-        {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} cancelJob={cancelJob} setActive={setActive} t={t} /></section>}
-        {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
-        {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} loadMedia={loadMedia} setActive={setActive} t={t} />}
-        {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
-        {active === 'models' && <ModelsPanel catalog={models} drafts={modelDrafts} setDrafts={setModelDrafts} manifestDraft={manifestDraft} setManifestDraft={setManifestDraft} saveModelSource={saveModelSource} saveManifestSource={saveManifestSource} pullModel={pullModel} deleteModel={deleteModel} start={start} busy={busy || hasRunning} t={t} />}
-        {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} mediaZoom={mediaZoom} t={t} />}
-        {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} mediaZoom={mediaZoom} t={t} />}
+        {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} selectedJobId={selectedJob?.id} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} cancelJob={cancelJob} cancelingJobId={cancelingJobId} hasRunning={hasRunning} busy={busy} setActive={setActive} t={t} /></section>}
+        {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} mediaFilters={mediaFilters} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
+        {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} openFilteredMedia={openFilteredMedia} t={t} />}
+        {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
+        {active === 'models' && <ModelsPanel catalog={models} drafts={modelDrafts} setDrafts={setModelDrafts} manifestDraft={manifestDraft} setManifestDraft={setManifestDraft} modelDraftDirtyRef={modelDraftDirtyRef} manifestDraftDirtyRef={manifestDraftDirtyRef} saveModelSource={saveModelSource} saveManifestSource={saveManifestSource} pullModel={pullModel} deleteModel={deleteModel} start={start} busy={busy || hasRunning} t={t} />}
+        {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} t={t} />}
+        {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
         {active === 'settings' && <SettingsPanel settings={settings} setSettings={setSettings} saveSettings={saveSettings} browse={browse} directories={directories} browsePath={browsePath} monitor={monitor} checkMonitorNow={checkMonitorNow} t={t} />}
       </section>
@@ -2043,7 +2122,7 @@ function jobPercent(job) {
   return Math.max(0, Math.min(100, Math.max(value, derived)));
 }
 
-function JobsPanel({ jobs, openJob, t }) {
+function JobsPanel({ jobs, selectedJobId, openJob, t }) {
   const [filter, setFilter] = useState('all');
   const sorted = sortJobsNewest(jobs);
   const filters = ['all', 'running', 'warning', 'error', 'completed'];
@@ -2075,7 +2154,7 @@ function JobsPanel({ jobs, openJob, t }) {
         const kind = jobKind(job);
         const diagnostic = jobDiagnostic(job, t);
         return (
-          <button className={`job ${kind}`} key={job.id} onClick={() => openJob(job.id)}>
+          <button className={`job ${kind} ${selectedJobId === job.id ? 'selected' : ''}`} key={job.id} data-job-id={job.id} data-job-kind={kind} onClick={() => openJob(job.id)}>
             <div className="jobMain">
               <strong>#{job.id} {t.commandNames?.[job.command] || job.command}</strong>
               <p>{workflow ? `${workflow.label} · ${t.workflowStep} ${workflow.stepNumber}/${workflow.totalSteps} · ${t.remainingSteps} ${workflow.remaining}` : (job.stage || job.message || job.created_at)}</p>
@@ -2122,11 +2201,18 @@ function jobNextActions(command, t, start, setActive) {
   return [];
 }
 
-function LogPanel({ selectedJob, jobLog, start, cancelJob, setActive, t }) {
+function LogPanel({ selectedJob, jobLog, start, cancelJob, cancelingJobId, hasRunning, busy, setActive, t }) {
   const next = selectedJob ? jobNextStep(selectedJob.command, t) : '';
   const actions = selectedJob ? jobNextActions(selectedJob.command, t, start, setActive) : [];
   const canStop = selectedJob && ['queued', 'running'].includes(selectedJob.status);
   const canResume = selectedJob && ['cancelled', 'failed'].includes(selectedJob.status);
+  const isCanceling = selectedJob && cancelingJobId === selectedJob.id;
+  const canRetryFrames = selectedJob && ['failed', 'cancelled'].includes(selectedJob.status) && (
+    String(selectedJob.command || '').includes('extract-frames') ||
+    String(selectedJob.stage || '').includes('frame') ||
+    String(jobLog?.stdout || '').toLowerCase().includes('frame') ||
+    String(jobLog?.stderr || '').toLowerCase().includes('frame')
+  );
   const pct = selectedJob ? jobPercent(selectedJob) : 0;
   const workflow = selectedJob ? jobWorkflowInfo(selectedJob, t) : null;
   const kind = selectedJob ? jobKind(selectedJob) : '';
@@ -2139,11 +2225,11 @@ function LogPanel({ selectedJob, jobLog, start, cancelJob, setActive, t }) {
     </div>
     {diagnostic && kind !== 'running' && <div className={`hintBox compact ${kind}`}><span>{diagnostic}</span></div>}
     <div className="nextActions">
-      {canStop && <button onClick={() => cancelJob(selectedJob.id)}><Archive size={15} />{t.stopJob || 'Stop'}</button>}
-      {canResume && <button onClick={() => start(selectedJob.command)}><Play size={15} />{t.resumeJob || 'Resume'}</button>}
-      <button onClick={() => start('extract-frames-retry-failed')}><RefreshCw size={15} />{t.commandNames?.['extract-frames-retry-failed'] || 'Retry Frames'}</button>
+      {canStop && <button disabled={isCanceling} onClick={() => cancelJob(selectedJob.id)}><Archive size={15} />{isCanceling ? t.cancelRequested : (t.stopJob || 'Stop')}</button>}
+      {canResume && <button disabled={busy || hasRunning} onClick={() => start(selectedJob.command)}><Play size={15} />{t.resumeJob || 'Resume'}</button>}
+      {canRetryFrames && <button disabled={busy || hasRunning} onClick={() => start('extract-frames-retry-failed')}><RefreshCw size={15} />{t.commandNames?.['extract-frames-retry-failed'] || 'Retry Frames'}</button>}
     </div>
-    <div className="list">
+    <div className="list" data-job-detail={selectedJob.id}>
       <div className="row"><span>{t.command}</span><strong>{selectedJob.command}</strong></div>
       <div className="row"><span>status</span><strong>{jobKindLabel(kind, t)} · {selectedJob.status}</strong></div>
       <div className="row"><span>stage</span><strong>{selectedJob.stage || '-'}</strong></div>
@@ -2155,11 +2241,11 @@ function LogPanel({ selectedJob, jobLog, start, cancelJob, setActive, t }) {
       <div className="row"><span>{t.started}</span><strong>{formatDateTime(selectedJob.started_at)}</strong></div>
       <div className="row"><span>{t.finished}</span><strong>{formatDateTime(selectedJob.finished_at)}</strong></div>
     </div>
-    {next && <div className="hintBox"><strong>{t.jobNextStep}</strong><span>{next}</span>{actions.length > 0 && <div className="nextActions">{actions.map(([label, action]) => <button key={label} onClick={action}><Play size={15} />{label}</button>)}</div>}</div>}
+    {next && <div className="hintBox"><strong>{t.jobNextStep}</strong><span>{next}</span>{actions.length > 0 && <div className="nextActions">{actions.map(([label, action]) => <button key={label} disabled={busy || hasRunning} onClick={action}><Play size={15} />{label}</button>)}</div>}</div>}
     <h3>stdout</h3><pre>{jobLog?.stdout || '(empty)'}</pre><h3>stderr</h3><pre>{jobLog?.stderr || '(empty)'}</pre></div>}</div>;
 }
 
-function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
+function TagGraphPanel({ graph, loadTagGraph, openFilteredMedia, t }) {
   const [minEdge, setMinEdge] = useState(2);
   const [focusedTag, setFocusedTag] = useState('');
   const [draggingTag, setDraggingTag] = useState('');
@@ -2195,8 +2281,7 @@ function TagGraphPanel({ graph, loadTagGraph, loadMedia, setActive, t }) {
   }, [edges]);
   const focusedNeighbors = focusedTag ? (neighborMap.get(focusedTag) || []) : [];
   function openTag(tag, secondTag = '') {
-    loadMedia({ tag: secondTag ? `${tag},${secondTag}` : tag, limit: 100 });
-    setActive('library');
+    openFilteredMedia({ tag: secondTag ? `${tag},${secondTag}` : tag });
   }
   function svgPoint(event) {
     const rect = event.currentTarget.closest('svg').getBoundingClientRect();
@@ -2310,21 +2395,31 @@ function MediaZoomControl({ value, setValue, t }) {
   );
 }
 
-function RandomFlowPanel({ mediaResults, loadRandomMedia, mediaZoom, setMediaZoom, t }) {
+function RandomFlowPanel({ mediaResults, loadRandomMedia, onDeleted, onPatched, mediaZoom, setMediaZoom, t }) {
   const [filters, setFilters] = useState({ media_type: 'all', tag: '', author: '', q: '' });
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadingSearch, setLoadingSearch] = useState(false);
+  const [panelError, setPanelError] = useState('');
   const [exhausted, setExhausted] = useState(false);
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * 2147483646) + 1);
   const sentinelRef = useRef(null);
   const activeFilters = [filters.media_type !== 'all' ? filters.media_type : '', filters.q, filters.tag, filters.author].filter(Boolean);
   const items = mediaResults.items || [];
   const hasMore = !exhausted && Number(mediaResults.total || 0) > items.length;
-  function run(event) {
+  async function run(event) {
     event?.preventDefault();
     const nextSeed = Math.floor(Math.random() * 2147483646) + 1;
     setSeed(nextSeed);
     setExhausted(false);
-    loadRandomMedia({ ...filters, seed: nextSeed });
+    setPanelError('');
+    setLoadingSearch(true);
+    try {
+      await loadRandomMedia({ ...filters, seed: nextSeed });
+    } catch (exc) {
+      setPanelError(exc.message);
+    } finally {
+      setLoadingSearch(false);
+    }
   }
   async function loadMore() {
     if (loadingMore || !hasMore) return;
@@ -2332,6 +2427,8 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, mediaZoom, setMediaZoo
     try {
       const data = await loadRandomMedia({ ...filters, append: true, limit: 80, offset: items.length, seed });
       if (!data.items?.length || Number(data.added_count || 0) === 0) setExhausted(true);
+    } catch (exc) {
+      setPanelError(exc.message);
     } finally {
       setLoadingMore(false);
     }
@@ -2370,19 +2467,24 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, mediaZoom, setMediaZoo
         <input value={filters.q} onChange={event => setFilters({ ...filters, q: event.target.value })} placeholder={t.mediaSearch} />
         <input value={filters.tag} onChange={event => setFilters({ ...filters, tag: event.target.value })} placeholder={t.tags} />
         <input value={filters.author} onChange={event => setFilters({ ...filters, author: event.target.value })} placeholder={t.authorName} />
-        <button type="submit"><Shuffle size={16} />{t.randomize}</button>
+        <button type="submit" disabled={loadingSearch}><Shuffle size={16} />{loadingSearch ? t.loadingMore : t.randomize}</button>
       </form>
       {activeFilters.length > 0 && <div className="hintBox smallHint"><span>{t.searchResults}: {activeFilters.join(' / ')}</span></div>}
-      <MediaGrid items={items} mediaZoom={mediaZoom} t={t} />
+      {panelError && <div className="alert compact">{panelError}</div>}
+      <MediaGrid items={items} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} t={t} />
       <div className="infiniteSentinel" ref={sentinelRef}>{loadingMore ? t.loadingMore : hasMore ? t.scrollForMore : t.noMoreMedia}</div>
     </section>
   );
 }
 
-function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loadSimilarity, start, performSearch, setQuery, setSource, mediaZoom, setMediaZoom, t }) {
-  const [mediaQuery, setMediaQuery] = useState('');
-  const [mediaType, setMediaType] = useState('all');
+function LibraryPanel({ results, mediaResults, mediaFilters, similarityResults, loadMedia, loadSimilarity, start, performSearch, setQuery, setSource, onDeleted, onPatched, mediaZoom, setMediaZoom, t }) {
+  const [mediaQuery, setMediaQuery] = useState(mediaFilters.q || '');
+  const [mediaType, setMediaType] = useState(mediaFilters.media_type || 'all');
+  const [mediaTag, setMediaTag] = useState(mediaFilters.tag || '');
+  const [mediaAuthor, setMediaAuthor] = useState(mediaFilters.author || '');
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadingSearch, setLoadingSearch] = useState(false);
+  const [panelError, setPanelError] = useState('');
   const [exhausted, setExhausted] = useState(false);
   const sentinelRef = useRef(null);
   const items = mediaResults.items || [];
@@ -2398,17 +2500,35 @@ function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loa
     setQuery(value);
     performSearch(value, src);
   }
-  function runMediaSearch(event) {
+  useEffect(() => {
+    setMediaQuery(mediaFilters.q || '');
+    setMediaType(mediaFilters.media_type || 'all');
+    setMediaTag(mediaFilters.tag || '');
+    setMediaAuthor(mediaFilters.author || '');
+    setExhausted(false);
+  }, [mediaFilters.q, mediaFilters.media_type, mediaFilters.tag, mediaFilters.author]);
+  const activeFilters = [mediaType !== 'all' ? mediaType : '', mediaQuery, mediaTag, mediaAuthor].filter(Boolean);
+  async function runMediaSearch(event) {
     event?.preventDefault();
     setExhausted(false);
-    loadMedia({ q: mediaQuery, media_type: mediaType, limit: 64, offset: 0 });
+    setPanelError('');
+    setLoadingSearch(true);
+    try {
+      await loadMedia({ q: mediaQuery, media_type: mediaType, tag: mediaTag, author: mediaAuthor, limit: 64, offset: 0 });
+    } catch (exc) {
+      setPanelError(exc.message);
+    } finally {
+      setLoadingSearch(false);
+    }
   }
   async function loadMore() {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
     try {
-      const data = await loadMedia({ q: mediaQuery, media_type: mediaType, append: true, limit: 64, offset: items.length });
+      const data = await loadMedia({ q: mediaQuery, media_type: mediaType, tag: mediaTag, author: mediaAuthor, append: true, limit: 64, offset: items.length });
       if (!data.items?.length || Number(data.added_count || 0) === 0) setExhausted(true);
+    } catch (exc) {
+      setPanelError(exc.message);
     } finally {
       setLoadingMore(false);
     }
@@ -2434,22 +2554,26 @@ function LibraryPanel({ results, mediaResults, similarityResults, loadMedia, loa
       window.removeEventListener('resize', checkNearBottom);
       window.clearInterval(interval);
     };
-  }, [items.length, hasMore, loadingMore, mediaQuery, mediaType]);
+  }, [items.length, hasMore, loadingMore, mediaQuery, mediaType, mediaTag, mediaAuthor]);
   return (
     <>
       <section className="panel">
         <div className="panelHead"><h2>{t.virtualLibrary}</h2><div className="panelActions"><MediaZoomControl value={mediaZoom} setValue={setMediaZoom} t={t} /><button className="panelButton" onClick={() => start('index-metadata')}><Database size={16} />{t.rebuildIndex}</button></div><span>{mediaResults.total || 0}</span></div>
         {Number(mediaResults.total || 0) === 0 && <div className="hintBox"><span>{t.noIndexHint}</span></div>}
         <form className="mediaSearchBar" onSubmit={runMediaSearch}>
-          <select value={mediaType} onChange={event => { setMediaType(event.target.value); setExhausted(false); loadMedia({ q: mediaQuery, media_type: event.target.value, limit: 64, offset: 0 }); }}>
+          <select value={mediaType} onChange={event => { setMediaType(event.target.value); setExhausted(false); loadMedia({ q: mediaQuery, media_type: event.target.value, tag: mediaTag, author: mediaAuthor, limit: 64, offset: 0 }).catch(exc => setPanelError(exc.message)); }}>
             <option value="all">{t.allMedia}</option>
             <option value="photo">{t.photosOnly}</option>
             <option value="video">{t.videosOnly}</option>
           </select>
           <input value={mediaQuery} onChange={event => setMediaQuery(event.target.value)} placeholder={t.mediaSearch} />
-          <button type="submit"><Search size={16} />{t.searchResults}</button>
+          <input value={mediaTag} onChange={event => setMediaTag(event.target.value)} placeholder={t.tags} />
+          <input value={mediaAuthor} onChange={event => setMediaAuthor(event.target.value)} placeholder={t.authorName} />
+          <button type="submit" disabled={loadingSearch}><Search size={16} />{loadingSearch ? t.loadingMore : t.searchResults}</button>
         </form>
-        <MediaGrid items={items} loadMedia={loadMedia} mediaZoom={mediaZoom} t={t} />
+        {activeFilters.length > 0 && <div className="hintBox smallHint"><span>{t.activeFilters}: {activeFilters.join(' / ')}</span></div>}
+        {panelError && <div className="alert compact">{panelError}</div>}
+        <MediaGrid items={items} loadMedia={loadMedia} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} t={t} />
         <div className="infiniteSentinel" ref={sentinelRef}>{loadingMore ? t.loadingMore : hasMore ? t.scrollForMore : t.noMoreMedia}</div>
       </section>
       <SimilarityPanel groups={similarityResults.groups || []} start={start} refresh={loadSimilarity} t={t} />
@@ -2488,18 +2612,35 @@ function SimilarityCard({ group }) {
   );
 }
 
-function MediaGrid({ items, mediaZoom, t }) {
+function MediaGrid({ items, mediaZoom, onDeleted, onPatched, t }) {
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
+  const requestRef = useRef(0);
   async function open(item) {
+    const requestId = requestRef.current + 1;
+    requestRef.current = requestId;
     setSelected(item);
-    const data = await api(`/api/media/${item.id}`);
-    setDetail(data);
+    setDetail(null);
+    setDetailError('');
+    setDetailLoading(true);
+    try {
+      const data = await api(`/api/media/${item.id}`);
+      if (requestRef.current !== requestId) return;
+      setDetail(data);
+      onPatched?.(data);
+    } catch (exc) {
+      if (requestRef.current === requestId) setDetailError(exc.message);
+    } finally {
+      if (requestRef.current === requestId) setDetailLoading(false);
+    }
   }
   async function reloadSelected(mediaId) {
     const data = await api(`/api/media/${mediaId}`);
     setDetail(data);
     setSelected(data);
+    onPatched?.(data);
     return data;
   }
   if (!items?.length) return <Empty label={t.noRows} />;
@@ -2507,7 +2648,7 @@ function MediaGrid({ items, mediaZoom, t }) {
     <>
       <div className="mediaGrid" style={{ '--media-card-width': `${Number(mediaZoom || 280)}px` }}>
         {items.map((item, index) => (
-          <button className="mediaCard" key={item.id} onClick={() => open(item)}>
+          <button className="mediaCard" key={item.id} data-media-id={item.id} aria-label={`${item.media_type || 'media'} ${item.filename || item.id}`} onClick={() => open(item)}>
             <MediaThumbImage item={item} priority={index < 8} />
             <div className="mediaMeta">
               <strong>{item.author || item.person || item.filename}</strong>
@@ -2521,7 +2662,7 @@ function MediaGrid({ items, mediaZoom, t }) {
           </button>
         ))}
       </div>
-      {selected && <MediaViewer item={selected} detail={detail} reload={reloadSelected} close={() => { setSelected(null); setDetail(null); }} t={t} />}
+      {selected && <MediaViewer item={selected} detail={detail} loading={detailLoading} error={detailError} reload={reloadSelected} onDeleted={onDeleted} onPatched={onPatched} close={() => { requestRef.current += 1; setSelected(null); setDetail(null); setDetailError(''); }} t={t} />}
     </>
   );
 }
@@ -2541,7 +2682,7 @@ function ModalPortal({ children }) {
   return createPortal(children, document.body);
 }
 
-function MediaViewer({ item, detail, reload, close, t }) {
+function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatched, close, t }) {
   const data = detail || item;
   const tags = Array.isArray(data.tags) ? data.tags : String(data.tags || '').split(',').filter(Boolean).map(tag => ({ tag }));
   const timeline = Array.isArray(data.timeline) ? data.timeline : [];
@@ -2639,6 +2780,7 @@ function MediaViewer({ item, detail, reload, close, t }) {
     await runViewerAction('delete', async () => {
       await api(`/api/media/${data.id}`, { method: 'DELETE' });
       setFeedbackMessage(t.mediaDeleted);
+      onDeleted?.(data.id);
       close();
     });
   }
@@ -2666,13 +2808,15 @@ function MediaViewer({ item, detail, reload, close, t }) {
         <div className="viewerHead">
           <h2>{t.mediaDetail}</h2>
           <div className="viewerActions">
-            <button className={`iconButton ${isFavorite ? 'isFavorite' : ''}`} onClick={toggleFavorite} disabled={!!busyAction} title={isFavorite ? t.unfavorite : t.favorite}><Heart size={18} /></button>
-            <button className="iconButton" onClick={rebuildThumbnail} disabled={!!busyAction} title={t.rebuildThumbnail}><RefreshCw size={18} /></button>
-            {data.media_type === 'video' && <button className="iconButton" onClick={rebuildVideoOverview} disabled={!!busyAction} title={t.rebuildVideoOverview}><Film size={18} /></button>}
-            <button className="iconButton dangerIcon" onClick={deleteMedia} disabled={!!busyAction} title={t.deleteMedia}><Trash2 size={18} /></button>
-            <button className="iconButton" onClick={close} title={t.close}><XCircle size={18} /></button>
+            <button className={`iconButton ${isFavorite ? 'isFavorite' : ''}`} onClick={toggleFavorite} disabled={!!busyAction || loading} title={isFavorite ? t.unfavorite : t.favorite} aria-label={isFavorite ? t.unfavorite : t.favorite}><Heart size={18} /></button>
+            <button className="iconButton" onClick={rebuildThumbnail} disabled={!!busyAction || loading} title={t.rebuildThumbnail} aria-label={t.rebuildThumbnail}><RefreshCw size={18} /></button>
+            {data.media_type === 'video' && <button className="iconButton" onClick={rebuildVideoOverview} disabled={!!busyAction || loading} title={t.rebuildVideoOverview} aria-label={t.rebuildVideoOverview}><Film size={18} /></button>}
+            <button className="iconButton dangerIcon" onClick={deleteMedia} disabled={!!busyAction || loading} title={t.deleteMedia} aria-label={t.deleteMedia}><Trash2 size={18} /></button>
+            <button className="iconButton" onClick={close} title={t.close} aria-label={t.close}><XCircle size={18} /></button>
           </div>
         </div>
+        {loading && <div className="hintBox compact"><span>{t.loadingDetail}</span></div>}
+        {error && <div className="alert compact">{t.loadFailed}: {error}</div>}
         <div className="viewerBody">
           <div className="viewerMedia">
             {data.media_type === 'video' ? (
@@ -2766,18 +2910,28 @@ function formatSeconds(value) {
   return `${minutes}:${String(remain).padStart(2, '0')}`;
 }
 
-function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, mediaZoom, t }) {
+function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, onDeleted, onPatched, mediaZoom, t }) {
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState('files');
   const [scope, setScope] = useState('all');
   const [view, setView] = useState('cards');
   const [selected, setSelected] = useState(null);
   const [media, setMedia] = useState({ items: [], total: 0 });
+  const [collectionLoading, setCollectionLoading] = useState(false);
+  const [collectionError, setCollectionError] = useState('');
   async function openAuthor(author) {
     setSelected(author);
     setMedia({ items: [], total: 0 });
-    const data = await api(`/api/authors/${encodeURIComponent(author.name)}/media?limit=120`);
-    setMedia(data);
+    setCollectionError('');
+    setCollectionLoading(true);
+    try {
+      const data = await api(`/api/authors/${encodeURIComponent(author.name)}/media?limit=120`);
+      setMedia(data);
+    } catch (exc) {
+      setCollectionError(exc.message);
+    } finally {
+      setCollectionLoading(false);
+    }
   }
   const filtered = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -2829,9 +2983,9 @@ function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, media
           {filtered.map(author => <AuthorCard author={author} key={author.name} openAuthor={openAuthor} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />)}
         </section>
       ) : (
-        <AuthorTable authors={filtered} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />
+        <AuthorTable authors={filtered} openAuthor={openAuthor} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />
       )}
-      {selected && <CollectionViewer title={selected.name} subtitle={`${selected.files} ${t.media}`} items={media.items || []} mediaZoom={mediaZoom} close={() => setSelected(null)} t={t} />}
+      {selected && <CollectionViewer title={selected.name} subtitle={`${selected.files} ${t.media}`} loading={collectionLoading} error={collectionError} items={media.items || []} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} close={() => setSelected(null)} t={t} />}
     </>
   );
 }
@@ -2855,21 +3009,21 @@ function AuthorCard({ author, openAuthor, renameAuthor, excludeAuthor, t }) {
   );
 }
 
-function AuthorTable({ authors, renameAuthor, excludeAuthor, t }) {
+function AuthorTable({ authors, openAuthor, renameAuthor, excludeAuthor, t }) {
   if (!authors.length) return <section className="panel"><Empty label={t.noRows} /></section>;
   return (
     <section className="panel">
       <div className="tableWrap authorTable">
         <table>
-          <thead><tr><th>{t.thumbnail}</th><th>{t.authorName}</th><th>{t.files}</th><th>{t.photos}</th><th>{t.videos}</th><th>FaceGroups</th><th>{t.renameTo}</th><th>{t.excludeAuthor}</th></tr></thead>
-          <tbody>{authors.map(author => <AuthorTableRow author={author} key={author.name} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />)}</tbody>
+          <thead><tr><th>{t.thumbnail}</th><th>{t.authorName}</th><th>{t.files}</th><th>{t.photos}</th><th>{t.videos}</th><th>FaceGroups</th><th>{t.showMedia}</th><th>{t.renameTo}</th><th>{t.excludeAuthor}</th></tr></thead>
+          <tbody>{authors.map(author => <AuthorTableRow author={author} key={author.name} openAuthor={openAuthor} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />)}</tbody>
         </table>
       </div>
     </section>
   );
 }
 
-function AuthorTableRow({ author, renameAuthor, excludeAuthor, t }) {
+function AuthorTableRow({ author, openAuthor, renameAuthor, excludeAuthor, t }) {
   const [target, setTarget] = useState(author.name);
   useEffect(() => setTarget(author.name), [author.name]);
   return (
@@ -2880,20 +3034,31 @@ function AuthorTableRow({ author, renameAuthor, excludeAuthor, t }) {
       <td>{author.photos}</td>
       <td>{author.videos}</td>
       <td>{author.face_groups || 0}</td>
+      <td><button className="panelButton miniButton" onClick={() => openAuthor(author)}><ImageIcon size={14} />{t.showMedia}</button></td>
       <td><form className="inlineForm" onSubmit={event => { event.preventDefault(); renameAuthor(author.name, target); }}><input value={target} onChange={event => setTarget(event.target.value)} /><button type="submit" title={t.renameTo}><Save size={14} /></button></form></td>
       <td><button className="dangerButton" onClick={() => excludeAuthor(author.name)}><Archive size={14} />{t.excludeAuthor}</button></td>
     </tr>
   );
 }
 
-function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFaces, mediaZoom, t }) {
+function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFaces, onDeleted, onPatched, mediaZoom, t }) {
   const [selected, setSelected] = useState(null);
   const [media, setMedia] = useState({ items: [], total: 0 });
+  const [collectionLoading, setCollectionLoading] = useState(false);
+  const [collectionError, setCollectionError] = useState('');
   async function openFace(face) {
     setSelected(face);
     setMedia({ items: [], total: 0 });
-    const data = await api(`/api/face-groups/${encodeURIComponent(face.face_group)}/media?limit=160`);
-    setMedia(data);
+    setCollectionError('');
+    setCollectionLoading(true);
+    try {
+      const data = await api(`/api/face-groups/${encodeURIComponent(face.face_group)}/media?limit=160`);
+      setMedia(data);
+    } catch (exc) {
+      setCollectionError(exc.message);
+    } finally {
+      setCollectionLoading(false);
+    }
   }
   return (
     <>
@@ -2906,7 +3071,7 @@ function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFa
         <div className="panelHead"><h2>{t.faces}</h2><button className="panelButton" onClick={() => mergeNamedFaces('')}><Users size={16} />{t.mergeSameName}</button><span>{faces.length}</span></div>
         {!faces.length ? <Empty label={t.noRows} /> : <div className="faceGrid">{faces.map(face => <FaceCard face={face} key={face.face_group} openFace={openFace} nameFace={nameFace} t={t} />)}</div>}
       </section>
-      {selected && <CollectionViewer title={selected.actor_name || selected.face_group} subtitle={selected.face_group} items={media.items || []} mediaZoom={mediaZoom} close={() => setSelected(null)} t={t} />}
+      {selected && <CollectionViewer title={selected.actor_name || selected.face_group} subtitle={selected.face_group} loading={collectionLoading} error={collectionError} items={media.items || []} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} close={() => setSelected(null)} t={t} />}
     </>
   );
 }
@@ -2948,14 +3113,16 @@ function FaceCard({ face, openFace, nameFace, t }) {
   );
 }
 
-function CollectionViewer({ title, subtitle, items, mediaZoom, close, t }) {
+function CollectionViewer({ title, subtitle, items, loading, error, onDeleted, onPatched, mediaZoom, close, t }) {
   return (
     <ModalPortal>
     <div className="viewerBackdrop" role="dialog" aria-modal="true">
       <div className="viewerPanel collectionPanel">
         <div className="viewerHead"><div><h2>{title}</h2><p>{subtitle}</p></div><button className="iconButton" onClick={close}><XCircle size={18} /></button></div>
         <div className="collectionBody">
-          <MediaGrid items={items} mediaZoom={mediaZoom} t={t} />
+          {loading && <div className="hintBox compact"><span>{t.loadingMore}</span></div>}
+          {error && <div className="alert compact">{t.loadFailed}: {error}</div>}
+          {!loading && <MediaGrid items={items} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} t={t} />}
         </div>
       </div>
     </div>
@@ -2992,7 +3159,7 @@ function FieldLabel({ label, help }) {
   );
 }
 
-function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDraft, saveModelSource, saveManifestSource, pullModel, deleteModel, start, busy, t }) {
+function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDraft, modelDraftDirtyRef, manifestDraftDirtyRef, saveModelSource, saveManifestSource, pullModel, deleteModel, start, busy, t }) {
   const models = catalog?.models || [];
   const statusLabel = {
     ready: t.modelReady,
@@ -3001,7 +3168,12 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
   };
   const recommended = models.filter(model => model.recommended && model.status !== 'ready').length;
   function updateDraft(modelId, key, value) {
+    modelDraftDirtyRef.current = true;
     setDrafts(current => ({ ...current, [modelId]: { ...(current[modelId] || {}), [key]: value } }));
+  }
+  function updateManifestDraft(value) {
+    manifestDraftDirtyRef.current = true;
+    setManifestDraft(value);
   }
   function modelPlaceholder(model) {
     if (model.id?.includes('onnx') || model.path?.endsWith('.onnx')) return 'https://github.com/.../model.onnx';
@@ -3027,7 +3199,7 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
         </div>
       </div>
       <div className="modelManifestBox">
-        <label>{t.modelManifestUrl}<input value={manifestDraft || ''} onChange={event => setManifestDraft(event.target.value)} placeholder="https://github.com/.../tgmm-model-pack.json" /></label>
+        <label>{t.modelManifestUrl}<input value={manifestDraft || ''} onChange={event => updateManifestDraft(event.target.value)} placeholder="https://github.com/.../tgmm-model-pack.json" /></label>
         <button className="panelButton" onClick={() => saveManifestSource(manifestDraft)}><Save size={16} />{t.saveModelSource}</button>
         <small>{t.modelManifestHint}</small>
       </div>

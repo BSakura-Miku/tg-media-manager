@@ -216,7 +216,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.0.19").lstrip("v") or "1.0.19"
+    app_version = os.environ.get("APP_SEMVER", "1.0.21").lstrip("v") or "1.0.21"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -422,6 +422,7 @@ def ffmpeg_hw_prefix() -> list[str]:
 THUMB_SIZE = (900, 900)
 MEDIA_THUMB_CACHE = "media_thumbs_v8"
 THUMB_CACHE_HEADERS = {"Cache-Control": "public, max-age=2592000, immutable"}
+THUMB_HEALTH_VERSION = "health-v2"
 _FRAME_INDEX_CACHE: dict[str, object] = {"mtime": -1.0, "rows": {}}
 _FRAME_INDEX_LOCK = threading.Lock()
 _TAG_GRAPH_CACHE: dict[str, object] = {"expires": 0.0, "key": None, "data": None}
@@ -434,7 +435,7 @@ def thumbnail_health_marker(thumb: Path) -> Path:
 
 def thumbnail_signature(thumb: Path) -> str:
     stat = thumb.stat()
-    return f"{stat.st_size}:{stat.st_mtime_ns}"
+    return f"{THUMB_HEALTH_VERSION}:{stat.st_size}:{stat.st_mtime_ns}"
 
 
 def remove_thumbnail_health_marker(thumb: Path) -> None:

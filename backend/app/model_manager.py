@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -470,16 +471,52 @@ def _run_cache_command(model_id: str, spec: dict) -> dict:
     else:
         raise RuntimeError(f"Unsupported model cache command: {command}")
     _progress("model-download", 0, 1, model_id)
-    proc = subprocess.run([sys.executable, "-u", "-c", code], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=3600)
-    print(proc.stdout, end="", flush=True)
+    proc = subprocess.Popen(
+        [sys.executable, "-u", "-c", code],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        start_new_session=True,
+    )
+    stdout = ""
+    stderr = ""
+    while True:
+        try:
+            out, err = proc.communicate(timeout=0.5)
+            stdout += out or ""
+            stderr += err or ""
+            break
+        except subprocess.TimeoutExpired:
+            if not _cancelled():
+                continue
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                proc.terminate()
+            try:
+                out, err = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    proc.kill()
+                out, err = proc.communicate()
+            stdout += out or ""
+            stderr += (err or "") + "\ncancelled"
+            print(stdout, end="", flush=True)
+            print(stderr, end="", flush=True)
+            _progress("model-download", 0, 1, f"{model_id} cancelled")
+            return {"ok": False, "cancelled": True, "model": model_id, "path": str(_safe_path(str(spec["path"]))), "stdout": stdout[-4000:], "stderr": stderr[-4000:]}
+    print(stdout, end="", flush=True)
     if proc.returncode != 0:
-        print(proc.stderr, end="", flush=True)
+        print(stderr, end="", flush=True)
         raise RuntimeError(f"{model_id} download failed with exit {proc.returncode}")
     marker = _marker_path(model_id)
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps({"model": model_id, "created_at": time.time()}, ensure_ascii=False), encoding="utf-8")
     _progress("model-download", 1, 1, model_id)
-    return {"ok": True, "model": model_id, "path": str(_safe_path(str(spec["path"]))), "stdout": proc.stdout[-4000:]}
+    return {"ok": True, "model": model_id, "path": str(_safe_path(str(spec["path"]))), "stdout": stdout[-4000:]}
 
 
 def pull_model(model_id: str) -> dict:
