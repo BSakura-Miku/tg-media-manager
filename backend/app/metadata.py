@@ -871,7 +871,16 @@ def media_query(
         total = int(conn.execute(f"SELECT COUNT(*) AS c FROM media_items m {where}", params).fetchone()["c"])
         rows = conn.execute(
             f"""
-            SELECT m.*, GROUP_CONCAT(t.tag, ',') AS tags
+            SELECT
+                m.*,
+                GROUP_CONCAT(t.tag, ',') AS tags,
+                CASE WHEN EXISTS (
+                    SELECT 1
+                    FROM media_tags ft
+                    WHERE ft.media_id=m.id
+                      AND ft.tag='Favorite'
+                      AND ft.state != 'rejected'
+                ) THEN 1 ELSE 0 END AS favorite
             FROM media_items m
             LEFT JOIN media_tags t ON t.media_id=m.id AND t.state != 'rejected'
             {where}
@@ -925,6 +934,7 @@ def media_detail(media_id: int) -> dict | None:
     if data.get("display_original_name"):
         data["original_name"] = data["display_original_name"]
     data["tags"] = [dict(item) for item in tags]
+    data["favorite"] = 1 if any(item["tag"] == "Favorite" and item["state"] != "rejected" for item in tags) else 0
     data["timeline"] = [dict(item) for item in timeline]
     data["operations"] = [dict(item) for item in ops]
     if transcript is not None:
