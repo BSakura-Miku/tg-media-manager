@@ -307,7 +307,7 @@ select, input {
   height: 100%;
   object-fit: cover;
 }
-.mediaThumb span {
+.mediaThumb .thumbKind {
   color: var(--muted);
   font-weight: 800;
   font-size: 20px;
@@ -2138,7 +2138,7 @@ i.blue { background: var(--accent); }
   transform: scale(1.04);
 }
 
-.mediaThumb span {
+.mediaThumb .thumbKind {
   position: relative;
   z-index: 1;
   align-self: end;
@@ -2481,8 +2481,8 @@ button:active {
   background: linear-gradient(180deg, transparent 45%, rgba(0, 0, 0, .54));
 }
 
-.mediaThumb span,
-.recentThumb span {
+.mediaThumb .thumbKind,
+.recentThumb .thumbKind {
   position: absolute;
   left: 12px;
   bottom: 10px;
@@ -2500,6 +2500,58 @@ button:active {
   font-weight: 760;
   line-height: 1;
   text-shadow: 0 1px 12px rgba(0, 0, 0, .7);
+}
+
+.thumbBadges {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-width: calc(100% - 76px);
+  pointer-events: none;
+}
+
+.thumbBadge {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(7, 12, 20, .68);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .22);
+  backdrop-filter: blur(12px) saturate(1.25);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .72);
+  white-space: nowrap;
+}
+
+.thumbDuration {
+  font-variant-numeric: tabular-nums;
+}
+
+.thumbFavorite {
+  width: 24px;
+  padding: 0;
+  color: #ff7aa8;
+}
+
+:root[data-theme="light"] .thumbBadge,
+:root[data-theme="light"] .mediaThumb .thumbKind,
+:root[data-theme="light"] .recentThumb .thumbKind {
+  color: #fff;
+  background: rgba(15, 23, 42, .66);
+  border-color: rgba(255, 255, 255, .28);
 }
 
 .mediaMeta {
@@ -2844,8 +2896,8 @@ button:active {
   opacity: 0 !important;
 }
 
-.mediaThumb span,
-.recentThumb span {
+.mediaThumb .thumbKind,
+.recentThumb .thumbKind {
   top: 10px;
   bottom: auto;
 }

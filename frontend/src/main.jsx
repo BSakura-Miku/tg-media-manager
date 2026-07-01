@@ -1233,6 +1233,9 @@ function MediaThumbImage({ item, className = 'mediaThumb', label = '', priority 
   const badge = label || (item.media_type === 'video' ? 'VID' : 'IMG');
   const revision = encodeURIComponent(item.updated_at || item.hash8 || item.mtime || '');
   const thumbRevision = `${revision}-${THUMBNAIL_REVISION}`;
+  const durationLabel = item.media_type === 'video' && Number(item.duration || 0) > 0 ? formatSeconds(item.duration) : '';
+  const resolutionLabel = mediaResolutionLabel(item);
+  const isFavorite = Boolean(Number(item.favorite || 0));
   return (
     <div className={className} style={{ '--thumb-ratio': String(aspect) }}>
       {!failed ? (
@@ -1251,7 +1254,14 @@ function MediaThumbImage({ item, className = 'mediaThumb', label = '', priority 
           onError={() => setFailed(true)}
         />
       ) : <div className="thumbFallback">{badge}</div>}
-      <span>{badge}</span>
+      <span className="thumbKind">{badge}</span>
+      {(durationLabel || resolutionLabel || isFavorite) && (
+        <div className="thumbBadges" aria-hidden="true">
+          {resolutionLabel && <span className="thumbBadge thumbResolution">{resolutionLabel}</span>}
+          {durationLabel && <span className="thumbBadge thumbDuration">{durationLabel}</span>}
+          {isFavorite && <span className="thumbBadge thumbFavorite"><Heart size={13} fill="currentColor" /></span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -2908,6 +2918,24 @@ function formatSeconds(value) {
   const minutes = Math.floor(seconds / 60);
   const remain = seconds % 60;
   return `${minutes}:${String(remain).padStart(2, '0')}`;
+}
+
+function mediaResolutionLabel(item) {
+  const raw = String(item?.resolution || item?.quality || '').trim();
+  if (!raw || raw.toLowerCase() === 'na' || raw.toLowerCase() === 'resna') return '';
+  const normalized = raw.replace(/[×X]/g, 'x');
+  const match = normalized.match(/(\d{3,5})x(\d{3,5})/);
+  if (match) {
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (width >= 3800 || height >= 2100) return '4K';
+    if (height >= 1400) return `${Math.round(height / 10) * 10}p`;
+    return `${height}p`;
+  }
+  if (/4k/i.test(raw)) return '4K';
+  const pMatch = raw.match(/\b(2160|1440|1080|720|480)p\b/i);
+  if (pMatch) return `${pMatch[1]}p`;
+  return raw.length > 12 ? `${raw.slice(0, 11)}…` : raw;
 }
 
 function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, onDeleted, onPatched, mediaZoom, t }) {
