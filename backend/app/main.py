@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import hashlib
 import hmac
+import json
 import subprocess
 import threading
 import time
@@ -28,12 +29,15 @@ from .metadata import (
     media_query,
     mime_for,
     rebuild_metadata_index,
+    rebuild_semantic_index,
     rebuild_similarity_index,
     risk_queue,
+    semantic_media_search,
     set_tag_feedback,
     set_manual_author,
     set_media_favorite,
     soft_delete_media,
+    similar_media,
     similarity_groups,
     subtitle_for_media,
     tag_graph,
@@ -105,6 +109,11 @@ class ManualTagRequest(BaseModel):
 
 class ManualAuthorRequest(BaseModel):
     author: str = ""
+
+
+class SavedSearchRequest(BaseModel):
+    name: str
+    filters: dict = {}
 
 
 class SettingsRequest(BaseModel):
@@ -218,7 +227,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.1.2").lstrip("v") or "1.1.2"
+    app_version = os.environ.get("APP_SEMVER", "1.1.4").lstrip("v") or "1.1.4"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -1122,7 +1131,14 @@ def api_media(
     type_filter: str = Query("", alias="type"),
     tag: str = Query("", max_length=120),
     author: str = Query("", max_length=120),
+    face_group: str = Query("", max_length=120),
+    favorite: str = Query("", max_length=16),
+    has_subtitles: str = Query("", max_length=16),
+    min_duration: float | None = Query(None, ge=0),
+    max_duration: float | None = Query(None, ge=0),
+    resolution: str = Query("", max_length=40),
     include_risk: bool = Query(False),
+    semantic: bool = Query(False),
     randomize: bool = Query(False),
     seed: int = Query(0, ge=0),
     limit: int = Query(80, ge=1, le=200),
@@ -1130,7 +1146,87 @@ def api_media(
 ) -> dict:
     if media_type == "all" and type_filter in {"photo", "video"}:
         media_type = type_filter
-    return media_query(q=q.strip(), media_type=media_type, tag=tag.strip(), author=author.strip(), limit=limit, offset=offset, include_risk=include_risk, randomize=randomize, random_seed=seed)
+    if semantic and q.strip() and not include_risk and not randomize:
+        return semantic_media_search(
+            q=q.strip(),
+            media_type=media_type,
+            tag=tag.strip(),
+            author=author.strip(),
+            face_group=face_group.strip(),
+            favorite=favorite.strip().lower(),
+            has_subtitles=has_subtitles.strip().lower(),
+            min_duration=min_duration,
+            max_duration=max_duration,
+            resolution=resolution.strip(),
+            limit=limit,
+        )
+    return media_query(
+        q=q.strip(),
+        media_type=media_type,
+        tag=tag.strip(),
+        author=author.strip(),
+        face_group=face_group.strip(),
+        favorite=favorite.strip().lower(),
+        has_subtitles=has_subtitles.strip().lower(),
+        min_duration=min_duration,
+        max_duration=max_duration,
+        resolution=resolution.strip(),
+        limit=limit,
+        offset=offset,
+        include_risk=include_risk,
+        randomize=randomize,
+        random_seed=seed,
+    )
+
+
+@app.get("/api/saved-searches")
+def api_saved_searches() -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, filters_json, created_at, updated_at
+            FROM saved_searches
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 100
+            """
+        ).fetchall()
+    searches = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["filters"] = json.loads(item.pop("filters_json") or "{}")
+        except json.JSONDecodeError:
+            item["filters"] = {}
+        searches.append(item)
+    return searches
+
+
+@app.post("/api/saved-searches")
+def api_save_search(req: SavedSearchRequest) -> dict:
+    name = req.name.strip()[:80]
+    if not name:
+        raise HTTPException(status_code=400, detail="Saved search needs a name")
+    allowed = {"q", "media_type", "tag", "author", "face_group", "favorite", "has_subtitles", "min_duration", "max_duration", "resolution", "semantic"}
+    filters = {key: value for key, value in (req.filters or {}).items() if key in allowed and value not in (None, "")}
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO saved_searches (name, filters_json, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            """,
+            (name, json.dumps(filters, ensure_ascii=False, sort_keys=True)),
+        )
+        row = conn.execute("SELECT id, name, filters_json, created_at, updated_at FROM saved_searches WHERE id=?", (cursor.lastrowid,)).fetchone()
+    item = dict(row)
+    item["filters"] = json.loads(item.pop("filters_json") or "{}")
+    return item
+
+
+@app.delete("/api/saved-searches/{search_id}")
+def api_delete_saved_search(search_id: int) -> dict:
+    with connect() as conn:
+        conn.execute("DELETE FROM saved_searches WHERE id=?", (search_id,))
+    return {"ok": True, "id": search_id}
 
 
 @app.get("/api/tags/graph")
@@ -1180,6 +1276,21 @@ def api_rebuild_similarity() -> dict:
 @app.get("/api/media/similarity-groups")
 def api_similarity_groups(limit: int = Query(100, ge=1, le=300)) -> dict:
     return similarity_groups(limit=limit)
+
+
+@app.post("/api/media/rebuild-semantic")
+def api_rebuild_semantic() -> dict:
+    return rebuild_semantic_index(output_root())
+
+
+@app.get("/api/media/semantic-search")
+def api_semantic_search(q: str = Query("", max_length=300), limit: int = Query(80, ge=1, le=200)) -> dict:
+    return semantic_media_search(q=q, limit=limit)
+
+
+@app.get("/api/media/{media_id}/similar")
+def api_similar_media(media_id: int, limit: int = Query(40, ge=1, le=120)) -> dict:
+    return similar_media(media_id=media_id, limit=limit)
 
 
 def checked_media_detail(media_id: int) -> dict:

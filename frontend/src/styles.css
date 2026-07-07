@@ -248,6 +248,79 @@ select, input {
   background: var(--panel-2);
 }
 
+.quickAdvanced {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-2) 74%, transparent);
+  padding: 10px 12px;
+}
+
+.quickAdvanced summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.compactFilters {
+  margin-top: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.inlineCheck {
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0 14px;
+  color: var(--text);
+  background: var(--panel-2);
+  font-weight: 800;
+}
+
+.inlineCheck input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.savedSearchBox {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,.035);
+}
+
+.saveSearchForm {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 8px;
+}
+
+.savedSearchList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.savedSearchChip {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+}
+
+.savedSearchChip button {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+}
+
 .compactHead {
   margin-top: 2px;
 }
@@ -1412,6 +1485,82 @@ tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); col
 .modelManifestBox small {
   grid-column: 1 / -1;
   color: var(--muted);
+}
+
+.capabilityCenter {
+  display: grid;
+  gap: 14px;
+  margin: 12px 0 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--panel-2) 78%, transparent);
+}
+
+.capabilityGroup {
+  display: grid;
+  gap: 10px;
+}
+
+.capabilityGroup h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--soft);
+}
+
+.capabilityGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.capabilityCard {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,.035);
+}
+
+.capabilityCard.ready {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--line));
+}
+
+.capabilityCard.partial {
+  border-color: color-mix(in srgb, var(--warning) 60%, var(--line));
+}
+
+.capabilityCard.missing {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+}
+
+.capabilityTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.capabilityTop span {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.capabilityCard p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.capabilityCard b {
+  color: var(--soft);
 }
 .modelPanel .panelHead p {
   margin: 6px 0 0;

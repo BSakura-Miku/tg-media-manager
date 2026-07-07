@@ -12,7 +12,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from .db import connect, get_settings
-from .metadata import backfill_media_metadata, import_vision_outputs, rebuild_metadata_index, rebuild_similarity_index, train_vision_calibrators, transcribe_videos
+from .metadata import backfill_media_metadata, import_vision_outputs, rebuild_metadata_index, rebuild_semantic_index, rebuild_similarity_index, train_vision_calibrators, transcribe_videos
 from .model_manager import pull_model
 from .thumbnail_tools import repair_thumbnail_cache
 
@@ -22,7 +22,7 @@ ALLOWED_COMMANDS = {
     "workflow-review-cleanup": [["normalize-organized"], ["classify-keywords"], ["organize-review"], ["refresh-state"], ["__metadata_index__"]],
     "workflow-face-balanced": [["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"]],
     "workflow-vision-plan": [["extract-frames"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"]],
-    "workflow-full-library": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["normalize-organized"], ["organize-review"], ["refresh-state"], ["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"], ["dedupe-organized", "--apply"], ["__similarity_index__"], ["__transcribe__"], ["__metadata_index__"], ["__metadata_backfill__"]],
+    "workflow-full-library": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["normalize-organized"], ["organize-review"], ["refresh-state"], ["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"], ["dedupe-organized", "--apply"], ["__similarity_index__"], ["__transcribe__"], ["__metadata_index__"], ["__metadata_backfill__"], ["__semantic_index__"]],
     "workflow-transcribe-sample": [["__transcribe_sample__"], ["__metadata_index__"]],
     "model-pull-openclip-vit-l": [["__model_pull__", "openclip-vit-l"]],
     "model-pull-openclip-vit-h": [["__model_pull__", "openclip-vit-h"]],
@@ -68,6 +68,7 @@ ALLOWED_COMMANDS = {
     "metadata-backfill": ["__metadata_backfill__"],
     "repair-thumbnails": ["__thumbnail_repair__"],
     "index-similarity": ["__similarity_index__"],
+    "index-semantic": ["__semantic_index__"],
     "transcribe-sample": ["__transcribe_sample__"],
     "transcribe": ["__transcribe__"],
 }
@@ -95,6 +96,7 @@ PIPELINE_STAGES = {
     "__metadata_backfill__": "metadata-backfill",
     "__thumbnail_repair__": "thumbnail-repair",
     "__similarity_index__": "index-similarity",
+    "__semantic_index__": "index-semantic",
     "__transcribe_sample__": "transcribe",
     "__transcribe__": "transcribe",
     "__model_pull__": "model-download",
@@ -508,6 +510,15 @@ def run_job(job_id: int, command: str) -> None:
                 result = rebuild_similarity_index(Path(output_root))
                 stdout_parts.append(f"$ index-similarity\n{result}")
                 returncode = 0
+            elif step == ["__semantic_index__"]:
+                result, captured = run_internal_with_progress(
+                    job_id,
+                    "index-semantic",
+                    lambda: rebuild_semantic_index(Path(output_root), progress=metadata_progress_printer, cancel_check=lambda: is_cancel_requested(job_id)),
+                    "semantic index running",
+                )
+                stdout_parts.append(f"$ index-semantic\n{captured}\n{result}")
+                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
             elif step == ["__transcribe_sample__"]:
                 update_job_progress(job_id, stage="transcribe", message="transcribe sample running")
                 result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=5), "transcribe sample still running")

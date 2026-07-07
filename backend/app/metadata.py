@@ -3,12 +3,14 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import re
 import signal
 import shlex
 import shutil
+import struct
 import subprocess
 import time
 from collections import defaultdict
@@ -682,6 +684,17 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
             if timed_transcript_segments(segments):
                 timed_transcripts += 1
         faces = conn.execute("SELECT COUNT(*) AS count FROM media_tags WHERE category='face_group' OR tag LIKE 'FaceGroup_%'").fetchone()["count"]
+        vision_labels = conn.execute("SELECT COUNT(DISTINCT media_id) AS count FROM media_tags WHERE source IN ('vision', 'openclip', 'calibrated-vision') OR category IN ('scene_environment', 'clothing_style', 'shooting_method', 'content_type', 'vision')").fetchone()["count"]
+        embeddings = conn.execute("SELECT kind, COUNT(DISTINCT media_id) AS count FROM media_embeddings GROUP BY kind").fetchall()
+        failed_jobs = conn.execute(
+            """
+            SELECT id, command, status, message, stage, failed_count, finished_at, stderr
+            FROM jobs
+            WHERE status='failed'
+            ORDER BY id DESC
+            LIMIT 8
+            """
+        ).fetchall()
         meta_rows = conn.execute(
             """
             SELECT
@@ -703,6 +716,24 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
         thumb_health = thumbnail_health_summary(root, sample_limit=300)
     except Exception as exc:
         thumb_health = {"error": str(exc), "sample_checked": 0, "sample_healthy": 0, "sample_unhealthy": 0, "sample_missing": 0}
+    try:
+        from .model_manager import model_catalog
+
+        catalog = model_catalog()
+        missing_models = [
+            {
+                "id": model.get("id"),
+                "name": model.get("name"),
+                "category": model.get("category"),
+                "recommended": bool(model.get("recommended")),
+                "status": model.get("status"),
+            }
+            for model in catalog.get("models", [])
+            if model.get("status") != "ready"
+        ]
+    except Exception as exc:
+        missing_models = [{"id": "model_catalog", "name": "Model catalog", "category": "system", "status": "error", "error": str(exc)}]
+    embedding_counts = {str(row["kind"]): int(row["count"] or 0) for row in embeddings}
     coverage = [
         {
             "id": "dimensions",
@@ -760,6 +791,30 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
             "percent": percent(timed_transcripts or 0, videos),
             "action": "transcribe",
         },
+        {
+            "id": "vision_labels",
+            "label": "Vision labels",
+            "ready": int(vision_labels or 0),
+            "total": total,
+            "percent": percent(vision_labels or 0, total),
+            "action": "index-vision",
+        },
+        {
+            "id": "text_vectors",
+            "label": "Text vectors",
+            "ready": int(embedding_counts.get("text", 0)),
+            "total": total,
+            "percent": percent(embedding_counts.get("text", 0), total),
+            "action": "index-metadata",
+        },
+        {
+            "id": "image_vectors",
+            "label": "Image vectors",
+            "ready": int(embedding_counts.get("image", 0)),
+            "total": total,
+            "percent": percent(embedding_counts.get("image", 0), total),
+            "action": "index-vision",
+        },
     ]
     recommendations = []
     for item in coverage:
@@ -784,6 +839,21 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
             "metadata_failed": int(meta_rows["failed"] or 0),
             "timed_transcripts": int(timed_transcripts or 0),
             "subtitle_files": int(subtitle_count),
+            "vision_labels": int(vision_labels or 0),
+        },
+        "models": {
+            "missing": missing_models,
+            "missing_recommended": [item for item in missing_models if item.get("recommended")],
+        },
+        "embeddings": embedding_counts,
+        "recent_failed_jobs": [dict(row) for row in failed_jobs],
+        "privacy": {
+            "local_only": True,
+            "media_root": str(root),
+            "database_path": os.environ.get("APP_DB", "/data/tg_media_manager.sqlite3"),
+            "model_root": os.environ.get("MODEL_ROOT", "/models"),
+            "remote_models_enabled": False,
+            "model_downloads_enabled": True,
         },
         "thumbnail_health": thumb_health,
         "coverage": coverage,
@@ -1211,6 +1281,12 @@ def media_query(
     media_type: str = "all",
     tag: str = "",
     author: str = "",
+    face_group: str = "",
+    favorite: str = "",
+    has_subtitles: str = "",
+    min_duration: float | None = None,
+    max_duration: float | None = None,
+    resolution: str = "",
     limit: int = 100,
     offset: int = 0,
     include_risk: bool = False,
@@ -1232,6 +1308,26 @@ def media_query(
         for tag_term in tag_terms[:6]:
             clauses.append("EXISTS (SELECT 1 FROM media_tags t WHERE t.media_id=m.id AND t.state != 'rejected' AND t.tag LIKE ?)")
             params.append(f"%{tag_term}%")
+    if face_group:
+        clauses.append("EXISTS (SELECT 1 FROM media_tags fg WHERE fg.media_id=m.id AND fg.state != 'rejected' AND (fg.tag=? OR fg.tag LIKE ? OR fg.category='face_group' AND fg.tag LIKE ?))")
+        params.extend([face_group, f"%{face_group}%", f"%{face_group}%"])
+    if favorite in {"1", "true", "yes", "only"}:
+        clauses.append("EXISTS (SELECT 1 FROM media_tags fav WHERE fav.media_id=m.id AND fav.tag='Favorite' AND fav.state != 'rejected')")
+    elif favorite in {"0", "false", "no", "exclude"}:
+        clauses.append("NOT EXISTS (SELECT 1 FROM media_tags fav WHERE fav.media_id=m.id AND fav.tag='Favorite' AND fav.state != 'rejected')")
+    if has_subtitles in {"1", "true", "yes", "only"}:
+        clauses.append("EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=m.id AND tr.text != '')")
+    elif has_subtitles in {"0", "false", "no", "missing"}:
+        clauses.append("NOT EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=m.id AND tr.text != '')")
+    if min_duration is not None:
+        clauses.append("COALESCE(m.duration, 0) >= ?")
+        params.append(float(min_duration))
+    if max_duration is not None:
+        clauses.append("COALESCE(m.duration, 0) <= ?")
+        params.append(float(max_duration))
+    if resolution:
+        clauses.append("(m.resolution LIKE ? OR m.quality LIKE ?)")
+        params.extend([f"%{resolution}%", f"%{resolution}%"])
     if q:
         clauses.append("(m.filename LIKE ? OR m.original_name LIKE ? OR m.author LIKE ? OR m.person LIKE ? OR m.scene LIKE ? OR m.platform LIKE ? OR m.quality LIKE ? OR EXISTS (SELECT 1 FROM media_tags t WHERE t.media_id=m.id AND t.tag LIKE ?) OR EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=m.id AND tr.text LIKE ?))")
         like = f"%{q}%"
@@ -1268,6 +1364,291 @@ def media_query(
             [*params, limit, offset],
         ).fetchall()
     return {"total": total, "limit": limit, "offset": offset, "random_seed": random_seed if randomize else 0, "items": [dict(row) for row in rows]}
+
+
+TOKEN_RE = re.compile(r"[\w\u3040-\u30ff\u3400-\u9fff]+", re.UNICODE)
+
+
+def semantic_tokens(text: str) -> list[str]:
+    tokens = []
+    for token in TOKEN_RE.findall((text or "").lower()):
+        token = token.strip("_-")
+        if len(token) >= 2:
+            tokens.append(token[:48])
+    return tokens
+
+
+def hashed_text_vector(text: str, dim: int = 128) -> list[float]:
+    vector = [0.0] * dim
+    for token in semantic_tokens(text):
+        digest = hashlib.blake2b(token.encode("utf-8", errors="ignore"), digest_size=8).digest()
+        bucket = int.from_bytes(digest[:4], "little") % dim
+        sign = 1.0 if digest[4] & 1 else -1.0
+        vector[bucket] += sign
+    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+    return [value / norm for value in vector]
+
+
+def hash_bits_vector(signature: str, dim: int = 64) -> list[float]:
+    cleaned = re.sub(r"[^0-9a-fA-F]", "", signature or "")
+    if not cleaned:
+        return []
+    value = int(cleaned[:16].ljust(16, "0"), 16)
+    vector = [1.0 if (value >> bit) & 1 else -1.0 for bit in range(min(dim, 64))]
+    if len(vector) < dim:
+        vector.extend([0.0] * (dim - len(vector)))
+    norm = math.sqrt(sum(item * item for item in vector)) or 1.0
+    return [item / norm for item in vector]
+
+
+def pack_vector(vector: list[float]) -> bytes:
+    return struct.pack(f"{len(vector)}f", *vector) if vector else b""
+
+
+def unpack_vector(blob: bytes | memoryview | None, dim: int) -> list[float]:
+    if not blob or dim <= 0:
+        return []
+    raw = bytes(blob)
+    expected = dim * 4
+    if len(raw) < expected:
+        return []
+    return list(struct.unpack(f"{dim}f", raw[:expected]))
+
+
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    if not left or not right:
+        return 0.0
+    count = min(len(left), len(right))
+    return float(sum(left[i] * right[i] for i in range(count)))
+
+
+def media_semantic_text(row: dict, tags: list[str], transcript: str = "") -> str:
+    parts = [
+        row.get("filename") or "",
+        row.get("original_name") or "",
+        row.get("author") or "",
+        row.get("person") or "",
+        row.get("platform") or "",
+        row.get("series") or "",
+        row.get("scene") or "",
+        row.get("quality") or "",
+        row.get("resolution") or "",
+        " ".join(tags),
+        transcript or "",
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def visual_signature_for_media(root: Path, row: dict, conn) -> str:
+    path = Path(row.get("path") or "")
+    if row.get("media_type") == "photo" and path.exists():
+        return dhash(path)
+    if row.get("media_type") == "video":
+        frames = conn.execute(
+            """
+            SELECT representative_frame
+            FROM media_timeline_segments
+            WHERE media_id=? AND representative_frame != ''
+            ORDER BY start_seconds
+            LIMIT 3
+            """,
+            (row["id"],),
+        ).fetchall()
+        signatures = []
+        for frame in frames:
+            sig = dhash(root / frame["representative_frame"])
+            if sig:
+                signatures.append(sig)
+        if signatures:
+            return "".join(signatures)
+    return ""
+
+
+def rebuild_semantic_index(
+    root: Path | None = None,
+    progress: Callable[[str, int, int, str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    limit: int | None = None,
+) -> dict:
+    init_db()
+    root = root or output_root()
+    processed = 0
+    text_count = 0
+    visual_count = 0
+    cancelled = False
+    with connect() as conn:
+        rows = [dict(row) for row in conn.execute("SELECT * FROM media_items ORDER BY id").fetchall()]
+        if limit:
+            rows = rows[:limit]
+        total = len(rows)
+        if progress:
+            progress("index-semantic", 0, total, "semantic index")
+        for row in rows:
+            if cancel_check and cancel_check():
+                cancelled = True
+                break
+            tags = [str(item["tag"]) for item in conn.execute("SELECT tag FROM media_tags WHERE media_id=? AND state != 'rejected'", (row["id"],)).fetchall()]
+            transcript_row = conn.execute("SELECT text FROM media_transcripts WHERE media_id=?", (row["id"],)).fetchone()
+            transcript = str(transcript_row["text"] or "") if transcript_row else ""
+            text = media_semantic_text(row, tags, transcript)
+            if text.strip():
+                vector = hashed_text_vector(text)
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
+                    VALUES (?, 'text', 'local-hash-128', ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (row["id"], len(vector), pack_vector(vector), text[:4000]),
+                )
+                text_count += 1
+            if transcript.strip():
+                vector = hashed_text_vector(transcript)
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
+                    VALUES (?, 'subtitle', 'local-hash-128', ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (row["id"], len(vector), pack_vector(vector), transcript[:4000]),
+                )
+            visual_sig = visual_signature_for_media(root, row, conn)
+            visual_vector = hash_bits_vector(visual_sig)
+            if visual_vector:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
+                    VALUES (?, 'image', 'dhash-64', ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (row["id"], len(visual_vector), pack_vector(visual_vector), visual_sig[:256]),
+                )
+                visual_count += 1
+            processed += 1
+            if processed % 100 == 0:
+                conn.commit()
+                if progress:
+                    progress("index-semantic", processed, total, row.get("relative_path") or row.get("filename") or "")
+        conn.commit()
+        conn.execute(
+            "INSERT INTO media_operations (operation, detail) VALUES (?, ?)",
+            ("rebuild_semantic_index", f"text={text_count} visual={visual_count} processed={processed} root={root}"),
+        )
+    if progress:
+        progress("index-semantic", processed, total if not cancelled else max(total, processed), "semantic index cancelled" if cancelled else "semantic index complete")
+    return {"ok": not cancelled, "cancelled": cancelled, "processed": processed, "text": text_count, "visual": visual_count, "root": str(root)}
+
+
+def semantic_media_search(
+    q: str,
+    media_type: str = "all",
+    tag: str = "",
+    author: str = "",
+    face_group: str = "",
+    favorite: str = "",
+    has_subtitles: str = "",
+    min_duration: float | None = None,
+    max_duration: float | None = None,
+    resolution: str = "",
+    limit: int = 80,
+) -> dict:
+    query = q.strip()
+    if not query:
+        return media_query(limit=limit)
+    query_vector = hashed_text_vector(query)
+    rows_out = []
+    clauses = ["m.risk_state='normal'"]
+    params: list[object] = []
+    if media_type in {"photo", "video"}:
+        clauses.append("m.media_type=?")
+        params.append(media_type)
+    if author:
+        clauses.append("m.author LIKE ?")
+        params.append(f"%{author}%")
+    if tag:
+        for tag_term in [item.strip() for item in tag.replace("，", ",").split(",") if item.strip()][:6]:
+            clauses.append("EXISTS (SELECT 1 FROM media_tags tf WHERE tf.media_id=m.id AND tf.state != 'rejected' AND tf.tag LIKE ?)")
+            params.append(f"%{tag_term}%")
+    if face_group:
+        clauses.append("EXISTS (SELECT 1 FROM media_tags fg WHERE fg.media_id=m.id AND fg.state != 'rejected' AND (fg.tag=? OR fg.tag LIKE ? OR fg.category='face_group' AND fg.tag LIKE ?))")
+        params.extend([face_group, f"%{face_group}%", f"%{face_group}%"])
+    if favorite in {"1", "true", "yes", "only"}:
+        clauses.append("EXISTS (SELECT 1 FROM media_tags fav WHERE fav.media_id=m.id AND fav.tag='Favorite' AND fav.state != 'rejected')")
+    elif favorite in {"0", "false", "no", "exclude"}:
+        clauses.append("NOT EXISTS (SELECT 1 FROM media_tags fav WHERE fav.media_id=m.id AND fav.tag='Favorite' AND fav.state != 'rejected')")
+    if has_subtitles in {"1", "true", "yes", "only"}:
+        clauses.append("EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=m.id AND tr.text != '')")
+    elif has_subtitles in {"0", "false", "no", "missing"}:
+        clauses.append("NOT EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=m.id AND tr.text != '')")
+    if min_duration is not None:
+        clauses.append("COALESCE(m.duration, 0) >= ?")
+        params.append(float(min_duration))
+    if max_duration is not None:
+        clauses.append("COALESCE(m.duration, 0) <= ?")
+        params.append(float(max_duration))
+    if resolution:
+        clauses.append("(m.resolution LIKE ? OR m.quality LIKE ?)")
+        params.extend([f"%{resolution}%", f"%{resolution}%"])
+    where = f"WHERE {' AND '.join(clauses)}"
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT e.media_id, e.kind, e.model, e.dim, e.vector, m.*, GROUP_CONCAT(t.tag, ',') AS tags
+            FROM media_embeddings e
+            JOIN media_items m ON m.id=e.media_id
+            LEFT JOIN media_tags t ON t.media_id=m.id AND t.state != 'rejected'
+            {where} AND e.kind IN ('text', 'subtitle', 'tag')
+            GROUP BY e.media_id, e.kind, e.model
+            """,
+            params,
+        ).fetchall()
+        scores: dict[int, tuple[float, dict]] = {}
+        for row in rows:
+            data = dict(row)
+            vector = unpack_vector(data.pop("vector", None), int(data.get("dim") or 0))
+            score = cosine_similarity(query_vector, vector)
+            media_id = int(data["media_id"])
+            if score > scores.get(media_id, (0.0, {}))[0]:
+                scores[media_id] = (score, data)
+        for score, data in sorted(scores.values(), key=lambda item: item[0], reverse=True)[:limit]:
+            data["semantic_score"] = round(score, 6)
+            rows_out.append(data)
+    if not rows_out:
+        return media_query(q=query, media_type=media_type, tag=tag, author=author, face_group=face_group, favorite=favorite, has_subtitles=has_subtitles, min_duration=min_duration, max_duration=max_duration, resolution=resolution, limit=limit)
+    return {"total": len(rows_out), "limit": limit, "offset": 0, "semantic": True, "items": rows_out}
+
+
+def similar_media(media_id: int, limit: int = 40) -> dict:
+    with connect() as conn:
+        base = conn.execute("SELECT kind, model, dim, vector FROM media_embeddings WHERE media_id=? ORDER BY CASE kind WHEN 'image' THEN 0 WHEN 'text' THEN 1 ELSE 2 END", (media_id,)).fetchall()
+        if not base:
+            return {"items": [], "total": 0}
+        scores: dict[int, tuple[float, dict]] = {}
+        for base_row in base:
+            base_vector = unpack_vector(base_row["vector"], int(base_row["dim"] or 0))
+            if not base_vector:
+                continue
+            rows = conn.execute(
+                """
+                SELECT e.media_id, e.dim, e.vector, m.*, GROUP_CONCAT(t.tag, ',') AS tags
+                FROM media_embeddings e
+                JOIN media_items m ON m.id=e.media_id
+                LEFT JOIN media_tags t ON t.media_id=m.id AND t.state != 'rejected'
+                WHERE e.kind=? AND e.model=? AND e.media_id != ? AND m.risk_state='normal'
+                GROUP BY e.media_id, e.kind, e.model
+                """,
+                (base_row["kind"], base_row["model"], media_id),
+            ).fetchall()
+            weight = 1.0 if base_row["kind"] == "image" else 0.75
+            for row in rows:
+                data = dict(row)
+                vector = unpack_vector(data.pop("vector", None), int(data.get("dim") or 0))
+                score = cosine_similarity(base_vector, vector) * weight
+                candidate_id = int(data["media_id"])
+                if score > scores.get(candidate_id, (0.0, {}))[0]:
+                    scores[candidate_id] = (score, data)
+        items = []
+        for score, data in sorted(scores.values(), key=lambda item: item[0], reverse=True)[:limit]:
+            data["semantic_score"] = round(score, 6)
+            items.append(data)
+    return {"items": items, "total": len(items)}
 
 
 def risk_queue(limit: int = 100) -> dict:

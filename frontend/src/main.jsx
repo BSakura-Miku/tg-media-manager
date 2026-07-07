@@ -41,7 +41,19 @@ import {
 import './styles.css';
 
 const THUMBNAIL_REVISION = 'v8';
-const DEFAULT_MEDIA_FILTERS = { q: '', media_type: 'all', tag: '', author: '' };
+const DEFAULT_MEDIA_FILTERS = {
+  q: '',
+  media_type: 'all',
+  tag: '',
+  author: '',
+  face_group: '',
+  favorite: '',
+  has_subtitles: '',
+  min_duration: '',
+  max_duration: '',
+  resolution: '',
+  semantic: '',
+};
 
 const i18n = {
   en: {
@@ -346,6 +358,39 @@ const i18n = {
     quickFindTitle: 'Quick Find',
     quickFindHint: 'Search-first view for author, tag, filename, subtitle text, and visual labels. Use it when you want to find media, not maintain the library.',
     searchNow: 'Search now',
+    advancedFilters: 'Advanced filters',
+    faceGroupFilter: 'Face group',
+    favoriteAny: 'Favorite: any',
+    favoriteOnly: 'Favorites only',
+    favoriteExclude: 'Exclude favorites',
+    subtitleAny: 'Subtitles: any',
+    subtitleOnly: 'Has subtitles',
+    subtitleMissing: 'No subtitles',
+    minDurationSeconds: 'Min seconds',
+    maxDurationSeconds: 'Max seconds',
+    resolutionFilter: 'Resolution',
+    semanticMode: 'Semantic ranking',
+    savedSearch: 'Saved search',
+    savedSearchName: 'Saved search name',
+    saveSearch: 'Save search',
+    capabilityCenter: 'Capability Center',
+    coreCapabilities: 'Core / system capabilities',
+    downloadableCapabilities: 'Downloadable model capabilities',
+    capabilityReady: 'Ready',
+    capabilityPartial: 'Partial',
+    capabilityMissing: 'Missing',
+    builtIn: 'Built-in',
+    deleteable: 'Deleteable',
+    notDeleteable: 'Not deleteable',
+    purpose: 'Purpose',
+    source: 'Source',
+    localRuntimeStatus: 'Local runtime status',
+    databasePath: 'Database path',
+    modelDownloads: 'Model downloads',
+    remoteModels: 'Remote models',
+    missingModels: 'Missing models',
+    recentFailures: 'Recent failures',
+    noFailures: 'No recent failed jobs',
     diagnosticsTitle: 'Search Capability',
     diagnosticsHint: 'Index coverage, metadata completeness, thumbnail cache, transcripts, and next actions for local search.',
     thumbnailHealth: 'Thumbnail health',
@@ -811,6 +856,39 @@ const i18n = {
     quickFindTitle: '快找',
     quickFindHint: '面向检索的入口：按作者、标签、文件名、字幕文字和视觉标签找媒体。想找内容时从这里开始。',
     searchNow: '立即搜索',
+    advancedFilters: '高级筛选',
+    faceGroupFilter: '人脸组',
+    favoriteAny: '收藏：不限',
+    favoriteOnly: '只看收藏',
+    favoriteExclude: '排除收藏',
+    subtitleAny: '字幕：不限',
+    subtitleOnly: '有字幕',
+    subtitleMissing: '无字幕',
+    minDurationSeconds: '最小时长秒',
+    maxDurationSeconds: '最大时长秒',
+    resolutionFilter: '分辨率',
+    semanticMode: '语义排序',
+    savedSearch: '保存的搜索',
+    savedSearchName: '搜索条件名称',
+    saveSearch: '保存搜索',
+    capabilityCenter: '能力中心',
+    coreCapabilities: '核心 / 系统能力',
+    downloadableCapabilities: '可下载模型能力',
+    capabilityReady: '已就绪',
+    capabilityPartial: '部分就绪',
+    capabilityMissing: '缺失',
+    builtIn: '内置',
+    deleteable: '可删除',
+    notDeleteable: '不可删除',
+    purpose: '用途',
+    source: '来源',
+    localRuntimeStatus: '本地运行状态',
+    databasePath: '数据库路径',
+    modelDownloads: '模型下载',
+    remoteModels: '远程模型',
+    missingModels: '缺失模型',
+    recentFailures: '最近失败任务',
+    noFailures: '最近没有失败任务',
     diagnosticsTitle: '搜索能力诊断',
     diagnosticsHint: '检查索引覆盖率、元数据完整度、缩略图缓存、字幕转写和下一步建议。',
     thumbnailHealth: '缩略图健康度',
@@ -1019,8 +1097,8 @@ const commands = [
 ];
 
 const nav = [
-  ['dashboard', 'dashboard', Database],
   ['quickFind', 'quickFind', Search],
+  ['dashboard', 'dashboard', Database],
   ['jobs', 'jobs', Activity],
   ['library', 'library', Folder],
   ['tagGraph', 'tagGraph', Share2],
@@ -1349,7 +1427,7 @@ function ResultsTable({ rows, t }) {
 function App() {
   const [summary, setSummary] = useState(null);
   const [jobs, setJobs] = useState([]);
-  const [active, setActive] = useState('dashboard');
+  const [active, setActive] = useState('quickFind');
   const [busy, setBusy] = useState(false);
   const [selectedJob, setSelectedJob] = useState(null);
   const [jobLog, setJobLog] = useState(null);
@@ -1359,6 +1437,7 @@ function App() {
   const [mediaResults, setMediaResults] = useState({ total: 0, items: [] });
   const [randomResults, setRandomResults] = useState({ total: 0, items: [] });
   const [mediaFilters, setMediaFilters] = useState(DEFAULT_MEDIA_FILTERS);
+  const [savedSearches, setSavedSearches] = useState([]);
   const [similarityResults, setSimilarityResults] = useState({ groups: [] });
   const [tagGraph, setTagGraph] = useState({ nodes: [], edges: [] });
   const [diagnostics, setDiagnostics] = useState(null);
@@ -1389,7 +1468,7 @@ function App() {
   const t = i18n[language] || i18n['zh-CN'];
 
   async function refresh() {
-    const [s, j, a, f, suggestions, cfg, mon, modelCatalog, ver, diag] = await Promise.all([
+    const [s, j, a, f, suggestions, cfg, mon, modelCatalog, ver, diag, saved] = await Promise.all([
       api('/api/summary'),
       api('/api/jobs?limit=120'),
       api('/api/authors').catch(() => []),
@@ -1400,6 +1479,7 @@ function App() {
       api('/api/models').catch(() => ({ root: '/models', models: [] })),
       api('/api/version').catch(() => null),
       api('/api/diagnostics').catch(() => null),
+      api('/api/saved-searches').catch(() => []),
     ]);
     setSummary(s);
     setJobs(j);
@@ -1409,6 +1489,7 @@ function App() {
     setMonitor(mon);
     setModels(modelCatalog);
     if (diag) setDiagnostics(diag);
+    setSavedSearches(saved || []);
     if (!manifestDraftDirtyRef.current) setManifestDraft(modelCatalog?.manifest_url || '');
     if (!modelDraftDirtyRef.current) setModelDrafts(Object.fromEntries((modelCatalog?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
     if (ver) setVersion(ver);
@@ -1559,12 +1640,26 @@ function App() {
       media_type: params.media_type ?? 'all',
       tag: params.tag ?? '',
       author: params.author ?? '',
+      face_group: params.face_group ?? '',
+      favorite: params.favorite ?? '',
+      has_subtitles: params.has_subtitles ?? '',
+      min_duration: params.min_duration ?? '',
+      max_duration: params.max_duration ?? '',
+      resolution: params.resolution ?? '',
+      semantic: params.semantic ?? '',
     };
     const search = new URLSearchParams({
       q: filters.q,
       media_type: filters.media_type,
       tag: filters.tag,
       author: filters.author,
+      face_group: filters.face_group,
+      favorite: filters.favorite,
+      has_subtitles: filters.has_subtitles,
+      min_duration: String(filters.min_duration || ''),
+      max_duration: String(filters.max_duration || ''),
+      resolution: filters.resolution,
+      semantic: filters.semantic ? 'true' : 'false',
       randomize: params.randomize ? 'true' : 'false',
       seed: String(params.seed || 0),
       limit: String(params.limit || 80),
@@ -1593,6 +1688,12 @@ function App() {
       media_type: params.media_type || 'all',
       tag: params.tag || '',
       author: params.author || '',
+      face_group: params.face_group || '',
+      favorite: params.favorite || '',
+      has_subtitles: params.has_subtitles || '',
+      min_duration: String(params.min_duration || ''),
+      max_duration: String(params.max_duration || ''),
+      resolution: params.resolution || '',
       randomize: 'true',
       seed: String(params.seed || 0),
       limit: String(params.limit || 80),
@@ -1663,6 +1764,23 @@ function App() {
     if (!manifestDraftDirtyRef.current) setManifestDraft(data?.manifest_url || '');
     if (!modelDraftDirtyRef.current) setModelDrafts(Object.fromEntries((data?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
     return data;
+  }
+
+  async function saveSearch(name, filters) {
+    setError('');
+    const saved = await api('/api/saved-searches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, filters }),
+    });
+    setSavedSearches(current => [saved, ...current]);
+    return saved;
+  }
+
+  async function deleteSavedSearch(searchId) {
+    setError('');
+    await api(`/api/saved-searches/${searchId}`, { method: 'DELETE' });
+    setSavedSearches(current => current.filter(item => item.id !== searchId));
   }
 
   async function saveSettings(next) {
@@ -1894,7 +2012,7 @@ function App() {
         )}
 
         {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} selectedJobId={selectedJob?.id} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} cancelJob={cancelJob} cancelingJobId={cancelingJobId} hasRunning={hasRunning} busy={busy} setActive={setActive} t={t} /></section>}
-        {active === 'quickFind' && <QuickFindPanel mediaResults={mediaResults} mediaFilters={mediaFilters} loadMedia={loadMedia} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
+        {active === 'quickFind' && <QuickFindPanel mediaResults={mediaResults} mediaFilters={mediaFilters} savedSearches={savedSearches} saveSearch={saveSearch} deleteSavedSearch={deleteSavedSearch} loadMedia={loadMedia} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
         {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} mediaFilters={mediaFilters} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
         {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} openFilteredMedia={openFilteredMedia} t={t} />}
         {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
@@ -2441,15 +2559,12 @@ function TagGraphPanel({ graph, loadTagGraph, openFilteredMedia, t }) {
   );
 }
 
-function QuickFindPanel({ mediaResults, mediaFilters, loadMedia, onDeleted, onPatched, mediaZoom, setMediaZoom, t }) {
-  const [filters, setFilters] = useState({
-    q: mediaFilters?.q || '',
-    media_type: mediaFilters?.media_type || 'all',
-    tag: mediaFilters?.tag || '',
-    author: mediaFilters?.author || '',
-  });
+function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch, deleteSavedSearch, loadMedia, onDeleted, onPatched, mediaZoom, setMediaZoom, t }) {
+  const [filters, setFilters] = useState({ ...DEFAULT_MEDIA_FILTERS, ...(mediaFilters || {}) });
+  const [saveName, setSaveName] = useState('');
   const [loading, setLoading] = useState(false);
   const [panelError, setPanelError] = useState('');
+  const [saving, setSaving] = useState(false);
   async function run(event) {
     event?.preventDefault();
     setPanelError('');
@@ -2464,6 +2579,30 @@ function QuickFindPanel({ mediaResults, mediaFilters, loadMedia, onDeleted, onPa
   }
   function update(key, value) {
     setFilters(current => ({ ...current, [key]: value }));
+  }
+  function applySemanticPreset(value) {
+    const text = String(value || '').trim();
+    const next = { ...filters, q: text };
+    const durationMatch = text.match(/(\d+)\s*(?:分钟|min).*?(以上|大于|超过|\+)/);
+    if (durationMatch) next.min_duration = String(Number(durationMatch[1]) * 60);
+    if (/4k|2160/i.test(text)) next.resolution = '4K';
+    if (/1080/.test(text)) next.resolution = '1080';
+    const tagTerms = ['室内', '户外', '制服', '水手服', '露脸', '自拍', 'COS', 'JK', '黑丝', '白丝'].filter(term => text.includes(term));
+    if (tagTerms.length) next.tag = tagTerms.join(',');
+    setFilters(next);
+  }
+  async function saveCurrentSearch() {
+    const name = saveName.trim() || [filters.q, filters.tag, filters.author, filters.face_group].filter(Boolean).join(' / ') || t.savedSearch;
+    setSaving(true);
+    setPanelError('');
+    try {
+      await saveSearch(name, filters);
+      setSaveName('');
+    } catch (exc) {
+      setPanelError(exc.message);
+    } finally {
+      setSaving(false);
+    }
   }
   const shortcuts = [
     ['JK学生', 'tag'],
@@ -2481,7 +2620,7 @@ function QuickFindPanel({ mediaResults, mediaFilters, loadMedia, onDeleted, onPa
         <MediaZoomControl value={mediaZoom} setValue={setMediaZoom} t={t} />
       </div>
       <form className="quickFindForm" onSubmit={run}>
-        <input className="quickFindInput" value={filters.q} onChange={event => update('q', event.target.value)} placeholder={t.mediaSearch} autoComplete="off" />
+        <input className="quickFindInput" value={filters.q} onChange={event => applySemanticPreset(event.target.value)} placeholder={t.mediaSearch} autoComplete="off" />
         <select value={filters.media_type} onChange={event => update('media_type', event.target.value)}>
           <option value="all">{t.allMedia}</option>
           <option value="photo">{t.photosOnly}</option>
@@ -2491,8 +2630,42 @@ function QuickFindPanel({ mediaResults, mediaFilters, loadMedia, onDeleted, onPa
         <input value={filters.author} onChange={event => update('author', event.target.value)} placeholder={t.authorName} />
         <button type="submit" disabled={loading}><Search size={16} />{loading ? t.loadingMore : t.searchNow}</button>
       </form>
+      <details className="quickAdvanced">
+        <summary>{t.advancedFilters}</summary>
+        <div className="quickFindForm compactFilters">
+          <input value={filters.face_group} onChange={event => update('face_group', event.target.value)} placeholder={t.faceGroupFilter} />
+          <select value={filters.favorite} onChange={event => update('favorite', event.target.value)}>
+            <option value="">{t.favoriteAny}</option>
+            <option value="true">{t.favoriteOnly}</option>
+            <option value="false">{t.favoriteExclude}</option>
+          </select>
+          <select value={filters.has_subtitles} onChange={event => update('has_subtitles', event.target.value)}>
+            <option value="">{t.subtitleAny}</option>
+            <option value="true">{t.subtitleOnly}</option>
+            <option value="false">{t.subtitleMissing}</option>
+          </select>
+          <input type="number" min="0" value={filters.min_duration} onChange={event => update('min_duration', event.target.value)} placeholder={t.minDurationSeconds} />
+          <input type="number" min="0" value={filters.max_duration} onChange={event => update('max_duration', event.target.value)} placeholder={t.maxDurationSeconds} />
+          <input value={filters.resolution} onChange={event => update('resolution', event.target.value)} placeholder={t.resolutionFilter} />
+          <label className="inlineCheck"><input type="checkbox" checked={!!filters.semantic} onChange={event => update('semantic', event.target.checked ? 'true' : '')} />{t.semanticMode}</label>
+        </div>
+      </details>
       <div className="quickChips">
         {shortcuts.map(([value, key]) => <button key={`${key}-${value}`} onClick={() => { const next = { ...filters, [key]: value }; setFilters(next); loadMedia({ ...next, limit: 96, offset: 0 }).catch(exc => setPanelError(exc.message)); }}>{value === 'video' ? t.videosOnly : value === 'photo' ? t.photosOnly : value}</button>)}
+      </div>
+      <div className="savedSearchBox">
+        <div className="saveSearchForm">
+          <input value={saveName} onChange={event => setSaveName(event.target.value)} placeholder={t.savedSearchName} />
+          <button className="panelButton" type="button" disabled={saving} onClick={saveCurrentSearch}><Save size={16} />{t.saveSearch}</button>
+        </div>
+        {!!savedSearches?.length && <div className="savedSearchList">
+          {savedSearches.map(item => (
+            <span className="savedSearchChip" key={item.id}>
+              <button type="button" onClick={() => { const next = { ...DEFAULT_MEDIA_FILTERS, ...(item.filters || {}) }; setFilters(next); loadMedia({ ...next, limit: 96, offset: 0 }).catch(exc => setPanelError(exc.message)); }}>{item.name}</button>
+              <button type="button" title={t.deleteModel} onClick={() => deleteSavedSearch(item.id).catch(exc => setPanelError(exc.message))}><XCircle size={13} /></button>
+            </span>
+          ))}
+        </div>}
       </div>
       {panelError && <div className="alert compact">{panelError}</div>}
       <div className="panelHead compactHead"><h2>{t.searchResults}</h2><span>{prettyNumber(mediaResults.total || 0)}</span></div>
@@ -2505,6 +2678,9 @@ function DiagnosticsPanel({ diagnostics, refresh, start, busy, t }) {
   const coverage = diagnostics?.coverage || [];
   const recommendations = diagnostics?.recommendations || [];
   const thumb = diagnostics?.thumbnail_health || {};
+  const privacy = diagnostics?.privacy || {};
+  const missingModels = diagnostics?.models?.missing || [];
+  const failures = diagnostics?.recent_failed_jobs || [];
   return (
     <>
       <section className="panel diagnosticsHero">
@@ -2513,6 +2689,15 @@ function DiagnosticsPanel({ diagnostics, refresh, start, busy, t }) {
           <p>{t.diagnosticsHint}</p>
         </div>
         <button className="panelButton" onClick={refresh}><RefreshCw size={16} />{t.refreshState || t.ready}</button>
+      </section>
+      <section className="panel">
+        <div className="panelHead"><h2>{t.localRuntimeStatus}</h2><span>{privacy.local_only ? t.localOnly : 'remote'}</span></div>
+        <div className="diagnosticsGrid">
+          <article className="diagnosticCard"><div className="diagnosticTop"><strong>{t.mediaRoot}</strong><span>{privacy.media_root || diagnostics?.root || '-'}</span></div><p>{t.localOnly}</p></article>
+          <article className="diagnosticCard"><div className="diagnosticTop"><strong>{t.databasePath}</strong><span>{privacy.database_path || '-'}</span></div><p>SQLite / WAL</p></article>
+          <article className="diagnosticCard"><div className="diagnosticTop"><strong>{t.modelRoot}</strong><span>{privacy.model_root || '/models'}</span></div><p>{t.modelHint}</p></article>
+          <article className="diagnosticCard"><div className="diagnosticTop"><strong>{t.remoteModels}</strong><span>{privacy.remote_models_enabled ? 'on' : 'off'}</span></div><p>{t.privacyCopy}</p></article>
+        </div>
       </section>
       <section className="panel">
         <div className="panelHead"><h2>{t.coverage}</h2><span>{diagnostics?.generated_at || '-'}</span></div>
@@ -2547,6 +2732,28 @@ function DiagnosticsPanel({ diagnostics, refresh, start, busy, t }) {
           ))}
         </div>
         {thumb.error && <div className="hintBox error"><span>{thumb.error}</span></div>}
+      </section>
+      <section className="panel">
+        <div className="panelHead"><h2>{t.missingModels}</h2><span>{missingModels.length}</span></div>
+        {!missingModels.length ? <Empty label={t.ready} /> : <div className="diagnosticsGrid">
+          {missingModels.map(model => (
+            <article className={`diagnosticCard ${model.recommended ? 'warning' : ''}`} key={model.id}>
+              <div className="diagnosticTop"><strong>{model.name || model.id}</strong><span>{model.status}</span></div>
+              <p>{model.category}{model.recommended ? ` · ${t.downloadRecommended}` : ''}</p>
+            </article>
+          ))}
+        </div>}
+      </section>
+      <section className="panel">
+        <div className="panelHead"><h2>{t.recentFailures}</h2><span>{failures.length}</span></div>
+        {!failures.length ? <Empty label={t.noFailures} /> : <div className="recommendationList">
+          {failures.map(job => (
+            <div className="hintBox error" key={job.id}>
+              <strong>#{job.id} {t.commandNames?.[job.command] || job.command}</strong>
+              <span>{job.stage || job.message || job.stderr || '-'}</span>
+            </div>
+          ))}
+        </div>}
       </section>
       <section className="panel">
         <div className="panelHead"><h2>{t.nextActions}</h2><span>{recommendations.length}</span></div>
@@ -3357,6 +3564,45 @@ function FieldLabel({ label, help }) {
   );
 }
 
+function CapabilityCenter({ catalog, t }) {
+  const models = catalog?.models || [];
+  const byId = Object.fromEntries(models.map(model => [model.id, model]));
+  const ready = id => byId[id]?.status === 'ready';
+  const capabilityRows = [
+    { id: 'filename', group: 'core', name: t.filename_analysis, status: 'ready', source: t.builtIn, purpose: t.sourceDirsHint, deleteable: false },
+    { id: 'thumbs', group: 'core', name: t.frameCache, status: 'ready', source: t.builtIn, purpose: t.thumbnailHealthHint, deleteable: false },
+    { id: 'faces', group: 'downloadable', name: t.faces, status: ready('insightface-buffalo-l') ? 'ready' : 'missing', source: 'InsightFace / ArcFace', purpose: t.faceMergeHelp, model: byId['insightface-buffalo-l'], deleteable: true },
+    { id: 'vision', group: 'downloadable', name: t.visionPipeline, status: ready('openclip-vit-l') ? 'ready' : 'missing', source: 'OpenCLIP / CLIP', purpose: t.modelHint, model: byId['openclip-vit-l'], deleteable: true },
+    { id: 'speech', group: 'downloadable', name: t.transcriptWorkflow, status: ready('sensevoice-small-gguf') || ready('funasr-nano-onnx') || ready('faster-whisper-small') ? 'ready' : 'missing', source: 'SenseVoice / Fun-ASR / Whisper', purpose: t.transcribeWorkflowHint, deleteable: true },
+    { id: 'subtitle', group: 'downloadable', name: t.subtitles, status: ready('funasr-nano-onnx') || ready('sensevoice-small-gguf') ? 'ready' : 'missing', source: 'WebVTT generator', purpose: t.textTranscriptOnly, deleteable: false },
+    { id: 'vectors', group: 'downloadable', name: t.diagnosticsTitle, status: ready('bge-small-text') && ready('openclip-vit-l') ? 'ready' : ready('openclip-vit-l') ? 'partial' : 'missing', source: 'BGE + OpenCLIP', purpose: t.quickFindHint, model: byId['bge-small-text'], deleteable: true },
+    { id: 'vlm', group: 'downloadable', name: 'VLM', status: ready('vlm-lite') ? 'ready' : 'missing', source: 'Local VLM', purpose: t.modelHint, model: byId['vlm-lite'], deleteable: true },
+  ];
+  const label = status => ({ ready: t.capabilityReady, partial: t.capabilityPartial, missing: t.capabilityMissing }[status] || status);
+  const renderGroup = (group, title) => (
+    <div className="capabilityGroup">
+      <h3>{title}</h3>
+      <div className="capabilityGrid">
+        {capabilityRows.filter(item => item.group === group).map(item => (
+          <article className={`capabilityCard ${item.status}`} key={item.id}>
+            <div className="capabilityTop"><strong>{item.name}</strong><span>{label(item.status)}</span></div>
+            <p><b>{t.purpose}</b> {item.purpose}</p>
+            <p><b>{t.source}</b> {item.source}</p>
+            <p><b>{t.modelSize}</b> {item.model ? prettyBytes(item.model.bytes) : t.builtIn} · {item.deleteable ? t.deleteable : t.notDeleteable}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+  return (
+    <section className="capabilityCenter">
+      <div className="panelHead"><h2>{t.capabilityCenter}</h2><span>{catalog?.root || '/models'}</span></div>
+      {renderGroup('core', t.coreCapabilities)}
+      {renderGroup('downloadable', t.downloadableCapabilities)}
+    </section>
+  );
+}
+
 function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDraft, modelDraftDirtyRef, manifestDraftDirtyRef, saveModelSource, saveManifestSource, pullModel, deleteModel, start, busy, t }) {
   const models = catalog?.models || [];
   const statusLabel = {
@@ -3401,6 +3647,7 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
         <button className="panelButton" onClick={() => saveManifestSource(manifestDraft)}><Save size={16} />{t.saveModelSource}</button>
         <small>{t.modelManifestHint}</small>
       </div>
+      <CapabilityCenter catalog={catalog} t={t} />
       {busy && <div className="hintBox smallHint"><span>{t.modelBusyHint}</span></div>}
       <div className="modelGrid">
         {models.map(model => {

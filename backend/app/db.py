@@ -208,6 +208,28 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (tag, category)
             );
+
+            CREATE TABLE IF NOT EXISTS saved_searches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                filters_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS media_embeddings (
+                media_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT '',
+                dim INTEGER NOT NULL DEFAULT 0,
+                vector BLOB,
+                text TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (media_id, kind, model),
+                FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_media_embeddings_kind ON media_embeddings(kind);
             """
         )
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
