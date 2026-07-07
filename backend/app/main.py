@@ -1697,7 +1697,7 @@ if frontend_dir.exists():
 def frontend(path: str):
     index = frontend_dir / "index.html"
     if index.exists():
-        return FileResponse(index)
+        return FileResponse(index, headers={"Cache-Control": "no-store, max-age=0"})
     return {"message": "Frontend is not built", "media_root": os.environ.get("MEDIA_ROOT", "/media")}
 
 
@@ -1705,5 +1705,5 @@ def frontend(path: str):
 def frontend_head(path: str):
     index = frontend_dir / "index.html"
     if index.exists():
-        return FileResponse(index)
+        return FileResponse(index, headers={"Cache-Control": "no-store, max-age=0"})
     return {"message": "Frontend is not built"}

@@ -1690,7 +1690,8 @@ aside {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(30, 38, 65, .76), var(--sidebar));
-  overflow: hidden;
+  overflow: auto;
+  scrollbar-width: thin;
 }
 
 :root[data-theme="light"] aside {
