@@ -54,11 +54,13 @@ const i18n = {
     title: 'Library Console',
     dashboard: 'Dashboard',
     jobs: 'Jobs',
+    quickFind: 'Quick Find',
     library: 'Library',
     virtualLibrary: 'Virtual Library',
     tagGraph: 'Tag Graph',
     randomFlow: 'Random Flow',
     models: 'Models',
+    diagnostics: 'Diagnostics',
     authors: 'Authors',
     faces: 'Face Groups',
     logs: 'Logs',
@@ -341,6 +343,16 @@ const i18n = {
     bilingualSubtitles: 'Bilingual subtitles',
     noTranscript: 'No transcript yet',
     mediaSearch: 'Search media, tags, authors',
+    quickFindTitle: 'Quick Find',
+    quickFindHint: 'Search-first view for author, tag, filename, subtitle text, and visual labels. Use it when you want to find media, not maintain the library.',
+    searchNow: 'Search now',
+    diagnosticsTitle: 'Search Capability',
+    diagnosticsHint: 'Index coverage, metadata completeness, thumbnail cache, transcripts, and next actions for local search.',
+    coverage: 'Coverage',
+    nextActions: 'Next actions',
+    runAction: 'Run action',
+    metadataBackfill: 'Metadata backfill',
+    metadataBackfillHint: 'Fill missing duration, dimensions, and resolution without moving files.',
     allMedia: 'All media',
     photosOnly: 'Photos',
     videosOnly: 'Videos',
@@ -401,6 +413,7 @@ const i18n = {
       'workflow-transcribe-sample': 'Speech Sample',
       'model-pull-recommended': 'Download Recommended Models',
       'index-metadata': 'Rebuild Index',
+      'metadata-backfill': 'Metadata Backfill',
       'index-similarity': 'Similarity Index',
       'transcribe-sample': 'Speech Sample',
       transcribe: 'Transcribe',
@@ -450,6 +463,7 @@ const i18n = {
       'workflow-transcribe-sample': 'Transcribe a small sample of videos and index the text.',
       'model-pull-recommended': 'Download the default vision, face, and speech models into /models.',
       'index-metadata': 'Import organized files and manifests into the virtual SQLite library.',
+      'metadata-backfill': 'Fill missing duration, dimensions, and resolution using local ffprobe/Pillow.',
       'index-similarity': 'Build exact duplicate, image perceptual hash, and video keyframe similarity groups.',
       'transcribe-sample': 'Transcribe up to 5 videos that do not have transcript text.',
       transcribe: 'Transcribe more videos that do not have transcript text.',
@@ -501,11 +515,13 @@ const i18n = {
     title: '影库控制台',
     dashboard: '概览',
     jobs: '任务',
+    quickFind: '快找',
     library: '媒体库',
     virtualLibrary: '虚拟媒体库',
     tagGraph: '标签图谱',
     randomFlow: '随机瀑布流',
     models: '模型',
+    diagnostics: '搜索能力',
     authors: '作者',
     faces: '人脸组',
     logs: '日志',
@@ -788,6 +804,16 @@ const i18n = {
     bilingualSubtitles: '双语字幕',
     noTranscript: '还没有转写内容',
     mediaSearch: '搜索媒体、标签、作者',
+    quickFindTitle: '快找',
+    quickFindHint: '面向检索的入口：按作者、标签、文件名、字幕文字和视觉标签找媒体。想找内容时从这里开始。',
+    searchNow: '立即搜索',
+    diagnosticsTitle: '搜索能力诊断',
+    diagnosticsHint: '检查索引覆盖率、元数据完整度、缩略图缓存、字幕转写和下一步建议。',
+    coverage: '覆盖率',
+    nextActions: '下一步建议',
+    runAction: '执行',
+    metadataBackfill: '元数据回填',
+    metadataBackfillHint: '不移动文件，只补齐时长、宽高、分辨率等信息。',
     allMedia: '全部媒体',
     photosOnly: '照片',
     videosOnly: '视频',
@@ -848,6 +874,7 @@ const i18n = {
       'workflow-transcribe-sample': '语音样本',
       'model-pull-recommended': '下载推荐模型',
       'index-metadata': '重建索引',
+      'metadata-backfill': '元数据回填',
       'index-similarity': '相似索引',
       'transcribe-sample': '语音样本',
       transcribe: '语音转写',
@@ -897,6 +924,7 @@ const i18n = {
       'workflow-transcribe-sample': '抽样转写视频语音，并把文字导入搜索。',
       'model-pull-recommended': '把默认视觉、人脸、语音模型下载到 /models。',
       'index-metadata': '把已整理文件和清单导入 SQLite 虚拟媒体库。',
+      'metadata-backfill': '用本地 ffprobe/Pillow 补齐缺失的时长、尺寸和分辨率。',
       'index-similarity': '生成精确重复、图片感知 hash、视频关键帧相似组。',
       'transcribe-sample': '最多转写 5 个还没有文字的视频。',
       transcribe: '继续转写更多还没有文字的视频。',
@@ -948,6 +976,7 @@ const commands = [
   ['workflow-vision-plan', 'Scene Plan', Camera, 'Recommended: full frames, OpenCLIP labels, dry-run vision plan'],
   ['workflow-transcribe-sample', 'Speech Sample', Mic, 'Transcribe a small local video sample'],
   ['index-metadata', 'Rebuild Index', Database, 'Import organized files into the virtual media library'],
+  ['metadata-backfill', 'Metadata Backfill', Database, 'Fill duration, dimensions, and resolution'],
   ['index-similarity', 'Similarity Index', Archive, 'Build duplicate and similarity groups'],
   ['transcribe-sample', 'Speech Sample', Mic, 'Transcribe up to 5 videos'],
   ['transcribe', 'Transcribe', Mic, 'Transcribe more videos'],
@@ -982,11 +1011,13 @@ const commands = [
 
 const nav = [
   ['dashboard', 'dashboard', Database],
+  ['quickFind', 'quickFind', Search],
   ['jobs', 'jobs', Activity],
   ['library', 'library', Folder],
   ['tagGraph', 'tagGraph', Share2],
   ['randomFlow', 'randomFlow', Shuffle],
   ['models', 'models', HardDrive],
+  ['diagnostics', 'diagnostics', HelpCircle],
   ['authors', 'authors', Users],
   ['faces', 'faces', Users],
   ['logs', 'logs', TerminalSquare],
@@ -998,7 +1029,7 @@ const workflowSteps = {
   'workflow-review-cleanup': ['normalize', 'keyword-classification', 'review-cleanup', 'refresh-state', 'index-metadata'],
   'workflow-face-balanced': ['extract-frames', 'face-scan', 'face-cluster', 'face-report', 'apply-face-groups'],
   'workflow-vision-plan': ['extract-frames', 'vision-scan', 'index-vision', 'apply-vision-labels'],
-  'workflow-full-library': ['scan', 'filename-analysis', 'keyword-classification', 'apply-move-plan', 'normalize', 'review-cleanup', 'refresh-state', 'extract-frames', 'face-scan', 'face-cluster', 'face-report', 'apply-face-groups', 'vision-scan', 'index-vision', 'apply-vision-labels', 'dedupe', 'index-similarity', 'transcribe', 'index-metadata'],
+  'workflow-full-library': ['scan', 'filename-analysis', 'keyword-classification', 'apply-move-plan', 'normalize', 'review-cleanup', 'refresh-state', 'extract-frames', 'face-scan', 'face-cluster', 'face-report', 'apply-face-groups', 'vision-scan', 'index-vision', 'apply-vision-labels', 'dedupe', 'index-similarity', 'transcribe', 'index-metadata', 'metadata-backfill'],
   'workflow-transcribe-sample': ['transcribe', 'index-metadata'],
   'model-pull-recommended': ['model-download', 'model-download', 'model-download', 'model-download', 'model-download'],
 };
@@ -1319,6 +1350,7 @@ function App() {
   const [mediaFilters, setMediaFilters] = useState(DEFAULT_MEDIA_FILTERS);
   const [similarityResults, setSimilarityResults] = useState({ groups: [] });
   const [tagGraph, setTagGraph] = useState({ nodes: [], edges: [] });
+  const [diagnostics, setDiagnostics] = useState(null);
   const [authors, setAuthors] = useState([]);
   const [faces, setFaces] = useState([]);
   const [faceSuggestions, setFaceSuggestions] = useState([]);
@@ -1346,7 +1378,7 @@ function App() {
   const t = i18n[language] || i18n['zh-CN'];
 
   async function refresh() {
-    const [s, j, a, f, suggestions, cfg, mon, modelCatalog, ver] = await Promise.all([
+    const [s, j, a, f, suggestions, cfg, mon, modelCatalog, ver, diag] = await Promise.all([
       api('/api/summary'),
       api('/api/jobs?limit=120'),
       api('/api/authors').catch(() => []),
@@ -1356,6 +1388,7 @@ function App() {
       api('/api/monitor').catch(() => null),
       api('/api/models').catch(() => ({ root: '/models', models: [] })),
       api('/api/version').catch(() => null),
+      api('/api/diagnostics').catch(() => null),
     ]);
     setSummary(s);
     setJobs(j);
@@ -1364,6 +1397,7 @@ function App() {
     setFaceSuggestions(suggestions);
     setMonitor(mon);
     setModels(modelCatalog);
+    if (diag) setDiagnostics(diag);
     if (!manifestDraftDirtyRef.current) setManifestDraft(modelCatalog?.manifest_url || '');
     if (!modelDraftDirtyRef.current) setModelDrafts(Object.fromEntries((modelCatalog?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
     if (ver) setVersion(ver);
@@ -1849,10 +1883,12 @@ function App() {
         )}
 
         {active === 'jobs' && <section className="twoCol jobsLayout"><JobsPanel jobs={jobs} selectedJobId={selectedJob?.id} openJob={openJob} t={t} /><LogPanel selectedJob={selectedJob} jobLog={jobLog} start={start} cancelJob={cancelJob} cancelingJobId={cancelingJobId} hasRunning={hasRunning} busy={busy} setActive={setActive} t={t} /></section>}
+        {active === 'quickFind' && <QuickFindPanel mediaResults={mediaResults} mediaFilters={mediaFilters} loadMedia={loadMedia} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
         {active === 'library' && <LibraryPanel results={results} mediaResults={mediaResults} mediaFilters={mediaFilters} similarityResults={similarityResults} loadMedia={loadMedia} loadSimilarity={loadSimilarity} start={start} performSearch={performSearch} setQuery={setQuery} setSource={setSource} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
         {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} openFilteredMedia={openFilteredMedia} t={t} />}
         {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
         {active === 'models' && <ModelsPanel catalog={models} drafts={modelDrafts} setDrafts={setModelDrafts} manifestDraft={manifestDraft} setManifestDraft={setManifestDraft} modelDraftDirtyRef={modelDraftDirtyRef} manifestDraftDirtyRef={manifestDraftDirtyRef} saveModelSource={saveModelSource} saveManifestSource={saveManifestSource} pullModel={pullModel} deleteModel={deleteModel} start={start} busy={busy || hasRunning} t={t} />}
+        {active === 'diagnostics' && <DiagnosticsPanel diagnostics={diagnostics} refresh={refresh} start={start} busy={busy || hasRunning} t={t} />}
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
@@ -2389,6 +2425,107 @@ function TagGraphPanel({ graph, loadTagGraph, openFilteredMedia, t }) {
       <section className="panel">
         <div className="panelHead"><h2>{t.relatedTags}</h2><span>{edges.length}</span></div>
         {!edges.length ? <Empty label={t.noRows} /> : <div className="edgeList">{edges.slice(0, 80).map(edge => <button key={`${edge.source}-${edge.target}`} onClick={() => openTag(edge.source, edge.target)}><strong>{edge.source}</strong><span>{edge.target}</span><em>{edge.weight}</em></button>)}</div>}
+      </section>
+    </>
+  );
+}
+
+function QuickFindPanel({ mediaResults, mediaFilters, loadMedia, onDeleted, onPatched, mediaZoom, setMediaZoom, t }) {
+  const [filters, setFilters] = useState({
+    q: mediaFilters?.q || '',
+    media_type: mediaFilters?.media_type || 'all',
+    tag: mediaFilters?.tag || '',
+    author: mediaFilters?.author || '',
+  });
+  const [loading, setLoading] = useState(false);
+  const [panelError, setPanelError] = useState('');
+  async function run(event) {
+    event?.preventDefault();
+    setPanelError('');
+    setLoading(true);
+    try {
+      await loadMedia({ ...filters, limit: 96, offset: 0 });
+    } catch (exc) {
+      setPanelError(exc.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  function update(key, value) {
+    setFilters(current => ({ ...current, [key]: value }));
+  }
+  const shortcuts = [
+    ['JK学生', 'tag'],
+    ['COS角色', 'tag'],
+    ['自拍露脸', 'tag'],
+    ['黑丝白丝', 'tag'],
+    ['室内居家', 'tag'],
+    ['video', 'media_type'],
+    ['photo', 'media_type'],
+  ];
+  return (
+    <section className="panel quickFindPanel">
+      <div className="panelHead">
+        <div><h2>{t.quickFindTitle}</h2><p>{t.quickFindHint}</p></div>
+        <MediaZoomControl value={mediaZoom} setValue={setMediaZoom} t={t} />
+      </div>
+      <form className="quickFindForm" onSubmit={run}>
+        <input className="quickFindInput" value={filters.q} onChange={event => update('q', event.target.value)} placeholder={t.mediaSearch} autoComplete="off" />
+        <select value={filters.media_type} onChange={event => update('media_type', event.target.value)}>
+          <option value="all">{t.allMedia}</option>
+          <option value="photo">{t.photosOnly}</option>
+          <option value="video">{t.videosOnly}</option>
+        </select>
+        <input value={filters.tag} onChange={event => update('tag', event.target.value)} placeholder={t.tags} />
+        <input value={filters.author} onChange={event => update('author', event.target.value)} placeholder={t.authorName} />
+        <button type="submit" disabled={loading}><Search size={16} />{loading ? t.loadingMore : t.searchNow}</button>
+      </form>
+      <div className="quickChips">
+        {shortcuts.map(([value, key]) => <button key={`${key}-${value}`} onClick={() => { const next = { ...filters, [key]: value }; setFilters(next); loadMedia({ ...next, limit: 96, offset: 0 }).catch(exc => setPanelError(exc.message)); }}>{value === 'video' ? t.videosOnly : value === 'photo' ? t.photosOnly : value}</button>)}
+      </div>
+      {panelError && <div className="alert compact">{panelError}</div>}
+      <div className="panelHead compactHead"><h2>{t.searchResults}</h2><span>{prettyNumber(mediaResults.total || 0)}</span></div>
+      <MediaGrid items={mediaResults.items || []} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} t={t} />
+    </section>
+  );
+}
+
+function DiagnosticsPanel({ diagnostics, refresh, start, busy, t }) {
+  const coverage = diagnostics?.coverage || [];
+  const recommendations = diagnostics?.recommendations || [];
+  return (
+    <>
+      <section className="panel diagnosticsHero">
+        <div>
+          <h2>{t.diagnosticsTitle}</h2>
+          <p>{t.diagnosticsHint}</p>
+        </div>
+        <button className="panelButton" onClick={refresh}><RefreshCw size={16} />{t.refreshState || t.ready}</button>
+      </section>
+      <section className="panel">
+        <div className="panelHead"><h2>{t.coverage}</h2><span>{diagnostics?.generated_at || '-'}</span></div>
+        {!coverage.length ? <Empty label={t.noRows} /> : <div className="diagnosticsGrid">
+          {coverage.map(item => (
+            <article className="diagnosticCard" key={item.id}>
+              <div className="diagnosticTop"><strong>{item.label}</strong><span>{item.percent}%</span></div>
+              <div className="coverageTrack"><i style={{ width: `${item.percent}%` }} /></div>
+              <p>{prettyNumber(item.ready)} / {prettyNumber(item.total)}</p>
+              {item.action && <button className="panelButton" disabled={busy} onClick={() => start(item.action)}>{t.runAction}: {t.commandNames?.[item.action] || item.action}</button>}
+            </article>
+          ))}
+        </div>}
+      </section>
+      <section className="panel">
+        <div className="panelHead"><h2>{t.nextActions}</h2><span>{recommendations.length}</span></div>
+        {!recommendations.length ? <Empty label={t.ready} /> : <div className="recommendationList">
+          {recommendations.map((item, index) => (
+            <div className={`hintBox ${item.level}`} key={`${item.command}-${index}`}>
+              <strong>{item.title}</strong>
+              <span>{item.detail}</span>
+              {item.command && <button className="panelButton" disabled={busy} onClick={() => start(item.command)}>{t.runAction}: {t.commandNames?.[item.command] || item.command}</button>}
+            </div>
+          ))}
+        </div>}
       </section>
     </>
   );

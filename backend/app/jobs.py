@@ -12,7 +12,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from .db import connect, get_settings
-from .metadata import import_vision_outputs, rebuild_metadata_index, rebuild_similarity_index, train_vision_calibrators, transcribe_videos
+from .metadata import backfill_media_metadata, import_vision_outputs, rebuild_metadata_index, rebuild_similarity_index, train_vision_calibrators, transcribe_videos
 from .model_manager import pull_model
 
 
@@ -21,7 +21,7 @@ ALLOWED_COMMANDS = {
     "workflow-review-cleanup": [["normalize-organized"], ["classify-keywords"], ["organize-review"], ["refresh-state"], ["__metadata_index__"]],
     "workflow-face-balanced": [["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"]],
     "workflow-vision-plan": [["extract-frames"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"]],
-    "workflow-full-library": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["normalize-organized"], ["organize-review"], ["refresh-state"], ["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"], ["dedupe-organized", "--apply"], ["__similarity_index__"], ["__transcribe__"], ["__metadata_index__"]],
+    "workflow-full-library": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["normalize-organized"], ["organize-review"], ["refresh-state"], ["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"], ["dedupe-organized", "--apply"], ["__similarity_index__"], ["__transcribe__"], ["__metadata_index__"], ["__metadata_backfill__"]],
     "workflow-transcribe-sample": [["__transcribe_sample__"], ["__metadata_index__"]],
     "model-pull-openclip-vit-l": [["__model_pull__", "openclip-vit-l"]],
     "model-pull-openclip-vit-h": [["__model_pull__", "openclip-vit-h"]],
@@ -64,6 +64,7 @@ ALLOWED_COMMANDS = {
     "apply-vision-labels-dry-run": ["apply-vision-labels"],
     "apply-vision-labels": ["apply-vision-labels", "--apply"],
     "index-metadata": ["__metadata_index__"],
+    "metadata-backfill": ["__metadata_backfill__"],
     "index-similarity": ["__similarity_index__"],
     "transcribe-sample": ["__transcribe_sample__"],
     "transcribe": ["__transcribe__"],
@@ -89,6 +90,7 @@ PIPELINE_STAGES = {
     "__vision_index__": "index-vision",
     "__vision_calibrator_train__": "train-vision-calibrator",
     "__metadata_index__": "index-metadata",
+    "__metadata_backfill__": "metadata-backfill",
     "__similarity_index__": "index-similarity",
     "__transcribe_sample__": "transcribe",
     "__transcribe__": "transcribe",
@@ -442,6 +444,7 @@ def run_job(job_id: int, command: str) -> None:
     with connect() as conn:
         message = " && ".join(
             "index-metadata" if step == ["__metadata_index__"] else
+            "metadata-backfill" if step == ["__metadata_backfill__"] else
             "index-vision" if step == ["__vision_index__"] else
             "train-vision-calibrator" if step == ["__vision_calibrator_train__"] else
             "index-similarity" if step == ["__similarity_index__"] else
@@ -472,6 +475,15 @@ def run_job(job_id: int, command: str) -> None:
                 )
                 stdout_parts.append(f"$ index-metadata\n{captured}\n{result}")
                 returncode = 130 if result.get("cancelled") else 0
+            elif step == ["__metadata_backfill__"]:
+                result, captured = run_internal_with_progress(
+                    job_id,
+                    "metadata-backfill",
+                    lambda: backfill_media_metadata(Path(output_root), progress=metadata_progress_printer, cancel_check=lambda: is_cancel_requested(job_id)),
+                    "metadata backfill running",
+                )
+                stdout_parts.append(f"$ metadata-backfill\n{captured}\n{result}")
+                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
             elif step == ["__vision_index__"]:
                 result = import_vision_outputs(Path(output_root))
                 stdout_parts.append(f"$ index-vision\n{result}")

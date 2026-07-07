@@ -20,8 +20,10 @@ from .jobs import ALLOWED_COMMANDS, create_job, mark_interrupted_jobs, request_j
 from .media_stats import summary
 from .metadata import (
     add_manual_media_tag,
+    backfill_media_metadata,
     media_by_relative_paths,
     media_detail,
+    media_index_diagnostics,
     media_for_author,
     media_query,
     mime_for,
@@ -216,7 +218,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.0.24").lstrip("v") or "1.0.24"
+    app_version = os.environ.get("APP_SEMVER", "1.1.0").lstrip("v") or "1.1.0"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -257,6 +259,16 @@ def api_system_hardware() -> dict:
 @app.get("/api/summary")
 def api_summary() -> dict:
     return summary()
+
+
+@app.get("/api/diagnostics")
+def api_diagnostics() -> dict:
+    return media_index_diagnostics(output_root())
+
+
+@app.post("/api/media/metadata-backfill")
+def api_metadata_backfill(limit: int = Query(200, ge=1, le=5000)) -> dict:
+    return backfill_media_metadata(output_root(), limit=limit)
 
 
 JOB_SUMMARY_COLUMNS = """

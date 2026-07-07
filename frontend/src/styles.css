@@ -218,6 +218,113 @@ select, input {
 .mediaSearchBar button {
   padding: 0 14px;
 }
+
+.quickFindPanel {
+  display: grid;
+  gap: 12px;
+}
+
+.quickFindForm {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.5fr) 140px minmax(160px, 1fr) minmax(160px, 1fr) auto;
+  gap: 8px;
+}
+
+.quickFindInput {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.quickChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quickChips button {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--panel-2);
+}
+
+.compactHead {
+  margin-top: 2px;
+}
+
+.diagnosticsHero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.diagnosticsHero p {
+  margin-top: 6px;
+  max-width: 760px;
+  line-height: 1.5;
+}
+
+.diagnosticsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.diagnosticCard {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.diagnosticTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.diagnosticTop strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnosticTop span {
+  color: var(--accent);
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+}
+
+.coverageTrack {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.coverageTrack i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #65a8ff, #63e0c7);
+}
+
+.recommendationList {
+  display: grid;
+  gap: 8px;
+}
+
+.recommendationList .panelButton {
+  justify-self: start;
+  margin-top: 4px;
+}
 .mediaGrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -3010,8 +3117,16 @@ input[type="checkbox"] {
   }
 
   .mediaSearchBar,
-  .randomBar {
+  .randomBar,
+  .quickFindForm,
+  .diagnosticsGrid {
+    grid-template-columns: 1fr;
     gap: 10px;
+  }
+
+  .diagnosticsHero {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .mediaMeta,

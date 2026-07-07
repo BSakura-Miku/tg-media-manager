@@ -298,7 +298,12 @@ def upsert_media(conn, root: Path, path: Path, media_type: str, manifest: dict, 
     width = int(float(manifest["width"])) if manifest.get("width") else None
     height = int(float(manifest["height"])) if manifest.get("height") else None
     duration = float(manifest["duration"]) if manifest.get("duration") else None
-    resolution = parsed.get("resolution") or (f"{width}x{height}" if width and height else "")
+    existing = conn.execute("SELECT width, height, duration, resolution FROM media_items WHERE path=?", (str(path),)).fetchone()
+    if existing is not None:
+        width = width if width is not None else existing["width"]
+        height = height if height is not None else existing["height"]
+        duration = duration if duration is not None else existing["duration"]
+    resolution = parsed.get("resolution") or (f"{width}x{height}" if width and height else "") or (existing["resolution"] if existing is not None else "")
     author = infer_author_from_path(root, path) or manifest.get("canonical_actor", "") or parsed.get("author", "")
     source = infer_source_from_path(root, path)
     row = {
@@ -412,6 +417,351 @@ def rebuild_metadata_index(root: Path | None = None, progress: ProgressCallback 
     if progress:
         progress("index-metadata", total, total, "")
     return {"indexed": indexed, "total": total, "vision": vision, "root": str(root), "elapsed_seconds": round(time.time() - started, 3)}
+
+
+def parse_frame_rate(value: str) -> float | None:
+    if not value:
+        return None
+    if "/" in value:
+        left, right = value.split("/", 1)
+        try:
+            denominator = float(right)
+            if denominator:
+                return round(float(left) / denominator, 4)
+        except Exception:
+            return None
+    try:
+        return round(float(value), 4)
+    except Exception:
+        return None
+
+
+def probe_photo_metadata(path: Path) -> dict:
+    if Image is None:
+        return {"probe_status": "failed", "probe_error": "Pillow is not available"}
+    with Image.open(path) as image:
+        width, height = image.size
+        return {
+            "width": int(width),
+            "height": int(height),
+            "duration": None,
+            "resolution": f"{int(width)}x{int(height)}",
+            "codec": "",
+            "frame_rate": None,
+            "bit_rate": None,
+            "container": (image.format or path.suffix.lstrip(".")).lower(),
+            "probe_status": "ok",
+            "probe_error": "",
+        }
+
+
+def probe_video_metadata(path: Path, timeout: int = 30) -> dict:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(path),
+    ]
+    result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    if result.returncode != 0:
+        return {"probe_status": "failed", "probe_error": (result.stderr or result.stdout or "ffprobe failed")[-500:]}
+    payload = json.loads(result.stdout or "{}")
+    video_stream = next((stream for stream in payload.get("streams", []) if stream.get("codec_type") == "video"), {})
+    fmt = payload.get("format", {})
+    width = int(video_stream.get("width") or 0) or None
+    height = int(video_stream.get("height") or 0) or None
+    duration_value = fmt.get("duration") or video_stream.get("duration")
+    try:
+        duration = float(duration_value) if duration_value not in (None, "", "N/A") else None
+    except Exception:
+        duration = None
+    bit_rate_value = fmt.get("bit_rate") or video_stream.get("bit_rate")
+    try:
+        bit_rate = int(float(bit_rate_value)) if bit_rate_value not in (None, "", "N/A") else None
+    except Exception:
+        bit_rate = None
+    return {
+        "width": width,
+        "height": height,
+        "duration": duration,
+        "resolution": f"{width}x{height}" if width and height else "",
+        "codec": video_stream.get("codec_name") or "",
+        "frame_rate": parse_frame_rate(video_stream.get("avg_frame_rate") or video_stream.get("r_frame_rate") or ""),
+        "bit_rate": bit_rate,
+        "container": fmt.get("format_name") or path.suffix.lstrip("."),
+        "probe_status": "ok" if width or height or duration else "partial",
+        "probe_error": "",
+    }
+
+
+def probe_media_metadata(path: Path, media_type: str) -> dict:
+    try:
+        if media_type == "photo":
+            return probe_photo_metadata(path)
+        if media_type == "video":
+            return probe_video_metadata(path)
+    except subprocess.TimeoutExpired:
+        return {"probe_status": "failed", "probe_error": "ffprobe timeout"}
+    except Exception as exc:
+        return {"probe_status": "failed", "probe_error": str(exc)[:500]}
+    return {"probe_status": "skipped", "probe_error": "unsupported media type"}
+
+
+def backfill_media_metadata(
+    root: Path | None = None,
+    limit: int | None = None,
+    only_missing: bool = True,
+    progress: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
+) -> dict:
+    init_db()
+    root = root or output_root()
+    params: list[object] = [str(root)]
+    where = "root=?"
+    if only_missing:
+        where += """
+            AND (
+                width IS NULL
+                OR height IS NULL
+                OR resolution=''
+                OR (media_type='video' AND (duration IS NULL OR duration <= 0))
+            )
+        """
+    sql = f"""
+        SELECT id, path, media_type
+        FROM media_items
+        WHERE {where}
+        ORDER BY id
+    """
+    if limit:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    total = len(rows)
+    processed = 0
+    updated = 0
+    failed = 0
+    skipped = 0
+    started = time.time()
+    if progress:
+        progress("metadata-backfill", 0, total, "")
+    for row in rows:
+        if cancel_check and cancel_check():
+            return {
+                "ok": False,
+                "cancelled": True,
+                "processed": processed,
+                "total": total,
+                "updated": updated,
+                "failed": failed,
+                "skipped": skipped,
+                "root": str(root),
+                "elapsed_seconds": round(time.time() - started, 3),
+            }
+        media_id = int(row["id"])
+        path = Path(row["path"])
+        media_type = row["media_type"]
+        processed += 1
+        if not path.exists():
+            failed += 1
+            meta = {"probe_status": "failed", "probe_error": "file missing"}
+        else:
+            meta = probe_media_metadata(path, media_type)
+        if meta.get("probe_status") in {"ok", "partial"}:
+            updated += 1
+        elif meta.get("probe_status") == "skipped":
+            skipped += 1
+        else:
+            failed += 1
+        width = meta.get("width")
+        height = meta.get("height")
+        duration = meta.get("duration")
+        resolution = meta.get("resolution") or (f"{width}x{height}" if width and height else "")
+        with connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO media_metadata (
+                    media_id, width, height, duration, resolution, codec, frame_rate,
+                    bit_rate, container, probe_status, probe_error, probed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(media_id) DO UPDATE SET
+                    width=excluded.width,
+                    height=excluded.height,
+                    duration=excluded.duration,
+                    resolution=excluded.resolution,
+                    codec=excluded.codec,
+                    frame_rate=excluded.frame_rate,
+                    bit_rate=excluded.bit_rate,
+                    container=excluded.container,
+                    probe_status=excluded.probe_status,
+                    probe_error=excluded.probe_error,
+                    probed_at=CURRENT_TIMESTAMP
+                """,
+                (
+                    media_id,
+                    width,
+                    height,
+                    duration,
+                    resolution,
+                    meta.get("codec") or "",
+                    meta.get("frame_rate"),
+                    meta.get("bit_rate"),
+                    meta.get("container") or "",
+                    meta.get("probe_status") or "failed",
+                    meta.get("probe_error") or "",
+                ),
+            )
+            if meta.get("probe_status") in {"ok", "partial"}:
+                conn.execute(
+                    """
+                    UPDATE media_items
+                    SET width=COALESCE(?, width),
+                        height=COALESCE(?, height),
+                        duration=COALESCE(?, duration),
+                        resolution=CASE WHEN ? != '' THEN ? ELSE resolution END,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=?
+                    """,
+                    (width, height, duration, resolution, resolution, media_id),
+                )
+        if progress and (processed == total or processed % 25 == 0):
+            progress("metadata-backfill", processed, total, safe_relative(root, path))
+    if progress:
+        progress("metadata-backfill", total, total, "")
+    return {
+        "ok": True,
+        "processed": processed,
+        "total": total,
+        "updated": updated,
+        "failed": failed,
+        "skipped": skipped,
+        "root": str(root),
+        "elapsed_seconds": round(time.time() - started, 3),
+    }
+
+
+def percent(part: int | float, total: int | float) -> int:
+    if not total:
+        return 0
+    return int(round(max(0, min(100, float(part) / float(total) * 100))))
+
+
+def media_index_diagnostics(root: Path | None = None) -> dict:
+    init_db()
+    root = root or output_root()
+    with connect() as conn:
+        totals = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN media_type='video' THEN 1 ELSE 0 END) AS videos,
+                SUM(CASE WHEN media_type='photo' THEN 1 ELSE 0 END) AS photos,
+                SUM(CASE WHEN media_type NOT IN ('video', 'photo') THEN 1 ELSE 0 END) AS other,
+                SUM(CASE WHEN width IS NOT NULL AND height IS NOT NULL THEN 1 ELSE 0 END) AS with_dimensions,
+                SUM(CASE WHEN resolution != '' THEN 1 ELSE 0 END) AS with_resolution,
+                SUM(CASE WHEN media_type='video' AND duration IS NOT NULL AND duration > 0 THEN 1 ELSE 0 END) AS videos_with_duration
+            FROM media_items
+            WHERE root=?
+            """,
+            (str(root),),
+        ).fetchone()
+        tagged = conn.execute("SELECT COUNT(DISTINCT media_id) AS count FROM media_tags").fetchone()["count"]
+        transcripts = conn.execute("SELECT COUNT(DISTINCT media_id) AS count FROM media_transcripts").fetchone()["count"]
+        faces = conn.execute("SELECT COUNT(*) AS count FROM media_tags WHERE category='face_group' OR tag LIKE 'FaceGroup_%'").fetchone()["count"]
+        meta_rows = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN probe_status IN ('ok', 'partial') THEN 1 ELSE 0 END) AS ok,
+                SUM(CASE WHEN probe_status='failed' THEN 1 ELSE 0 END) AS failed
+            FROM media_metadata
+            """
+        ).fetchone()
+    total = int(totals["total"] or 0)
+    videos = int(totals["videos"] or 0)
+    thumbs_dir = root / "_MANIFESTS" / "media_thumbs_v8"
+    thumb_count = sum(1 for _ in thumbs_dir.rglob("*.jpg")) if thumbs_dir.exists() else 0
+    coverage = [
+        {
+            "id": "dimensions",
+            "label": "Dimensions",
+            "ready": int(totals["with_dimensions"] or 0),
+            "total": total,
+            "percent": percent(totals["with_dimensions"] or 0, total),
+            "action": "metadata-backfill",
+        },
+        {
+            "id": "duration",
+            "label": "Video duration",
+            "ready": int(totals["videos_with_duration"] or 0),
+            "total": videos,
+            "percent": percent(totals["videos_with_duration"] or 0, videos),
+            "action": "metadata-backfill",
+        },
+        {
+            "id": "resolution",
+            "label": "Resolution",
+            "ready": int(totals["with_resolution"] or 0),
+            "total": total,
+            "percent": percent(totals["with_resolution"] or 0, total),
+            "action": "metadata-backfill",
+        },
+        {
+            "id": "tags",
+            "label": "Tagged media",
+            "ready": int(tagged or 0),
+            "total": total,
+            "percent": percent(tagged or 0, total),
+            "action": "index-vision",
+        },
+        {
+            "id": "transcripts",
+            "label": "Video transcripts",
+            "ready": int(transcripts or 0),
+            "total": videos,
+            "percent": percent(transcripts or 0, videos),
+            "action": "transcribe",
+        },
+        {
+            "id": "thumbnails",
+            "label": "Thumbnails",
+            "ready": int(thumb_count),
+            "total": total,
+            "percent": percent(thumb_count, total),
+            "action": "extract-frames",
+        },
+    ]
+    recommendations = []
+    for item in coverage:
+        if item["total"] and item["percent"] < 90:
+            recommendations.append({
+                "level": "warning" if item["percent"] >= 50 else "error",
+                "title": f"{item['label']} coverage is {item['percent']}%",
+                "detail": f"{item['ready']}/{item['total']} indexed. Run {item['action']} to fill missing data.",
+                "command": item["action"],
+            })
+    return {
+        "root": str(root),
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "media": {
+            "total": total,
+            "videos": videos,
+            "photos": int(totals["photos"] or 0),
+            "other": int(totals["other"] or 0),
+            "faces": int(faces or 0),
+            "metadata_rows": int(meta_rows["total"] or 0),
+            "metadata_ok": int(meta_rows["ok"] or 0),
+            "metadata_failed": int(meta_rows["failed"] or 0),
+        },
+        "coverage": coverage,
+        "recommendations": recommendations,
+    }
 
 
 def import_vision_outputs(root: Path | None = None, progress: ProgressCallback | None = None, cancel_check: CancelCheck | None = None) -> dict:

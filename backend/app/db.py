@@ -164,6 +164,25 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_media_transcripts_text ON media_transcripts(text);
 
+            CREATE TABLE IF NOT EXISTS media_metadata (
+                media_id INTEGER PRIMARY KEY,
+                width INTEGER,
+                height INTEGER,
+                duration REAL,
+                resolution TEXT NOT NULL DEFAULT '',
+                codec TEXT NOT NULL DEFAULT '',
+                frame_rate REAL,
+                bit_rate INTEGER,
+                container TEXT NOT NULL DEFAULT '',
+                probe_status TEXT NOT NULL DEFAULT 'pending',
+                probe_error TEXT NOT NULL DEFAULT '',
+                probed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_media_metadata_status ON media_metadata(probe_status);
+            CREATE INDEX IF NOT EXISTS idx_media_metadata_resolution ON media_metadata(resolution);
+
             CREATE TABLE IF NOT EXISTS tag_feedback (
                 media_id INTEGER NOT NULL,
                 tag TEXT NOT NULL,
