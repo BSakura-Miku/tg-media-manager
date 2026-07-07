@@ -21,6 +21,7 @@ Implemented:
 - Human-readable workflows such as full library, new downloads, review cleanup, face, vision, dedupe, transcription, and model downloads.
 - Job grouping by running, failed, completed, and other states.
 - Job detail progress with stage and workflow-step context.
+- Job/log filtering is included in the phase audit so regressions are visible.
 - Stop/cancel handling for internal transcription jobs, including cancel propagation into FFmpeg and ASR subprocesses.
 - Dark/light theme, bilingual UI, version display, and redesigned app shell.
 - Media viewer with playback, details, tags, favorite, safe-delete, manual tag, and manual author editing.
@@ -67,6 +68,7 @@ Implemented:
 - Vision index import into `media_tags` and `media_timeline_segments`.
 - Manual tag feedback and lightweight calibrator training hook.
 - Strong-model rescan command for low-confidence media.
+- Batch thumbnail health check and repair workflow for missing/corrupted preview cache.
 
 Validation after NAS full run:
 
@@ -106,6 +108,7 @@ Implemented:
 - Operation audit log.
 - Subtitle generation from transcripts, including original and bilingual VTT output paths.
 - Separate transcript engine and audio-tag mode so full subtitles do not require full SenseVoice audio tagging.
+- Diagnostics distinguish plain transcript coverage from timed subtitle coverage and show thumbnail health samples.
 - Intel iGPU/OpenVINO and FFmpeg VAAPI settings.
 - Docker images separated by base, vision, clip, and transcribe capabilities.
 

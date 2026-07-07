@@ -14,6 +14,7 @@ from pathlib import Path
 from .db import connect, get_settings
 from .metadata import backfill_media_metadata, import_vision_outputs, rebuild_metadata_index, rebuild_similarity_index, train_vision_calibrators, transcribe_videos
 from .model_manager import pull_model
+from .thumbnail_tools import repair_thumbnail_cache
 
 
 ALLOWED_COMMANDS = {
@@ -65,6 +66,7 @@ ALLOWED_COMMANDS = {
     "apply-vision-labels": ["apply-vision-labels", "--apply"],
     "index-metadata": ["__metadata_index__"],
     "metadata-backfill": ["__metadata_backfill__"],
+    "repair-thumbnails": ["__thumbnail_repair__"],
     "index-similarity": ["__similarity_index__"],
     "transcribe-sample": ["__transcribe_sample__"],
     "transcribe": ["__transcribe__"],
@@ -91,6 +93,7 @@ PIPELINE_STAGES = {
     "__vision_calibrator_train__": "train-vision-calibrator",
     "__metadata_index__": "index-metadata",
     "__metadata_backfill__": "metadata-backfill",
+    "__thumbnail_repair__": "thumbnail-repair",
     "__similarity_index__": "index-similarity",
     "__transcribe_sample__": "transcribe",
     "__transcribe__": "transcribe",
@@ -445,6 +448,7 @@ def run_job(job_id: int, command: str) -> None:
         message = " && ".join(
             "index-metadata" if step == ["__metadata_index__"] else
             "metadata-backfill" if step == ["__metadata_backfill__"] else
+            "repair-thumbnails" if step == ["__thumbnail_repair__"] else
             "index-vision" if step == ["__vision_index__"] else
             "train-vision-calibrator" if step == ["__vision_calibrator_train__"] else
             "index-similarity" if step == ["__similarity_index__"] else
@@ -483,6 +487,15 @@ def run_job(job_id: int, command: str) -> None:
                     "metadata backfill running",
                 )
                 stdout_parts.append(f"$ metadata-backfill\n{captured}\n{result}")
+                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
+            elif step == ["__thumbnail_repair__"]:
+                result, captured = run_internal_with_progress(
+                    job_id,
+                    "thumbnail-repair",
+                    lambda: repair_thumbnail_cache(Path(output_root), progress=metadata_progress_printer, cancel_check=lambda: is_cancel_requested(job_id)),
+                    "thumbnail repair running",
+                )
+                stdout_parts.append(f"$ repair-thumbnails\n{captured}\n{result}")
                 returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
             elif step == ["__vision_index__"]:
                 result = import_vision_outputs(Path(output_root))

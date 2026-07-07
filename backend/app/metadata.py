@@ -673,6 +673,14 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
         ).fetchone()
         tagged = conn.execute("SELECT COUNT(DISTINCT media_id) AS count FROM media_tags").fetchone()["count"]
         transcripts = conn.execute("SELECT COUNT(DISTINCT media_id) AS count FROM media_transcripts").fetchone()["count"]
+        timed_transcripts = 0
+        for row in conn.execute("SELECT segments_json FROM media_transcripts"):
+            try:
+                segments = json.loads(row["segments_json"] or "[]")
+            except Exception:
+                segments = []
+            if timed_transcript_segments(segments):
+                timed_transcripts += 1
         faces = conn.execute("SELECT COUNT(*) AS count FROM media_tags WHERE category='face_group' OR tag LIKE 'FaceGroup_%'").fetchone()["count"]
         meta_rows = conn.execute(
             """
@@ -687,6 +695,14 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
     videos = int(totals["videos"] or 0)
     thumbs_dir = root / "_MANIFESTS" / "media_thumbs_v8"
     thumb_count = sum(1 for _ in thumbs_dir.rglob("*.jpg")) if thumbs_dir.exists() else 0
+    subtitles = root / "_MANIFESTS" / "subtitles"
+    subtitle_count = sum(1 for _ in subtitles.rglob("*.vtt")) if subtitles.exists() else 0
+    try:
+        from .thumbnail_tools import thumbnail_health_summary
+
+        thumb_health = thumbnail_health_summary(root, sample_limit=300)
+    except Exception as exc:
+        thumb_health = {"error": str(exc), "sample_checked": 0, "sample_healthy": 0, "sample_unhealthy": 0, "sample_missing": 0}
     coverage = [
         {
             "id": "dimensions",
@@ -734,7 +750,15 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
             "ready": int(thumb_count),
             "total": total,
             "percent": percent(thumb_count, total),
-            "action": "extract-frames",
+            "action": "repair-thumbnails",
+        },
+        {
+            "id": "timed_subtitles",
+            "label": "Timed subtitles",
+            "ready": int(timed_transcripts or 0),
+            "total": videos,
+            "percent": percent(timed_transcripts or 0, videos),
+            "action": "transcribe",
         },
     ]
     recommendations = []
@@ -758,7 +782,10 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
             "metadata_rows": int(meta_rows["total"] or 0),
             "metadata_ok": int(meta_rows["ok"] or 0),
             "metadata_failed": int(meta_rows["failed"] or 0),
+            "timed_transcripts": int(timed_transcripts or 0),
+            "subtitle_files": int(subtitle_count),
         },
+        "thumbnail_health": thumb_health,
         "coverage": coverage,
         "recommendations": recommendations,
     }

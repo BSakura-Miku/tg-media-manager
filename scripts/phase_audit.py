@@ -36,6 +36,7 @@ PHASES = [
             ("Workflow step progress", lambda: has_all("frontend/src/main.jsx", ["workflowSteps", "jobWorkflowInfo", "remaining"])),
             ("Media viewer actions", lambda: has_all("frontend/src/main.jsx", ["toggleFavorite", "deleteMedia", "saveManualTag", "saveAuthor"])),
             ("Storage capacity display", lambda: has_all("frontend/src/main.jsx", ["media_storage", "videoUnit", "photoUnit", "prettyBytes"])),
+            ("Job and log status filters", lambda: has_all("frontend/src/main.jsx", ["statusTabs", "warningJobs", "errorJobs", "completedJobs"])),
         ],
     },
     {
@@ -58,6 +59,7 @@ PHASES = [
             ("OpenCLIP vision labels", lambda: has_all("backend/core/tg_media_library.py", ["open_clip", "vision-scan", "vision_labels.csv"])),
             ("Timeline import", lambda: has_all("backend/app/metadata.py", ["media_timeline_segments", "representative_frame", "import_vision_outputs"])),
             ("Manual feedback calibrator", lambda: has_all("backend/app/metadata.py", ["tag_feedback", "train_vision_calibrators", "vision_calibrators"])),
+            ("Thumbnail repair pipeline", lambda: has_all("backend/app/thumbnail_tools.py", ["repair_thumbnail_cache", "thumbnail_health_summary", "write_video_thumbnail"])),
         ],
     },
     {
@@ -77,6 +79,7 @@ PHASES = [
             ("Model manager", lambda: has_all("backend/app/model_manager.py", ["MODEL_REGISTRY", "model_catalog", "pull_model", "MODEL_ROOT"])),
             ("Authentication support", lambda: has_all("backend/app/main.py", ["/api/auth/status", "APP_PASSWORD"])),
             ("Subtitle/transcript support", lambda: has_all("backend/app/metadata.py", ["write_subtitle_files", "subtitle_for_media", "transcribe_videos"])),
+            ("Timed subtitle diagnostics", lambda: has_all("backend/app/metadata.py", ["timed_subtitles", "timed_transcript_segments", "subtitle_files"])),
             ("GPU/runtime settings", lambda: has_all("frontend/src/main.jsx", ["ffmpegHwaccel", "openvinoDevice", "faceProviders", "transcriptEngine"])),
             ("Model architecture record", lambda: file_exists("docs/architecture-model-management.md")),
         ],

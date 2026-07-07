@@ -348,6 +348,8 @@ const i18n = {
     searchNow: 'Search now',
     diagnosticsTitle: 'Search Capability',
     diagnosticsHint: 'Index coverage, metadata completeness, thumbnail cache, transcripts, and next actions for local search.',
+    thumbnailHealth: 'Thumbnail health',
+    thumbnailHealthHint: 'Sampled cached previews. Unhealthy previews are likely corrupt hardware-decoded frames and can be repaired in batch.',
     coverage: 'Coverage',
     nextActions: 'Next actions',
     runAction: 'Run action',
@@ -414,6 +416,7 @@ const i18n = {
       'model-pull-recommended': 'Download Recommended Models',
       'index-metadata': 'Rebuild Index',
       'metadata-backfill': 'Metadata Backfill',
+      'repair-thumbnails': 'Repair Thumbnails',
       'index-similarity': 'Similarity Index',
       'transcribe-sample': 'Speech Sample',
       transcribe: 'Transcribe',
@@ -464,6 +467,7 @@ const i18n = {
       'model-pull-recommended': 'Download the default vision, face, and speech models into /models.',
       'index-metadata': 'Import organized files and manifests into the virtual SQLite library.',
       'metadata-backfill': 'Fill missing duration, dimensions, and resolution using local ffprobe/Pillow.',
+      'repair-thumbnails': 'Check and rebuild missing or corrupted media thumbnails. Photos use Pillow; videos use software FFmpeg fallback.',
       'index-similarity': 'Build exact duplicate, image perceptual hash, and video keyframe similarity groups.',
       'transcribe-sample': 'Transcribe up to 5 videos that do not have transcript text.',
       transcribe: 'Transcribe more videos that do not have transcript text.',
@@ -809,6 +813,8 @@ const i18n = {
     searchNow: '立即搜索',
     diagnosticsTitle: '搜索能力诊断',
     diagnosticsHint: '检查索引覆盖率、元数据完整度、缩略图缓存、字幕转写和下一步建议。',
+    thumbnailHealth: '缩略图健康度',
+    thumbnailHealthHint: '抽样检查缓存预览图。坏图通常是硬解抽帧色彩异常或旧缓存，可批量修复。',
     coverage: '覆盖率',
     nextActions: '下一步建议',
     runAction: '执行',
@@ -875,6 +881,7 @@ const i18n = {
       'model-pull-recommended': '下载推荐模型',
       'index-metadata': '重建索引',
       'metadata-backfill': '元数据回填',
+      'repair-thumbnails': '修复缩略图',
       'index-similarity': '相似索引',
       'transcribe-sample': '语音样本',
       transcribe: '语音转写',
@@ -925,6 +932,7 @@ const i18n = {
       'model-pull-recommended': '把默认视觉、人脸、语音模型下载到 /models。',
       'index-metadata': '把已整理文件和清单导入 SQLite 虚拟媒体库。',
       'metadata-backfill': '用本地 ffprobe/Pillow 补齐缺失的时长、尺寸和分辨率。',
+      'repair-thumbnails': '检查并重建缺失/损坏的媒体缩略图。图片用 Pillow，视频用软件 FFmpeg 兜底。',
       'index-similarity': '生成精确重复、图片感知 hash、视频关键帧相似组。',
       'transcribe-sample': '最多转写 5 个还没有文字的视频。',
       transcribe: '继续转写更多还没有文字的视频。',
@@ -977,6 +985,7 @@ const commands = [
   ['workflow-transcribe-sample', 'Speech Sample', Mic, 'Transcribe a small local video sample'],
   ['index-metadata', 'Rebuild Index', Database, 'Import organized files into the virtual media library'],
   ['metadata-backfill', 'Metadata Backfill', Database, 'Fill duration, dimensions, and resolution'],
+  ['repair-thumbnails', 'Repair Thumbnails', Camera, 'Repair missing or corrupted thumbnail cache'],
   ['index-similarity', 'Similarity Index', Archive, 'Build duplicate and similarity groups'],
   ['transcribe-sample', 'Speech Sample', Mic, 'Transcribe up to 5 videos'],
   ['transcribe', 'Transcribe', Mic, 'Transcribe more videos'],
@@ -1146,6 +1155,8 @@ function jobStageLabel(stage, t) {
     'index-vision': 'index-vision',
     'index-similarity': 'index-similarity',
     'index-metadata': 'index-metadata',
+    'metadata-backfill': 'metadata-backfill',
+    'thumbnail-repair': 'repair-thumbnails',
     transcribe: 'transcribe',
     'model-download': 'model-pull-recommended',
   };
@@ -2493,6 +2504,7 @@ function QuickFindPanel({ mediaResults, mediaFilters, loadMedia, onDeleted, onPa
 function DiagnosticsPanel({ diagnostics, refresh, start, busy, t }) {
   const coverage = diagnostics?.coverage || [];
   const recommendations = diagnostics?.recommendations || [];
+  const thumb = diagnostics?.thumbnail_health || {};
   return (
     <>
       <section className="panel diagnosticsHero">
@@ -2514,6 +2526,27 @@ function DiagnosticsPanel({ diagnostics, refresh, start, busy, t }) {
             </article>
           ))}
         </div>}
+      </section>
+      <section className="panel">
+        <div className="panelHead">
+          <div><h2>{t.thumbnailHealth}</h2><p>{t.thumbnailHealthHint}</p></div>
+          <button className="panelButton" disabled={busy} onClick={() => start('repair-thumbnails')}><Camera size={16} />{t.commandNames?.['repair-thumbnails'] || 'Repair Thumbnails'}</button>
+        </div>
+        <div className="diagnosticsGrid">
+          {[
+            ['cached_files', 'Cached'],
+            ['sample_checked', 'Checked'],
+            ['sample_healthy', 'Healthy'],
+            ['sample_unhealthy', 'Unhealthy'],
+            ['sample_missing', 'Missing'],
+          ].map(([key, label]) => (
+            <article className={`diagnosticCard ${key === 'sample_unhealthy' && Number(thumb[key] || 0) ? 'error' : ''}`} key={key}>
+              <div className="diagnosticTop"><strong>{label}</strong><span>{prettyNumber(thumb[key] || 0)}</span></div>
+              <p>{thumb.cache || 'media_thumbs_v8'}</p>
+            </article>
+          ))}
+        </div>
+        {thumb.error && <div className="hintBox error"><span>{thumb.error}</span></div>}
       </section>
       <section className="panel">
         <div className="panelHead"><h2>{t.nextActions}</h2><span>{recommendations.length}</span></div>

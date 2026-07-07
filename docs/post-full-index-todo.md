@@ -6,6 +6,7 @@ Recent fixes already shipped locally:
 
 - v1.0.14: media library pagination, thumbnail cache revision `media_thumbs_v8`, first-screen thumbnail priority loading, author/face collection zoom consistency, job detail overflow guard.
 - v1.0.15: proactive infinite loading for media library and random waterfall, so pages keep loading when the user gets near the bottom.
+- v1.1.2-dev: batch thumbnail health diagnostics and `repair-thumbnails` workflow for missing/corrupted preview cache.
 
 Do not restart or update the NAS container while the long-running index job is active. Use this file as the unified queue for fixes and optimizations to apply after the run completes.
 
@@ -19,12 +20,12 @@ Do not restart or update the NAS container while the long-running index job is a
 ## Thumbnail And Preview Pipeline
 
 - Investigate yellow/green/magenta corrupted thumbnails in the media library. Likely causes are stale/bad cached previews or hardware-decoded frame color-format artifacts now exposed because the Web UI reuses `frame_index.csv`.
-- Add a thumbnail health checker that detects obvious corrupt previews: extreme green dominance, repeated horizontal bands, near-empty frames, invalid image decode, and suspicious dimensions.
-- For photos, prefer PIL/ImageMagick thumbnails from the original image instead of FFmpeg hardware decode.
-- For videos, retry corrupt VAAPI-extracted frames with software decode and overwrite only the bad cached preview.
+- Done locally: add a thumbnail health checker that detects obvious corrupt previews: extreme green dominance, repeated horizontal bands, near-empty frames, invalid image decode, and suspicious dimensions.
+- Done locally: for photos, prefer Pillow thumbnails from the original image instead of FFmpeg hardware decode.
+- Done locally: for videos, repair corrupt cached previews with software FFmpeg decode and overwrite only the bad cached preview.
 - Add per-media and batch `regenerate thumbnail/contact sheet` actions.
 - Add cache invalidation for old bad previews in `_MANIFESTS/vision_cache`, `_MANIFESTS/media_thumbs_v*`, and `frame_index.csv`.
-- Generate and serve small thumbnails for photos during indexing; only load original media when the viewer opens the item.
+- Done locally: generate and serve small thumbnails for photos; only load original media when the viewer opens the item.
 
 ## Performance
 
