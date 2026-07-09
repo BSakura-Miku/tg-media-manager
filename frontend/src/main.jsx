@@ -55,6 +55,15 @@ const DEFAULT_MEDIA_FILTERS = {
   semantic: '',
 };
 
+function compactSearchParams(values) {
+  const search = new URLSearchParams();
+  Object.entries(values).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    search.set(key, String(value));
+  });
+  return search;
+}
+
 const i18n = {
   en: {
     locale: 'en',
@@ -1648,7 +1657,7 @@ function App() {
       resolution: params.resolution ?? '',
       semantic: params.semantic ?? '',
     };
-    const search = new URLSearchParams({
+    const search = compactSearchParams({
       q: filters.q,
       media_type: filters.media_type,
       tag: filters.tag,
@@ -1656,11 +1665,11 @@ function App() {
       face_group: filters.face_group,
       favorite: filters.favorite,
       has_subtitles: filters.has_subtitles,
-      min_duration: String(filters.min_duration || ''),
-      max_duration: String(filters.max_duration || ''),
+      min_duration: filters.min_duration,
+      max_duration: filters.max_duration,
       resolution: filters.resolution,
-      semantic: filters.semantic ? 'true' : 'false',
-      randomize: params.randomize ? 'true' : 'false',
+      semantic: filters.semantic ? 'true' : '',
+      randomize: params.randomize ? 'true' : '',
       seed: String(params.seed || 0),
       limit: String(params.limit || 80),
       offset: String(params.offset || 0),
@@ -1683,7 +1692,7 @@ function App() {
   }
 
   async function loadRandomMedia(params = {}) {
-    const search = new URLSearchParams({
+    const search = compactSearchParams({
       q: params.q || '',
       media_type: params.media_type || 'all',
       tag: params.tag || '',
@@ -1691,8 +1700,8 @@ function App() {
       face_group: params.face_group || '',
       favorite: params.favorite || '',
       has_subtitles: params.has_subtitles || '',
-      min_duration: String(params.min_duration || ''),
-      max_duration: String(params.max_duration || ''),
+      min_duration: params.min_duration || '',
+      max_duration: params.max_duration || '',
       resolution: params.resolution || '',
       randomize: 'true',
       seed: String(params.seed || 0),

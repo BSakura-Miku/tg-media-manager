@@ -1527,10 +1527,15 @@ def rebuild_semantic_index(
                 if progress:
                     progress("index-semantic", processed, total, row.get("relative_path") or row.get("filename") or "")
         conn.commit()
-        conn.execute(
-            "INSERT INTO media_operations (operation, detail) VALUES (?, ?)",
-            ("rebuild_semantic_index", f"text={text_count} visual={visual_count} processed={processed} root={root}"),
-        )
+        try:
+            conn.execute(
+                "INSERT INTO media_operations (operation, detail) VALUES (?, ?)",
+                ("rebuild_semantic_index", f"text={text_count} visual={visual_count} processed={processed} root={root}"),
+            )
+        except Exception:
+            # The index is already committed; an audit-log lock should not turn a
+            # completed semantic index into a failed job.
+            pass
     if progress:
         progress("index-semantic", processed, total if not cancelled else max(total, processed), "semantic index cancelled" if cancelled else "semantic index complete")
     return {"ok": not cancelled, "cancelled": cancelled, "processed": processed, "text": text_count, "visual": visual_count, "root": str(root)}

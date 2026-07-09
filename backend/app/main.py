@@ -64,6 +64,22 @@ app.add_middleware(
 )
 
 
+def parse_optional_float(value: str | float | int | None, minimum: float = 0) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=f"Invalid number: {value}")
+    if parsed < minimum:
+        raise HTTPException(status_code=422, detail=f"Number must be >= {minimum}")
+    return parsed
+
+
 class JobRequest(BaseModel):
     command: str
 
@@ -227,7 +243,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.1.4").lstrip("v") or "1.1.4"
+    app_version = os.environ.get("APP_SEMVER", "1.1.5").lstrip("v") or "1.1.5"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -1134,8 +1150,8 @@ def api_media(
     face_group: str = Query("", max_length=120),
     favorite: str = Query("", max_length=16),
     has_subtitles: str = Query("", max_length=16),
-    min_duration: float | None = Query(None, ge=0),
-    max_duration: float | None = Query(None, ge=0),
+    min_duration: str = Query("", max_length=40),
+    max_duration: str = Query("", max_length=40),
     resolution: str = Query("", max_length=40),
     include_risk: bool = Query(False),
     semantic: bool = Query(False),
@@ -1146,6 +1162,8 @@ def api_media(
 ) -> dict:
     if media_type == "all" and type_filter in {"photo", "video"}:
         media_type = type_filter
+    min_duration_value = parse_optional_float(min_duration)
+    max_duration_value = parse_optional_float(max_duration)
     if semantic and q.strip() and not include_risk and not randomize:
         return semantic_media_search(
             q=q.strip(),
@@ -1155,8 +1173,8 @@ def api_media(
             face_group=face_group.strip(),
             favorite=favorite.strip().lower(),
             has_subtitles=has_subtitles.strip().lower(),
-            min_duration=min_duration,
-            max_duration=max_duration,
+            min_duration=min_duration_value,
+            max_duration=max_duration_value,
             resolution=resolution.strip(),
             limit=limit,
         )
@@ -1168,8 +1186,8 @@ def api_media(
         face_group=face_group.strip(),
         favorite=favorite.strip().lower(),
         has_subtitles=has_subtitles.strip().lower(),
-        min_duration=min_duration,
-        max_duration=max_duration,
+        min_duration=min_duration_value,
+        max_duration=max_duration_value,
         resolution=resolution.strip(),
         limit=limit,
         offset=offset,
