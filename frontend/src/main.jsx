@@ -382,6 +382,12 @@ const i18n = {
     semanticScore: 'Semantic',
     semanticFallbackHint: 'Uses local BGE/OpenCLIP vectors when ready; otherwise falls back to filename, tags, subtitles, and hash vectors.',
     understoodQuery: 'Understood',
+    aiUnderstanding: 'AI understanding',
+    intentPrefer: 'Prefer',
+    intentMust: 'Must',
+    intentExclude: 'Exclude',
+    intentConfidence: 'Confidence',
+    intentProvider: 'Provider',
     recentSearches: 'Recent searches',
     savedSearch: 'Saved search',
     savedSearchName: 'Saved search name',
@@ -894,6 +900,12 @@ const i18n = {
     semanticScore: '语义',
     semanticFallbackHint: '本地 BGE/OpenCLIP 就绪时使用向量排序；模型缺失时自动用文件名、标签、字幕和 hash 向量兜底。',
     understoodQuery: '已理解为',
+    aiUnderstanding: 'AI 理解',
+    intentPrefer: '偏好',
+    intentMust: '强意图',
+    intentExclude: '排除',
+    intentConfidence: '置信度',
+    intentProvider: '理解器',
     recentSearches: '最近搜索',
     savedSearch: '保存的搜索',
     savedSearchName: '搜索条件名称',
@@ -2605,6 +2617,7 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
   const [panelError, setPanelError] = useState('');
   const [saving, setSaving] = useState(false);
   const [parsed, setParsed] = useState(null);
+  const [understanding, setUnderstanding] = useState(null);
   const [recentSearches, setRecentSearches] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('recentSmartSearches') || '[]');
@@ -2616,14 +2629,21 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
     const text = String(filters.q || '').trim();
     if (!text) {
       setParsed(null);
+      setUnderstanding(null);
       return undefined;
     }
     const controller = new AbortController();
     const id = setTimeout(() => {
       api(`/api/search/parse?${compactSearchParams({ q: text })}`, { signal: controller.signal })
-        .then(data => setParsed(data.parsed || null))
+        .then(data => {
+          setParsed(data.parsed || data.understanding?.parsed || null);
+          setUnderstanding(data.understanding || null);
+        })
         .catch(exc => {
-          if (exc.name !== 'AbortError') setParsed(null);
+          if (exc.name !== 'AbortError') {
+            setParsed(null);
+            setUnderstanding(null);
+          }
         });
     }, 220);
     return () => {
@@ -2704,6 +2724,13 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
     '户外 露出 短视频',
   ];
   const parsedItems = parsed?.explain || [];
+  const intent = understanding?.intent || {};
+  const intentGroups = [
+    [t.intentMust, intent.must || [], 'must'],
+    [t.intentPrefer, intent.prefer || [], 'prefer'],
+    [t.intentExclude, intent.exclude || [], 'exclude'],
+    [t.intentExclude, intent.exclude_terms || [], 'exclude'],
+  ].filter(([, values]) => values.length);
   return (
     <section className="panel quickFindPanel smartSearchPanel">
       <div className="panelHead smartHero">
@@ -2718,7 +2745,20 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
         <label className="inlineCheck"><input type="checkbox" checked={!!filters.semantic} onChange={event => update('semantic', event.target.checked ? 'true' : '')} />{t.semanticMode}</label>
         <span>{t.semanticFallbackHint}</span>
       </div>
-      {!!parsedItems.length && <div className="parsedBox"><strong>{t.understoodQuery}</strong>{parsedItems.map(item => <span key={item}>{item}</span>)}</div>}
+      {(!!parsedItems.length || !!intentGroups.length) && <div className="parsedBox aiUnderstandingBox">
+        <div className="aiUnderstandingHead">
+          <strong>{t.aiUnderstanding}</strong>
+          {understanding?.provider && <span>{t.intentProvider}: {understanding.provider}</span>}
+          {typeof understanding?.confidence === 'number' && <span>{t.intentConfidence}: {Math.round(understanding.confidence * 100)}%</span>}
+        </div>
+        {!!parsedItems.length && <div className="aiIntentLine"><b>{t.understoodQuery}</b>{parsedItems.map(item => <span key={item}>{item}</span>)}</div>}
+        {intentGroups.map(([label, values, kind], index) => (
+          <div className={`aiIntentLine ${kind}`} key={`${label}-${kind}-${index}`}>
+            <b>{label}</b>
+            {values.map(item => <span key={`${label}-${item}`}>{item}</span>)}
+          </div>
+        ))}
+      </div>}
       <div className="quickChips suggestionChips">
         {shortcuts.map(value => <button key={value} type="button" onClick={() => { applySemanticPreset(value); }}>{value}</button>)}
       </div>

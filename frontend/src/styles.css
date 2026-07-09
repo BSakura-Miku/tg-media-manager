@@ -295,6 +295,42 @@ select, input {
   background: color-mix(in srgb, var(--panel-2) 80%, transparent);
 }
 
+.aiUnderstandingBox {
+  display: grid;
+  align-items: stretch;
+}
+
+.aiUnderstandingHead,
+.aiIntentLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.aiUnderstandingHead {
+  padding-bottom: 4px;
+}
+
+.aiIntentLine {
+  padding-top: 4px;
+}
+
+.aiIntentLine b {
+  color: var(--soft);
+  font-size: 12px;
+  min-width: 64px;
+}
+
+.aiIntentLine.exclude span {
+  background: color-mix(in srgb, var(--danger) 18%, var(--panel-3));
+}
+
+.aiIntentLine.must span {
+  background: color-mix(in srgb, var(--accent-2) 20%, var(--panel-3));
+}
+
 .parsedBox strong {
   color: var(--soft);
   margin-right: 2px;

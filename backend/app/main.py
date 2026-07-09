@@ -43,6 +43,7 @@ from .metadata import (
     subtitle_for_media,
     tag_graph,
     train_vision_calibrators,
+    understand_search_query,
     vision_calibrator_status,
 )
 from .model_manager import MODEL_REGISTRY, delete_model, model_catalog, sha256_setting_key, source_setting_key
@@ -1143,7 +1144,13 @@ def api_search(
 
 @app.get("/api/search/parse")
 def api_search_parse(q: str = Query("", max_length=300)) -> dict:
-    return {"query": q, "parsed": parse_natural_search(q)}
+    understanding = understand_search_query(q)
+    return {"query": q, "parsed": understanding.get("parsed") or parse_natural_search(q), "understanding": understanding}
+
+
+@app.get("/api/search/understand")
+def api_search_understand(q: str = Query("", max_length=300)) -> dict:
+    return understand_search_query(q)
 
 
 @app.get("/api/media")
@@ -1171,7 +1178,8 @@ def api_media(
     min_duration_value = parse_optional_float(min_duration)
     max_duration_value = parse_optional_float(max_duration)
     if semantic and q.strip() and not include_risk and not randomize:
-        parsed = parse_natural_search(q.strip())
+        understanding = understand_search_query(q.strip())
+        parsed = understanding.get("parsed") or parse_natural_search(q.strip())
         semantic_media_type = media_type if media_type != "all" else (parsed.get("media_type") or "all")
         semantic_tag = tag.strip()
         semantic_author = author.strip() or str(parsed.get("author") or "")
@@ -1193,6 +1201,7 @@ def api_media(
             max_duration=semantic_max_duration,
             resolution=semantic_resolution,
             limit=limit,
+            intent=(understanding.get("intent") or {}),
         )
     return media_query(
         q=q.strip(),
@@ -1319,7 +1328,9 @@ def api_rebuild_semantic() -> dict:
 
 @app.get("/api/media/semantic-search")
 def api_semantic_search(q: str = Query("", max_length=300), limit: int = Query(80, ge=1, le=200)) -> dict:
-    return semantic_media_search(q=q, limit=limit)
+    understanding = understand_search_query(q)
+    parsed = understanding.get("parsed") or {}
+    return semantic_media_search(q=str(parsed.get("semantic_query") or q), limit=limit, intent=understanding.get("intent") or {})
 
 
 @app.get("/api/media/{media_id}/similar")

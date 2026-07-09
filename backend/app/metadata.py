@@ -1686,6 +1686,137 @@ def normalize_nl_search_text(text: str) -> str:
     return normalized
 
 
+def _unique_ordered(items: list[str] | tuple[str, ...]) -> list[str]:
+    return [item for item in dict.fromkeys(str(item).strip() for item in items if str(item).strip())]
+
+
+def _alias_negative_context(haystack: str, alias: str) -> bool:
+    alias_lower = alias.lower()
+    start = haystack.find(alias_lower)
+    while start >= 0:
+        prefix = haystack[max(0, start - 3):start]
+        if re.search(r"(不要|别|排除|去掉|不想要|不包含|不要有|不要看|过滤)", prefix):
+            return True
+        start = haystack.find(alias_lower, start + len(alias_lower))
+    return False
+
+
+def _alias_negative_context_any(alias: str, *texts: str) -> bool:
+    return any(_alias_negative_context(text, alias) for text in texts if text)
+
+
+def understand_search_query(query: str) -> dict:
+    text = (query or "").strip()
+    normalized_text = normalize_nl_search_text(text)
+    haystack = f"{text.lower()} {normalized_text.lower()}"
+    parsed = parse_natural_search(text)
+    must: list[str] = []
+    prefer: list[str] = []
+    exclude: list[str] = []
+    exclude_terms: list[str] = []
+    semantic_terms: list[str] = [text, normalized_text]
+    matched_aliases: list[dict] = []
+
+    for canonical, aliases in NL_TAG_ALIASES:
+        positive_aliases = []
+        negative_aliases = []
+        for alias in aliases:
+            alias_lower = alias.lower()
+            if alias_lower not in haystack:
+                continue
+            if _alias_negative_context_any(alias, text.lower(), normalized_text.lower()):
+                negative_aliases.append(alias)
+            else:
+                positive_aliases.append(alias)
+        if negative_aliases and not positive_aliases:
+            exclude.append(canonical)
+            matched_aliases.append({"tag": canonical, "aliases": _unique_ordered(negative_aliases), "polarity": "exclude"})
+            continue
+        if negative_aliases:
+            exclude_terms.extend(negative_aliases)
+        if positive_aliases:
+            prefer.append(canonical)
+            semantic_terms.extend(positive_aliases)
+            semantic_terms.extend(SEARCH_TAG_EXPANSIONS.get(canonical, ()))
+            matched_aliases.append({"tag": canonical, "aliases": _unique_ordered(positive_aliases), "polarity": "prefer"})
+
+    strong_patterns = {
+        "scene": r"(必须|一定要|只看|就要|限定).{0,8}(室内|户外|教室|酒店|卧室|公园|街拍)",
+        "clothing": r"(必须|一定要|只看|就要|限定).{0,8}(制服|校服|水手服|黑丝|白丝|丝袜|cos|jk)",
+        "media": r"(只看|就要|必须).{0,8}(视频|图片|照片)",
+    }
+    if any(re.search(pattern, haystack) for pattern in strong_patterns.values()):
+        must.extend(prefer)
+
+    if parsed.get("resolution"):
+        semantic_terms.append(str(parsed["resolution"]))
+    if parsed.get("has_subtitles"):
+        semantic_terms.extend(["字幕", "转写", "台词", "对白"])
+    if parsed.get("favorite"):
+        semantic_terms.append("收藏")
+    for label, aliases in NL_QUERY_EXPANSIONS.items():
+        if any(alias.lower() in haystack for alias in aliases):
+            semantic_terms.append(label)
+            semantic_terms.extend(aliases)
+
+    prefer = _unique_ordered(prefer)
+    must = _unique_ordered(must)
+    exclude = _unique_ordered(exclude)
+    parsed["tag"] = ",".join(prefer)
+    semantic_terms.extend(prefer)
+    for tag in prefer:
+        semantic_terms.extend(SEARCH_TAG_EXPANSIONS.get(tag, ()))
+    parsed["semantic_query"] = " ".join(_unique_ordered(semantic_terms))
+    parsed["explain"] = [
+        item for item in parsed.get("explain", [])
+        if not str(item).startswith("标签:")
+    ]
+    if prefer:
+        parsed["explain"].append("偏好标签: " + ",".join(prefer))
+    if must:
+        parsed["explain"].append("强意图: " + ",".join(must))
+    if exclude:
+        parsed["explain"].append("排除: " + ",".join(exclude))
+    if exclude_terms:
+        parsed["explain"].append("排除词: " + ",".join(_unique_ordered(exclude_terms)))
+
+    categories = defaultdict(list)
+    for tag in prefer:
+        categories[category_for_tag(tag)].append(tag)
+    confidence = 0.25
+    confidence += min(0.45, len(prefer) * 0.09)
+    confidence += 0.12 if parsed.get("media_type") != "all" else 0
+    confidence += 0.08 if parsed.get("min_duration") or parsed.get("max_duration") else 0
+    confidence += 0.06 if parsed.get("resolution") else 0
+    confidence = min(0.95, confidence)
+    return {
+        "provider": "local-intent-v1",
+        "query": text,
+        "normalized_query": normalized_text,
+        "confidence": round(confidence, 3),
+        "parsed": parsed,
+        "intent": {
+            "must": must,
+            "prefer": prefer,
+            "exclude": exclude,
+            "exclude_terms": _unique_ordered(exclude_terms),
+            "categories": {key: _unique_ordered(value) for key, value in categories.items()},
+            "semantic_terms": _unique_ordered(semantic_terms)[:80],
+            "matched_aliases": matched_aliases,
+        },
+        "filters": {
+            "media_type": parsed.get("media_type") or "all",
+            "author": parsed.get("author") or "",
+            "face_group": parsed.get("face_group") or "",
+            "favorite": parsed.get("favorite") or "",
+            "has_subtitles": parsed.get("has_subtitles") or "",
+            "min_duration": parsed.get("min_duration"),
+            "max_duration": parsed.get("max_duration"),
+            "resolution": parsed.get("resolution") or "",
+        },
+    }
+
+
 def parse_natural_search(query: str) -> dict:
     text = (query or "").strip()
     normalized_text = normalize_nl_search_text(text)
@@ -1988,6 +2119,7 @@ def semantic_media_search(
     max_duration: float | None = None,
     resolution: str = "",
     limit: int = 80,
+    intent: dict | None = None,
 ) -> dict:
     query = q.strip()
     if not query:
@@ -2041,26 +2173,52 @@ def semantic_media_search(
         ).fetchall()
         scores: dict[int, tuple[float, dict, list[str]]] = {}
         weights = {"bge_text": 1.15, "text": 1.0, "subtitle": 0.9, "tag": 1.05}
+        preferred_tags = [str(item).strip() for item in ((intent or {}).get("prefer") or []) if str(item).strip()]
+        must_tags = [str(item).strip() for item in ((intent or {}).get("must") or []) if str(item).strip()]
+        excluded_tags = [str(item).strip() for item in ((intent or {}).get("exclude") or []) if str(item).strip()]
+        excluded_terms = [str(item).strip().lower() for item in ((intent or {}).get("exclude_terms") or []) if str(item).strip()]
         for row in rows:
             data = dict(row)
             kind = str(data.get("kind") or "")
+            item_tags = [part.strip() for part in str(data.get("tags") or "").split(",") if part.strip()]
+            if excluded_tags and any(any(excluded.lower() in item.lower() for item in item_tags) for excluded in excluded_tags):
+                continue
+            item_search_text = " ".join([
+                str(data.get("filename") or ""),
+                str(data.get("original_name") or ""),
+                str(data.get("author") or ""),
+                str(data.get("tags") or ""),
+            ]).lower()
+            if excluded_terms and any(term in item_search_text for term in excluded_terms):
+                continue
             vector = unpack_vector(data.pop("vector", None), int(data.get("dim") or 0))
             score = cosine_similarity(query_vector, vector) * weights.get(kind, 1.0)
+            item_tag_text = " ".join(item_tags).lower()
+            preferred_hits = [tag_name for tag_name in preferred_tags if tag_name.lower() in item_tag_text]
+            must_hits = [tag_name for tag_name in must_tags if tag_name.lower() in item_tag_text]
+            if preferred_hits:
+                score += min(0.28, 0.07 * len(preferred_hits))
+            if must_hits:
+                score += min(0.36, 0.12 * len(must_hits))
             if tag:
                 score += 0.08
             if author:
                 score += 0.05
             media_id = int(data["media_id"])
             reasons = semantic_match_reasons(data, query, score, kind)
+            if preferred_hits:
+                reasons.append("AI意图命中: " + ",".join(preferred_hits[:3]))
+            if must_hits:
+                reasons.append("强意图命中: " + ",".join(must_hits[:3]))
             if score > scores.get(media_id, (0.0, {}, []))[0]:
-                scores[media_id] = (score, data, reasons)
+                scores[media_id] = (score, data, reasons[:5])
         for score, data, reasons in sorted(scores.values(), key=lambda item: item[0], reverse=True)[:limit]:
             data["semantic_score"] = round(score, 6)
             data["match_reasons"] = reasons
             rows_out.append(data)
     if not rows_out:
         return media_query(q=query, media_type=media_type, tag=tag, author=author, face_group=face_group, favorite=favorite, has_subtitles=has_subtitles, min_duration=min_duration, max_duration=max_duration, resolution=resolution, limit=limit)
-    return {"total": len(rows_out), "limit": limit, "offset": 0, "semantic": True, "query": query, "items": rows_out}
+    return {"total": len(rows_out), "limit": limit, "offset": 0, "semantic": True, "query": query, "understanding": intent or {}, "items": rows_out}
 
 
 def similar_media(media_id: int, limit: int = 40) -> dict:
