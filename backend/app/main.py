@@ -28,6 +28,7 @@ from .metadata import (
     media_for_author,
     media_query,
     mime_for,
+    parse_natural_search,
     rebuild_metadata_index,
     rebuild_semantic_index,
     rebuild_similarity_index,
@@ -243,7 +244,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.1.5").lstrip("v") or "1.1.5"
+    app_version = os.environ.get("APP_SEMVER", "1.1.6").lstrip("v") or "1.1.6"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -1140,6 +1141,11 @@ def api_search(
     return {"query": q, "source": source, "limit": limit, "results": results}
 
 
+@app.get("/api/search/parse")
+def api_search_parse(q: str = Query("", max_length=300)) -> dict:
+    return {"query": q, "parsed": parse_natural_search(q)}
+
+
 @app.get("/api/media")
 def api_media(
     q: str = Query("", max_length=200),
@@ -1165,17 +1171,27 @@ def api_media(
     min_duration_value = parse_optional_float(min_duration)
     max_duration_value = parse_optional_float(max_duration)
     if semantic and q.strip() and not include_risk and not randomize:
+        parsed = parse_natural_search(q.strip())
+        semantic_media_type = media_type if media_type != "all" else (parsed.get("media_type") or "all")
+        semantic_tag = tag.strip() or str(parsed.get("tag") or "")
+        semantic_author = author.strip() or str(parsed.get("author") or "")
+        semantic_face_group = face_group.strip() or str(parsed.get("face_group") or "")
+        semantic_favorite = favorite.strip().lower() or str(parsed.get("favorite") or "")
+        semantic_has_subtitles = has_subtitles.strip().lower() or str(parsed.get("has_subtitles") or "")
+        semantic_min_duration = min_duration_value if min_duration_value is not None else parsed.get("min_duration")
+        semantic_max_duration = max_duration_value if max_duration_value is not None else parsed.get("max_duration")
+        semantic_resolution = resolution.strip() or str(parsed.get("resolution") or "")
         return semantic_media_search(
             q=q.strip(),
-            media_type=media_type,
-            tag=tag.strip(),
-            author=author.strip(),
-            face_group=face_group.strip(),
-            favorite=favorite.strip().lower(),
-            has_subtitles=has_subtitles.strip().lower(),
-            min_duration=min_duration_value,
-            max_duration=max_duration_value,
-            resolution=resolution.strip(),
+            media_type=semantic_media_type,
+            tag=semantic_tag,
+            author=semantic_author,
+            face_group=semantic_face_group,
+            favorite=semantic_favorite,
+            has_subtitles=semantic_has_subtitles,
+            min_duration=semantic_min_duration,
+            max_duration=semantic_max_duration,
+            resolution=semantic_resolution,
             limit=limit,
         )
     return media_query(

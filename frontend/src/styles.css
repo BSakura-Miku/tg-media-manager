@@ -224,15 +224,90 @@ select, input {
   gap: 12px;
 }
 
+.smartSearchPanel {
+  position: relative;
+  overflow: hidden;
+}
+
+.smartHero {
+  align-items: flex-start;
+}
+
+.smartHero h2 {
+  font-size: clamp(24px, 3vw, 42px);
+  letter-spacing: 0;
+}
+
+.smartHero p {
+  max-width: 760px;
+}
+
 .quickFindForm {
   display: grid;
   grid-template-columns: minmax(260px, 1.5fr) 140px minmax(160px, 1fr) minmax(160px, 1fr) auto;
   gap: 8px;
 }
 
+.smartSearchForm {
+  grid-template-columns: minmax(260px, 1fr) auto;
+  align-items: stretch;
+}
+
 .quickFindInput {
   font-size: 15px;
   font-weight: 650;
+}
+
+.smartSearchForm .quickFindInput {
+  min-height: 56px;
+  padding: 0 18px;
+  border-radius: 18px;
+  font-size: clamp(16px, 1.4vw, 22px);
+}
+
+.smartSearchForm button {
+  min-width: 148px;
+  border-radius: 18px;
+}
+
+.smartSearchMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.smartSearchMeta .inlineCheck {
+  min-height: 34px;
+  border-radius: 999px;
+}
+
+.parsedBox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel-2) 80%, transparent);
+}
+
+.parsedBox strong {
+  color: var(--soft);
+  margin-right: 2px;
+}
+
+.parsedBox span,
+.recentSearchChip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel-3));
+  color: var(--text);
+  font-weight: 800;
+  font-size: 12px;
 }
 
 .quickChips {
@@ -246,6 +321,12 @@ select, input {
   padding: 0 12px;
   border-radius: 999px;
   background: var(--panel-2);
+}
+
+.suggestionChips button {
+  height: 36px;
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  color: var(--soft);
 }
 
 .quickAdvanced {
@@ -303,7 +384,18 @@ select, input {
 .savedSearchList {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+
+.savedSearchList strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.recentSearchChip {
+  border: 1px solid var(--line);
+  cursor: pointer;
 }
 
 .savedSearchChip {
@@ -507,6 +599,27 @@ select, input {
   white-space: nowrap;
 }
 .mediaMeta p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.matchReasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 1px;
+}
+
+.matchReasons span {
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--soft);
+  font-size: 11px;
+  font-weight: 800;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1561,6 +1674,11 @@ tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); col
 
 .capabilityCard b {
   color: var(--soft);
+}
+
+.capabilityAction {
+  justify-self: start;
+  margin-top: 2px;
 }
 .modelPanel .panelHead p {
   margin: 6px 0 0;

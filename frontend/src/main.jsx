@@ -379,6 +379,10 @@ const i18n = {
     maxDurationSeconds: 'Max seconds',
     resolutionFilter: 'Resolution',
     semanticMode: 'Semantic ranking',
+    semanticScore: 'Semantic',
+    semanticFallbackHint: 'Uses local BGE/OpenCLIP vectors when ready; otherwise falls back to filename, tags, subtitles, and hash vectors.',
+    understoodQuery: 'Understood',
+    recentSearches: 'Recent searches',
     savedSearch: 'Saved search',
     savedSearchName: 'Saved search name',
     saveSearch: 'Save search',
@@ -472,6 +476,10 @@ const i18n = {
       'metadata-backfill': 'Metadata Backfill',
       'repair-thumbnails': 'Repair Thumbnails',
       'index-similarity': 'Similarity Index',
+      'index-semantic-text': 'Text Semantic Index',
+      'index-semantic-vision': 'Vision Semantic Index',
+      'index-semantic-all': 'Semantic Index',
+      'diagnose-search': 'Diagnose Search',
       'transcribe-sample': 'Speech Sample',
       transcribe: 'Transcribe',
       scan: 'Scan',
@@ -506,6 +514,7 @@ const i18n = {
       'model-pull-insightface-buffalo-l': 'Download InsightFace',
       'model-pull-faster-whisper-small': 'Download Whisper Small',
       'model-pull-funasr-nano-onnx': 'Download Fun-ASR-Nano ONNX',
+      'model-pull-bge-small-text': 'Download BGE Text',
       'model-pull-sensevoice-small-gguf': 'Download SenseVoice GGUF',
       'model-pull-sensevoice-fsmn-vad-gguf': 'Download SenseVoice VAD',
       'model-pull-sensevoice-llamacpp-runtime': 'Download SenseVoice Runtime',
@@ -523,6 +532,10 @@ const i18n = {
       'metadata-backfill': 'Fill missing duration, dimensions, and resolution using local ffprobe/Pillow.',
       'repair-thumbnails': 'Check and rebuild missing or corrupted media thumbnails. Photos use Pillow; videos use software FFmpeg fallback.',
       'index-similarity': 'Build exact duplicate, image perceptual hash, and video keyframe similarity groups.',
+      'index-semantic-text': 'Build BGE/hash vectors for filenames, tags, authors, subtitles, and transcript text.',
+      'index-semantic-vision': 'Build OpenCLIP/hash vectors from cached image and video keyframes.',
+      'index-semantic-all': 'Refresh both text and visual semantic search indexes.',
+      'diagnose-search': 'Print search capability coverage and missing model/index diagnostics.',
       'transcribe-sample': 'Transcribe up to 5 videos that do not have transcript text.',
       transcribe: 'Transcribe more videos that do not have transcript text.',
       scan: 'Read source folders and write manifest_all.csv plus move_plan.csv. Does not move by itself.',
@@ -557,6 +570,7 @@ const i18n = {
       'model-pull-insightface-buffalo-l': 'Download/cache the InsightFace buffalo_l model.',
       'model-pull-faster-whisper-small': 'Download/cache the faster-whisper small fallback model.',
       'model-pull-funasr-nano-onnx': 'Download/cache the optional Fun-ASR-Nano ONNX subtitle model pack.',
+      'model-pull-bge-small-text': 'Download/cache the optional BGE text embedding model for semantic search.',
       'model-pull-sensevoice-small-gguf': 'Download the SenseVoice GGUF file from the Web-configured URL.',
       'model-pull-sensevoice-fsmn-vad-gguf': 'Download the FSMN VAD GGUF file required by SenseVoice runtime.',
       'model-pull-sensevoice-llamacpp-runtime': 'Download and unpack the FunASR llama.cpp runtime for SenseVoice.',
@@ -877,6 +891,10 @@ const i18n = {
     maxDurationSeconds: '最大时长秒',
     resolutionFilter: '分辨率',
     semanticMode: '语义排序',
+    semanticScore: '语义',
+    semanticFallbackHint: '本地 BGE/OpenCLIP 就绪时使用向量排序；模型缺失时自动用文件名、标签、字幕和 hash 向量兜底。',
+    understoodQuery: '已理解为',
+    recentSearches: '最近搜索',
     savedSearch: '保存的搜索',
     savedSearchName: '搜索条件名称',
     saveSearch: '保存搜索',
@@ -970,6 +988,10 @@ const i18n = {
       'metadata-backfill': '元数据回填',
       'repair-thumbnails': '修复缩略图',
       'index-similarity': '相似索引',
+      'index-semantic-text': '文本语义索引',
+      'index-semantic-vision': '视觉语义索引',
+      'index-semantic-all': '语义索引',
+      'diagnose-search': '诊断搜索能力',
       'transcribe-sample': '语音样本',
       transcribe: '语音转写',
       scan: '扫描清单',
@@ -1004,6 +1026,7 @@ const i18n = {
       'model-pull-insightface-buffalo-l': '下载 InsightFace',
       'model-pull-faster-whisper-small': '下载 Whisper Small',
       'model-pull-funasr-nano-onnx': '下载 Fun-ASR-Nano ONNX',
+      'model-pull-bge-small-text': '下载 BGE 文本向量',
       'model-pull-sensevoice-small-gguf': '下载 SenseVoice GGUF',
       'model-pull-sensevoice-fsmn-vad-gguf': '下载 SenseVoice VAD',
       'model-pull-sensevoice-llamacpp-runtime': '下载 SenseVoice 运行时',
@@ -1021,6 +1044,10 @@ const i18n = {
       'metadata-backfill': '用本地 ffprobe/Pillow 补齐缺失的时长、尺寸和分辨率。',
       'repair-thumbnails': '检查并重建缺失/损坏的媒体缩略图。图片用 Pillow，视频用软件 FFmpeg 兜底。',
       'index-similarity': '生成精确重复、图片感知 hash、视频关键帧相似组。',
+      'index-semantic-text': '为文件名、标签、作者、字幕和转写文字生成 BGE/hash 向量。',
+      'index-semantic-vision': '从缓存图片和视频关键帧生成 OpenCLIP/hash 视觉向量。',
+      'index-semantic-all': '刷新文本和视觉两类语义搜索索引。',
+      'diagnose-search': '输出搜索覆盖率、缺失模型和索引诊断。',
       'transcribe-sample': '最多转写 5 个还没有文字的视频。',
       transcribe: '继续转写更多还没有文字的视频。',
       scan: '读取来源目录，生成 manifest_all.csv 和 move_plan.csv；本身不移动。',
@@ -1055,6 +1082,7 @@ const i18n = {
       'model-pull-insightface-buffalo-l': '下载/缓存 InsightFace buffalo_l 人脸模型。',
       'model-pull-faster-whisper-small': '下载/缓存 faster-whisper small 回退模型。',
       'model-pull-funasr-nano-onnx': '下载/缓存可选 Fun-ASR-Nano ONNX 字幕模型包。',
+      'model-pull-bge-small-text': '下载/缓存可选 BGE 文本向量模型，用于语义搜索。',
       'model-pull-sensevoice-small-gguf': '从 Web 配置的 URL 下载 SenseVoice GGUF 文件。',
       'model-pull-sensevoice-fsmn-vad-gguf': '下载 SenseVoice 运行时需要的 FSMN VAD GGUF 文件。',
       'model-pull-sensevoice-llamacpp-runtime': '下载并解压 SenseVoice 的 FunASR llama.cpp 运行时。',
@@ -1074,6 +1102,10 @@ const commands = [
   ['metadata-backfill', 'Metadata Backfill', Database, 'Fill duration, dimensions, and resolution'],
   ['repair-thumbnails', 'Repair Thumbnails', Camera, 'Repair missing or corrupted thumbnail cache'],
   ['index-similarity', 'Similarity Index', Archive, 'Build duplicate and similarity groups'],
+  ['index-semantic-text', 'Semantic Text', Search, 'Build text, tag, and subtitle vectors for smart search'],
+  ['index-semantic-vision', 'Semantic Vision', Camera, 'Import visual vectors for similar image/video search'],
+  ['index-semantic-all', 'Semantic All', Search, 'Refresh all smart search vectors'],
+  ['diagnose-search', 'Search Diagnose', HelpCircle, 'Inspect search capability coverage'],
   ['transcribe-sample', 'Speech Sample', Mic, 'Transcribe up to 5 videos'],
   ['transcribe', 'Transcribe', Mic, 'Transcribe more videos'],
   ['scan', 'Scan', Search, 'Rebuild manifests and move plan'],
@@ -1107,15 +1139,13 @@ const commands = [
 
 const nav = [
   ['quickFind', 'quickFind', Search],
-  ['dashboard', 'dashboard', Database],
-  ['jobs', 'jobs', Activity],
   ['library', 'library', Folder],
-  ['tagGraph', 'tagGraph', Share2],
-  ['randomFlow', 'randomFlow', Shuffle],
-  ['models', 'models', HardDrive],
-  ['diagnostics', 'diagnostics', HelpCircle],
   ['authors', 'authors', Users],
   ['faces', 'faces', Users],
+  ['tagGraph', 'tagGraph', Share2],
+  ['models', 'models', HardDrive],
+  ['diagnostics', 'diagnostics', HelpCircle],
+  ['jobs', 'jobs', Activity],
   ['logs', 'logs', TerminalSquare],
   ['settings', 'settings', Settings],
 ];
@@ -1125,7 +1155,7 @@ const workflowSteps = {
   'workflow-review-cleanup': ['normalize', 'keyword-classification', 'review-cleanup', 'refresh-state', 'index-metadata'],
   'workflow-face-balanced': ['extract-frames', 'face-scan', 'face-cluster', 'face-report', 'apply-face-groups'],
   'workflow-vision-plan': ['extract-frames', 'vision-scan', 'index-vision', 'apply-vision-labels'],
-  'workflow-full-library': ['scan', 'filename-analysis', 'keyword-classification', 'apply-move-plan', 'normalize', 'review-cleanup', 'refresh-state', 'extract-frames', 'face-scan', 'face-cluster', 'face-report', 'apply-face-groups', 'vision-scan', 'index-vision', 'apply-vision-labels', 'dedupe', 'index-similarity', 'transcribe', 'index-metadata', 'metadata-backfill'],
+  'workflow-full-library': ['scan', 'filename-analysis', 'keyword-classification', 'apply-move-plan', 'normalize', 'review-cleanup', 'refresh-state', 'extract-frames', 'face-scan', 'face-cluster', 'face-report', 'apply-face-groups', 'vision-scan', 'index-vision', 'apply-vision-labels', 'dedupe', 'index-similarity', 'transcribe', 'index-metadata', 'metadata-backfill', 'index-semantic-all'],
   'workflow-transcribe-sample': ['transcribe', 'index-metadata'],
   'model-pull-recommended': ['model-download', 'model-download', 'model-download', 'model-download', 'model-download'],
 };
@@ -1565,7 +1595,7 @@ function App() {
     setSelectedJob(null);
     setJobLog(null);
     setQuery('');
-    setActive('dashboard');
+    setActive('quickFind');
     if (!auth.enabled) return;
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
     const status = await api('/api/auth/status').catch(() => ({ enabled: true, authenticated: false, local_only: true }));
@@ -2569,17 +2599,70 @@ function TagGraphPanel({ graph, loadTagGraph, openFilteredMedia, t }) {
 }
 
 function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch, deleteSavedSearch, loadMedia, onDeleted, onPatched, mediaZoom, setMediaZoom, t }) {
-  const [filters, setFilters] = useState({ ...DEFAULT_MEDIA_FILTERS, ...(mediaFilters || {}) });
+  const [filters, setFilters] = useState({ ...DEFAULT_MEDIA_FILTERS, semantic: 'true', ...(mediaFilters || {}) });
   const [saveName, setSaveName] = useState('');
   const [loading, setLoading] = useState(false);
   const [panelError, setPanelError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [parsed, setParsed] = useState(null);
+  const [recentSearches, setRecentSearches] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('recentSmartSearches') || '[]');
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    const text = String(filters.q || '').trim();
+    if (!text) {
+      setParsed(null);
+      return undefined;
+    }
+    const controller = new AbortController();
+    const id = setTimeout(() => {
+      api(`/api/search/parse?${compactSearchParams({ q: text })}`, { signal: controller.signal })
+        .then(data => setParsed(data.parsed || null))
+        .catch(exc => {
+          if (exc.name !== 'AbortError') setParsed(null);
+        });
+    }, 220);
+    return () => {
+      clearTimeout(id);
+      controller.abort();
+    };
+  }, [filters.q]);
+  function rememberSearch(text) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return;
+    const next = [trimmed, ...recentSearches.filter(item => item !== trimmed)].slice(0, 8);
+    setRecentSearches(next);
+    localStorage.setItem('recentSmartSearches', JSON.stringify(next));
+  }
+  function effectiveFilters(base = filters) {
+    const p = parsed || {};
+    return {
+      ...base,
+      media_type: base.media_type && base.media_type !== 'all' ? base.media_type : (p.media_type || base.media_type || 'all'),
+      tag: base.tag || p.tag || '',
+      author: base.author || p.author || '',
+      face_group: base.face_group || p.face_group || '',
+      favorite: base.favorite || p.favorite || '',
+      has_subtitles: base.has_subtitles || p.has_subtitles || '',
+      min_duration: base.min_duration || p.min_duration || '',
+      max_duration: base.max_duration || p.max_duration || '',
+      resolution: base.resolution || p.resolution || '',
+      semantic: base.semantic || 'true',
+    };
+  }
   async function run(event) {
     event?.preventDefault();
     setPanelError('');
     setLoading(true);
     try {
-      await loadMedia({ ...filters, limit: 96, offset: 0 });
+      const next = effectiveFilters();
+      setFilters(next);
+      rememberSearch(next.q);
+      await loadMedia({ ...next, limit: 96, offset: 0 });
     } catch (exc) {
       setPanelError(exc.message);
     } finally {
@@ -2591,7 +2674,7 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
   }
   function applySemanticPreset(value) {
     const text = String(value || '').trim();
-    const next = { ...filters, q: text };
+    const next = { ...filters, q: text, semantic: filters.semantic || 'true' };
     const durationMatch = text.match(/(\d+)\s*(?:分钟|min).*?(以上|大于|超过|\+)/);
     if (durationMatch) next.min_duration = String(Number(durationMatch[1]) * 60);
     if (/4k|2160/i.test(text)) next.resolution = '4K';
@@ -2605,7 +2688,7 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
     setSaving(true);
     setPanelError('');
     try {
-      await saveSearch(name, filters);
+      await saveSearch(name, effectiveFilters());
       setSaveName('');
     } catch (exc) {
       setPanelError(exc.message);
@@ -2614,34 +2697,41 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
     }
   }
   const shortcuts = [
-    ['JK学生', 'tag'],
-    ['COS角色', 'tag'],
-    ['自拍露脸', 'tag'],
-    ['黑丝白丝', 'tag'],
-    ['室内居家', 'tag'],
-    ['video', 'media_type'],
-    ['photo', 'media_type'],
+    '找 10 分钟以上 室内 制服 露脸的视频',
+    '找 4K COS 角色 图片',
+    '有字幕的视频',
+    '自拍露脸 黑丝白丝',
+    '户外 露出 短视频',
   ];
+  const parsedItems = parsed?.explain || [];
   return (
-    <section className="panel quickFindPanel">
-      <div className="panelHead">
+    <section className="panel quickFindPanel smartSearchPanel">
+      <div className="panelHead smartHero">
         <div><h2>{t.quickFindTitle}</h2><p>{t.quickFindHint}</p></div>
         <MediaZoomControl value={mediaZoom} setValue={setMediaZoom} t={t} />
       </div>
-      <form className="quickFindForm" onSubmit={run}>
+      <form className="quickFindForm smartSearchForm" onSubmit={run}>
         <input className="quickFindInput" value={filters.q} onChange={event => applySemanticPreset(event.target.value)} placeholder={t.mediaSearch} autoComplete="off" />
-        <select value={filters.media_type} onChange={event => update('media_type', event.target.value)}>
-          <option value="all">{t.allMedia}</option>
-          <option value="photo">{t.photosOnly}</option>
-          <option value="video">{t.videosOnly}</option>
-        </select>
-        <input value={filters.tag} onChange={event => update('tag', event.target.value)} placeholder={t.tags} />
-        <input value={filters.author} onChange={event => update('author', event.target.value)} placeholder={t.authorName} />
         <button type="submit" disabled={loading}><Search size={16} />{loading ? t.loadingMore : t.searchNow}</button>
       </form>
+      <div className="smartSearchMeta">
+        <label className="inlineCheck"><input type="checkbox" checked={!!filters.semantic} onChange={event => update('semantic', event.target.checked ? 'true' : '')} />{t.semanticMode}</label>
+        <span>{t.semanticFallbackHint}</span>
+      </div>
+      {!!parsedItems.length && <div className="parsedBox"><strong>{t.understoodQuery}</strong>{parsedItems.map(item => <span key={item}>{item}</span>)}</div>}
+      <div className="quickChips suggestionChips">
+        {shortcuts.map(value => <button key={value} type="button" onClick={() => { applySemanticPreset(value); }}>{value}</button>)}
+      </div>
       <details className="quickAdvanced">
         <summary>{t.advancedFilters}</summary>
         <div className="quickFindForm compactFilters">
+          <select value={filters.media_type} onChange={event => update('media_type', event.target.value)}>
+            <option value="all">{t.allMedia}</option>
+            <option value="photo">{t.photosOnly}</option>
+            <option value="video">{t.videosOnly}</option>
+          </select>
+          <input value={filters.tag} onChange={event => update('tag', event.target.value)} placeholder={t.tags} />
+          <input value={filters.author} onChange={event => update('author', event.target.value)} placeholder={t.authorName} />
           <input value={filters.face_group} onChange={event => update('face_group', event.target.value)} placeholder={t.faceGroupFilter} />
           <select value={filters.favorite} onChange={event => update('favorite', event.target.value)}>
             <option value="">{t.favoriteAny}</option>
@@ -2656,17 +2746,16 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
           <input type="number" min="0" value={filters.min_duration} onChange={event => update('min_duration', event.target.value)} placeholder={t.minDurationSeconds} />
           <input type="number" min="0" value={filters.max_duration} onChange={event => update('max_duration', event.target.value)} placeholder={t.maxDurationSeconds} />
           <input value={filters.resolution} onChange={event => update('resolution', event.target.value)} placeholder={t.resolutionFilter} />
-          <label className="inlineCheck"><input type="checkbox" checked={!!filters.semantic} onChange={event => update('semantic', event.target.checked ? 'true' : '')} />{t.semanticMode}</label>
         </div>
       </details>
-      <div className="quickChips">
-        {shortcuts.map(([value, key]) => <button key={`${key}-${value}`} onClick={() => { const next = { ...filters, [key]: value }; setFilters(next); loadMedia({ ...next, limit: 96, offset: 0 }).catch(exc => setPanelError(exc.message)); }}>{value === 'video' ? t.videosOnly : value === 'photo' ? t.photosOnly : value}</button>)}
-      </div>
       <div className="savedSearchBox">
         <div className="saveSearchForm">
           <input value={saveName} onChange={event => setSaveName(event.target.value)} placeholder={t.savedSearchName} />
           <button className="panelButton" type="button" disabled={saving} onClick={saveCurrentSearch}><Save size={16} />{t.saveSearch}</button>
         </div>
+        {!!recentSearches.length && <div className="savedSearchList recentSearchList"><strong>{t.recentSearches}</strong>
+          {recentSearches.map(item => <button type="button" className="recentSearchChip" key={item} onClick={() => { applySemanticPreset(item); loadMedia({ ...filters, q: item, semantic: 'true', limit: 96, offset: 0 }).catch(exc => setPanelError(exc.message)); }}>{item}</button>)}
+        </div>}
         {!!savedSearches?.length && <div className="savedSearchList">
           {savedSearches.map(item => (
             <span className="savedSearchChip" key={item.id}>
@@ -3049,6 +3138,12 @@ function MediaGrid({ items, mediaZoom, onDeleted, onPatched, t }) {
             <div className="mediaMeta">
               <strong>{item.author || item.person || item.filename}</strong>
               <p>{item.filename}</p>
+              {(item.semantic_score || item.match_reasons?.length) && (
+                <div className="matchReasons">
+                  {item.semantic_score && <span>{t.semanticScore || 'Semantic'} {Number(item.semantic_score).toFixed(2)}</span>}
+                  {(item.match_reasons || []).slice(0, 3).map(reason => <span key={reason}>{reason}</span>)}
+                </div>
+              )}
               <div className="faceStats">
                 <span>{item.media_type}</span>
                 {item.quality && <span>{item.quality}</span>}
@@ -3573,19 +3668,20 @@ function FieldLabel({ label, help }) {
   );
 }
 
-function CapabilityCenter({ catalog, t }) {
+function CapabilityCenter({ catalog, start, busy, t }) {
   const models = catalog?.models || [];
   const byId = Object.fromEntries(models.map(model => [model.id, model]));
   const ready = id => byId[id]?.status === 'ready';
   const capabilityRows = [
-    { id: 'filename', group: 'core', name: t.filename_analysis, status: 'ready', source: t.builtIn, purpose: t.sourceDirsHint, deleteable: false },
-    { id: 'thumbs', group: 'core', name: t.frameCache, status: 'ready', source: t.builtIn, purpose: t.thumbnailHealthHint, deleteable: false },
-    { id: 'faces', group: 'downloadable', name: t.faces, status: ready('insightface-buffalo-l') ? 'ready' : 'missing', source: 'InsightFace / ArcFace', purpose: t.faceMergeHelp, model: byId['insightface-buffalo-l'], deleteable: true },
-    { id: 'vision', group: 'downloadable', name: t.visionPipeline, status: ready('openclip-vit-l') ? 'ready' : 'missing', source: 'OpenCLIP / CLIP', purpose: t.modelHint, model: byId['openclip-vit-l'], deleteable: true },
-    { id: 'speech', group: 'downloadable', name: t.transcriptWorkflow, status: ready('sensevoice-small-gguf') || ready('funasr-nano-onnx') || ready('faster-whisper-small') ? 'ready' : 'missing', source: 'SenseVoice / Fun-ASR / Whisper', purpose: t.transcribeWorkflowHint, deleteable: true },
-    { id: 'subtitle', group: 'downloadable', name: t.subtitles, status: ready('funasr-nano-onnx') || ready('sensevoice-small-gguf') ? 'ready' : 'missing', source: 'WebVTT generator', purpose: t.textTranscriptOnly, deleteable: false },
-    { id: 'vectors', group: 'downloadable', name: t.diagnosticsTitle, status: ready('bge-small-text') && ready('openclip-vit-l') ? 'ready' : ready('openclip-vit-l') ? 'partial' : 'missing', source: 'BGE + OpenCLIP', purpose: t.quickFindHint, model: byId['bge-small-text'], deleteable: true },
-    { id: 'vlm', group: 'downloadable', name: 'VLM', status: ready('vlm-lite') ? 'ready' : 'missing', source: 'Local VLM', purpose: t.modelHint, model: byId['vlm-lite'], deleteable: true },
+    { id: 'filename', group: 'core', name: t.filename_analysis, status: 'ready', source: t.builtIn, purpose: t.sourceDirsHint, deleteable: false, action: 'analyze-filenames' },
+    { id: 'thumbs', group: 'core', name: t.frameCache, status: 'ready', source: t.builtIn, purpose: t.thumbnailHealthHint, deleteable: false, action: 'repair-thumbnails' },
+    { id: 'metadata', group: 'core', name: t.metadataBackfill, status: 'ready', source: 'ffprobe / Pillow', purpose: t.metadataBackfillHint, deleteable: false, action: 'metadata-backfill' },
+    { id: 'faces', group: 'downloadable', name: t.faces, status: ready('insightface-buffalo-l') ? 'ready' : 'missing', source: 'InsightFace / ArcFace', purpose: t.faceMergeHelp, model: byId['insightface-buffalo-l'], deleteable: true, action: 'workflow-face-balanced' },
+    { id: 'vision', group: 'downloadable', name: t.visionPipeline, status: ready('openclip-vit-l') ? 'ready' : 'missing', source: 'OpenCLIP / CLIP', purpose: t.modelHint, model: byId['openclip-vit-l'], deleteable: true, action: 'index-semantic-vision' },
+    { id: 'speech', group: 'downloadable', name: t.transcriptWorkflow, status: ready('sensevoice-small-gguf') || ready('funasr-nano-onnx') || ready('faster-whisper-small') ? 'ready' : 'missing', source: 'SenseVoice / Fun-ASR / Whisper', purpose: t.transcribeWorkflowHint, deleteable: true, action: 'transcribe' },
+    { id: 'subtitle', group: 'downloadable', name: t.subtitles, status: ready('funasr-nano-onnx') || ready('sensevoice-small-gguf') ? 'ready' : 'missing', source: 'WebVTT generator', purpose: t.textTranscriptOnly, deleteable: false, action: 'index-semantic-text' },
+    { id: 'vectors', group: 'downloadable', name: t.diagnosticsTitle, status: ready('bge-small-text') && ready('openclip-vit-l') ? 'ready' : ready('openclip-vit-l') ? 'partial' : 'missing', source: 'BGE + OpenCLIP', purpose: t.quickFindHint, model: byId['bge-small-text'], deleteable: true, action: 'index-semantic-all' },
+    { id: 'vlm', group: 'downloadable', name: 'VLM', status: ready('vlm-lite') ? 'ready' : 'missing', source: 'Local VLM', purpose: t.modelHint, model: byId['vlm-lite'], deleteable: true, action: 'diagnose-search' },
   ];
   const label = status => ({ ready: t.capabilityReady, partial: t.capabilityPartial, missing: t.capabilityMissing }[status] || status);
   const renderGroup = (group, title) => (
@@ -3598,6 +3694,7 @@ function CapabilityCenter({ catalog, t }) {
             <p><b>{t.purpose}</b> {item.purpose}</p>
             <p><b>{t.source}</b> {item.source}</p>
             <p><b>{t.modelSize}</b> {item.model ? prettyBytes(item.model.bytes) : t.builtIn} · {item.deleteable ? t.deleteable : t.notDeleteable}</p>
+            {item.action && <button type="button" className="panelButton capabilityAction" disabled={busy} onClick={() => start(item.action)}>{t.runAction}: {t.commandNames?.[item.action] || item.action}</button>}
           </article>
         ))}
       </div>
@@ -3656,7 +3753,7 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
         <button className="panelButton" onClick={() => saveManifestSource(manifestDraft)}><Save size={16} />{t.saveModelSource}</button>
         <small>{t.modelManifestHint}</small>
       </div>
-      <CapabilityCenter catalog={catalog} t={t} />
+      <CapabilityCenter catalog={catalog} start={start} busy={busy} t={t} />
       {busy && <div className="hintBox smallHint"><span>{t.modelBusyHint}</span></div>}
       <div className="modelGrid">
         {models.map(model => {

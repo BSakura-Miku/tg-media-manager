@@ -29,6 +29,7 @@ ALLOWED_COMMANDS = {
     "model-pull-insightface-buffalo-l": [["__model_pull__", "insightface-buffalo-l"]],
     "model-pull-faster-whisper-small": [["__model_pull__", "faster-whisper-small"]],
     "model-pull-funasr-nano-onnx": [["__model_pull__", "funasr-nano-onnx"]],
+    "model-pull-bge-small-text": [["__model_pull__", "bge-small-text"]],
     "model-pull-sensevoice-small-gguf": [["__model_pull__", "sensevoice-small-gguf"]],
     "model-pull-sensevoice-fsmn-vad-gguf": [["__model_pull__", "sensevoice-fsmn-vad-gguf"]],
     "model-pull-sensevoice-llamacpp-runtime": [["__model_pull__", "sensevoice-llamacpp-runtime"]],
@@ -69,6 +70,10 @@ ALLOWED_COMMANDS = {
     "repair-thumbnails": ["__thumbnail_repair__"],
     "index-similarity": ["__similarity_index__"],
     "index-semantic": ["__semantic_index__"],
+    "index-semantic-text": ["__semantic_text_index__"],
+    "index-semantic-vision": ["__semantic_vision_index__"],
+    "index-semantic-all": ["__semantic_index__"],
+    "diagnose-search": ["__diagnose_search__"],
     "transcribe-sample": ["__transcribe_sample__"],
     "transcribe": ["__transcribe__"],
 }
@@ -97,6 +102,9 @@ PIPELINE_STAGES = {
     "__thumbnail_repair__": "thumbnail-repair",
     "__similarity_index__": "index-similarity",
     "__semantic_index__": "index-semantic",
+    "__semantic_text_index__": "index-semantic-text",
+    "__semantic_vision_index__": "index-semantic-vision",
+    "__diagnose_search__": "diagnose-search",
     "__transcribe_sample__": "transcribe",
     "__transcribe__": "transcribe",
     "__model_pull__": "model-download",
@@ -514,11 +522,35 @@ def run_job(job_id: int, command: str) -> None:
                 result, captured = run_internal_with_progress(
                     job_id,
                     "index-semantic",
-                    lambda: rebuild_semantic_index(Path(output_root), progress=metadata_progress_printer, cancel_check=lambda: is_cancel_requested(job_id)),
+                    lambda: rebuild_semantic_index(Path(output_root), progress=metadata_progress_printer, cancel_check=lambda: is_cancel_requested(job_id), mode="all"),
                     "semantic index running",
                 )
                 stdout_parts.append(f"$ index-semantic\n{captured}\n{result}")
                 returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
+            elif step == ["__semantic_text_index__"]:
+                result, captured = run_internal_with_progress(
+                    job_id,
+                    "index-semantic-text",
+                    lambda: rebuild_semantic_index(Path(output_root), progress=metadata_progress_printer, cancel_check=lambda: is_cancel_requested(job_id), mode="text"),
+                    "semantic text index running",
+                )
+                stdout_parts.append(f"$ index-semantic-text\n{captured}\n{result}")
+                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
+            elif step == ["__semantic_vision_index__"]:
+                result, captured = run_internal_with_progress(
+                    job_id,
+                    "index-semantic-vision",
+                    lambda: rebuild_semantic_index(Path(output_root), progress=metadata_progress_printer, cancel_check=lambda: is_cancel_requested(job_id), mode="vision"),
+                    "semantic vision index running",
+                )
+                stdout_parts.append(f"$ index-semantic-vision\n{captured}\n{result}")
+                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
+            elif step == ["__diagnose_search__"]:
+                from .metadata import media_index_diagnostics
+
+                result = media_index_diagnostics(Path(output_root))
+                stdout_parts.append(f"$ diagnose-search\n{json.dumps(result, ensure_ascii=False)[:6000]}")
+                returncode = 0
             elif step == ["__transcribe_sample__"]:
                 update_job_progress(job_id, stage="transcribe", message="transcribe sample running")
                 result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=5), "transcribe sample still running")

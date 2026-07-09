@@ -802,10 +802,34 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
         {
             "id": "text_vectors",
             "label": "Text vectors",
-            "ready": int(embedding_counts.get("text", 0)),
+            "ready": int(embedding_counts.get("text", 0) or embedding_counts.get("bge_text", 0)),
             "total": total,
-            "percent": percent(embedding_counts.get("text", 0), total),
-            "action": "index-metadata",
+            "percent": percent(embedding_counts.get("text", 0) or embedding_counts.get("bge_text", 0), total),
+            "action": "index-semantic-text",
+        },
+        {
+            "id": "bge_text_vectors",
+            "label": "BGE text vectors",
+            "ready": int(embedding_counts.get("bge_text", 0)),
+            "total": total,
+            "percent": percent(embedding_counts.get("bge_text", 0), total),
+            "action": "index-semantic-text",
+        },
+        {
+            "id": "subtitle_vectors",
+            "label": "Subtitle vectors",
+            "ready": int(embedding_counts.get("subtitle", 0)),
+            "total": videos,
+            "percent": percent(embedding_counts.get("subtitle", 0), videos),
+            "action": "index-semantic-text",
+        },
+        {
+            "id": "tag_vectors",
+            "label": "Tag vectors",
+            "ready": int(embedding_counts.get("tag", 0)),
+            "total": total,
+            "percent": percent(embedding_counts.get("tag", 0), total),
+            "action": "index-semantic-text",
         },
         {
             "id": "image_vectors",
@@ -813,7 +837,15 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
             "ready": int(embedding_counts.get("image", 0)),
             "total": total,
             "percent": percent(embedding_counts.get("image", 0), total),
-            "action": "index-vision",
+            "action": "index-semantic-vision",
+        },
+        {
+            "id": "clip_image_vectors",
+            "label": "OpenCLIP image vectors",
+            "ready": int(embedding_counts.get("clip_image", 0)),
+            "total": total,
+            "percent": percent(embedding_counts.get("clip_image", 0), total),
+            "action": "index-semantic-vision",
         },
     ]
     recommendations = []
@@ -1422,6 +1454,101 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     return float(sum(left[i] * right[i] for i in range(count)))
 
 
+NL_TAG_ALIASES = [
+    ("JK学生", ("jk", "学生", "校服", "制服", "水手服")),
+    ("COS角色", ("cos", "cosplay", "角色", "扮演")),
+    ("自拍露脸", ("自拍", "露脸", "正脸", "脸")),
+    ("黑丝白丝", ("黑丝", "白丝", "丝袜", "裤袜")),
+    ("室内居家", ("室内", "居家", "卧室", "酒店", "房间", "浴室")),
+    ("户外露出", ("户外", "室外", "露出", "野外")),
+    ("足交足控", ("足", "足控", "脚", "脚丫", "足交")),
+    ("水手服制服", ("水手服", "制服", "校服")),
+]
+
+
+def parse_natural_search(query: str) -> dict:
+    text = (query or "").strip()
+    lowered = text.lower()
+    parsed = {
+        "q": text,
+        "semantic_query": text,
+        "media_type": "all",
+        "tag": "",
+        "author": "",
+        "face_group": "",
+        "favorite": "",
+        "has_subtitles": "",
+        "min_duration": None,
+        "max_duration": None,
+        "resolution": "",
+        "explain": [],
+    }
+    if re.search(r"(视频|影片|video|mp4|mov)", lowered):
+        parsed["media_type"] = "video"
+        parsed["explain"].append("媒体类型: 视频")
+    elif re.search(r"(图片|照片|photo|image|jpg|png)", lowered):
+        parsed["media_type"] = "photo"
+        parsed["explain"].append("媒体类型: 图片")
+    if re.search(r"(收藏|喜欢|favorite|fav)", lowered):
+        parsed["favorite"] = "true"
+        parsed["explain"].append("只看收藏")
+    if re.search(r"(有字幕|有转写|字幕|台词|语音|对白)", lowered):
+        parsed["has_subtitles"] = "true"
+        parsed["explain"].append("需要字幕/转写")
+    duration_min = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|min|minute).*?(?:以上|大于|超过|\+|起)", lowered)
+    duration_max = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|min|minute).*?(?:以下|小于|以内|内)", lowered)
+    if duration_min:
+        parsed["min_duration"] = float(duration_min.group(1)) * 60
+        parsed["explain"].append(f"时长 >= {duration_min.group(1)} 分钟")
+    elif re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|sec|second).*?(?:以上|大于|超过|\+|起)", lowered):
+        value = re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|sec|second).*?(?:以上|大于|超过|\+|起)", lowered)
+        parsed["min_duration"] = float(value.group(1))
+        parsed["explain"].append(f"时长 >= {value.group(1)} 秒")
+    if duration_max:
+        parsed["max_duration"] = float(duration_max.group(1)) * 60
+        parsed["explain"].append(f"时长 <= {duration_max.group(1)} 分钟")
+    if re.search(r"4k|2160", lowered):
+        parsed["resolution"] = "4K"
+        parsed["explain"].append("分辨率: 4K")
+    elif re.search(r"1080|fhd", lowered):
+        parsed["resolution"] = "1080"
+        parsed["explain"].append("分辨率: 1080")
+    elif re.search(r"720|hd", lowered):
+        parsed["resolution"] = "720"
+        parsed["explain"].append("分辨率: 720")
+    tags = []
+    for canonical, aliases in NL_TAG_ALIASES:
+        if any(alias.lower() in lowered for alias in aliases):
+            tags.append(canonical)
+    if tags:
+        parsed["tag"] = ",".join(dict.fromkeys(tags))
+        parsed["explain"].append("标签: " + parsed["tag"])
+    author_match = re.search(r"(?:作者|人物|演员|creator|author)[:： ]+([\w\u3040-\u30ff\u3400-\u9fff.-]{2,40})", text, re.I)
+    if author_match:
+        parsed["author"] = author_match.group(1)
+        parsed["explain"].append("作者/人物: " + parsed["author"])
+    return parsed
+
+
+def semantic_match_reasons(data: dict, query: str, score: float, kind: str) -> list[str]:
+    reasons = []
+    if score:
+        reasons.append(f"{kind} {score:.2f}")
+    tags = str(data.get("tags") or "")
+    for token in semantic_tokens(query)[:8]:
+        if token and token in tags.lower():
+            reasons.append(f"标签命中: {token}")
+            break
+    filename = str(data.get("filename") or data.get("original_name") or "").lower()
+    for token in semantic_tokens(query)[:8]:
+        if token and token in filename:
+            reasons.append(f"文件名命中: {token}")
+            break
+    if kind in {"subtitle", "bge_text", "text"} and data.get("kind") == "subtitle":
+        reasons.append("字幕/转写相似")
+    return reasons[:4]
+
+
 def media_semantic_text(row: dict, tags: list[str], transcript: str = "") -> str:
     parts = [
         row.get("filename") or "",
@@ -1437,6 +1564,32 @@ def media_semantic_text(row: dict, tags: list[str], transcript: str = "") -> str
         transcript or "",
     ]
     return " ".join(part for part in parts if part)
+
+
+def model_file_exists(model_id: str) -> bool:
+    try:
+        from .model_manager import MODEL_REGISTRY
+
+        item = MODEL_REGISTRY.get(model_id) or {}
+        relative = item.get("path")
+        if not relative:
+            return False
+        return (Path(os.environ.get("MODEL_ROOT", "/models")) / str(relative)).exists()
+    except Exception:
+        return False
+
+
+def embedding_kind_for_text() -> tuple[str, str]:
+    if model_file_exists("bge-small-text"):
+        return "bge_text", "bge-small-zh-v1.5-local"
+    return "text", "local-hash-128"
+
+
+def semantic_query_vector(query: str, preferred_kind: str = "") -> tuple[list[float], str]:
+    kind, model = embedding_kind_for_text()
+    if preferred_kind in {"text", "subtitle", "tag"}:
+        kind, model = "text", "local-hash-128"
+    return hashed_text_vector(query), model
 
 
 def visual_signature_for_media(root: Path, row: dict, conn) -> str:
@@ -1464,81 +1617,131 @@ def visual_signature_for_media(root: Path, row: dict, conn) -> str:
     return ""
 
 
+def clip_embedding_for_media(root: Path, row: dict, vision_embeddings: dict[str, dict]) -> list[float]:
+    candidates = [
+        str(row.get("relative_path") or ""),
+        str(row.get("path") or ""),
+        str(Path(row.get("path") or "").relative_to(root)) if str(row.get("path") or "").startswith(str(root)) else "",
+    ]
+    for key in candidates:
+        if not key:
+            continue
+        item = vision_embeddings.get(key) or vision_embeddings.get(key.replace("\\", "/"))
+        if not item:
+            continue
+        vector = item.get("embedding")
+        if isinstance(vector, list) and vector:
+            try:
+                values = [float(value) for value in vector]
+            except (TypeError, ValueError):
+                return []
+            norm = math.sqrt(sum(value * value for value in values)) or 1.0
+            return [value / norm for value in values]
+    return []
+
+
 def rebuild_semantic_index(
     root: Path | None = None,
     progress: Callable[[str, int, int, str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     limit: int | None = None,
+    mode: str = "all",
 ) -> dict:
     init_db()
     root = root or output_root()
     processed = 0
     text_count = 0
     visual_count = 0
+    clip_count = 0
     cancelled = False
+    mode = mode if mode in {"all", "text", "vision"} else "all"
+    text_kind, text_model = embedding_kind_for_text()
+    vision_embeddings = read_vision_embeddings(root) if mode in {"all", "vision"} else {}
     with connect() as conn:
         rows = [dict(row) for row in conn.execute("SELECT * FROM media_items ORDER BY id").fetchall()]
         if limit:
             rows = rows[:limit]
         total = len(rows)
         if progress:
-            progress("index-semantic", 0, total, "semantic index")
+            progress(f"index-semantic-{mode}", 0, total, "semantic index")
         for row in rows:
             if cancel_check and cancel_check():
                 cancelled = True
                 break
             tags = [str(item["tag"]) for item in conn.execute("SELECT tag FROM media_tags WHERE media_id=? AND state != 'rejected'", (row["id"],)).fetchall()]
-            transcript_row = conn.execute("SELECT text FROM media_transcripts WHERE media_id=?", (row["id"],)).fetchone()
-            transcript = str(transcript_row["text"] or "") if transcript_row else ""
-            text = media_semantic_text(row, tags, transcript)
-            if text.strip():
-                vector = hashed_text_vector(text)
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
-                    VALUES (?, 'text', 'local-hash-128', ?, ?, ?, CURRENT_TIMESTAMP)
-                    """,
-                    (row["id"], len(vector), pack_vector(vector), text[:4000]),
-                )
-                text_count += 1
-            if transcript.strip():
-                vector = hashed_text_vector(transcript)
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
-                    VALUES (?, 'subtitle', 'local-hash-128', ?, ?, ?, CURRENT_TIMESTAMP)
-                    """,
-                    (row["id"], len(vector), pack_vector(vector), transcript[:4000]),
-                )
-            visual_sig = visual_signature_for_media(root, row, conn)
-            visual_vector = hash_bits_vector(visual_sig)
-            if visual_vector:
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
-                    VALUES (?, 'image', 'dhash-64', ?, ?, ?, CURRENT_TIMESTAMP)
-                    """,
-                    (row["id"], len(visual_vector), pack_vector(visual_vector), visual_sig[:256]),
-                )
-                visual_count += 1
+            if mode in {"all", "text"}:
+                transcript_row = conn.execute("SELECT text FROM media_transcripts WHERE media_id=?", (row["id"],)).fetchone()
+                transcript = str(transcript_row["text"] or "") if transcript_row else ""
+                text = media_semantic_text(row, tags, transcript)
+                if text.strip():
+                    vector = hashed_text_vector(text)
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        (row["id"], text_kind, text_model, len(vector), pack_vector(vector), text[:4000]),
+                    )
+                    text_count += 1
+                if tags:
+                    tag_text = " ".join(tags)
+                    vector = hashed_text_vector(tag_text)
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
+                        VALUES (?, 'tag', 'local-hash-128', ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        (row["id"], len(vector), pack_vector(vector), tag_text[:4000]),
+                    )
+                if transcript.strip():
+                    vector = hashed_text_vector(transcript)
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
+                        VALUES (?, 'subtitle', 'local-hash-128', ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        (row["id"], len(vector), pack_vector(vector), transcript[:4000]),
+                    )
+            if mode in {"all", "vision"}:
+                visual_sig = visual_signature_for_media(root, row, conn)
+                visual_vector = hash_bits_vector(visual_sig)
+                if visual_vector:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
+                        VALUES (?, 'image', 'dhash-64', ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        (row["id"], len(visual_vector), pack_vector(visual_vector), visual_sig[:256]),
+                    )
+                    visual_count += 1
+                clip_vector = clip_embedding_for_media(root, row, vision_embeddings)
+                if clip_vector:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
+                        VALUES (?, 'clip_image', 'openclip-local', ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        (row["id"], len(clip_vector), pack_vector(clip_vector), row.get("relative_path") or row.get("filename") or ""),
+                    )
+                    clip_count += 1
             processed += 1
             if processed % 100 == 0:
                 conn.commit()
                 if progress:
-                    progress("index-semantic", processed, total, row.get("relative_path") or row.get("filename") or "")
+                    progress(f"index-semantic-{mode}", processed, total, row.get("relative_path") or row.get("filename") or "")
         conn.commit()
         try:
             conn.execute(
                 "INSERT INTO media_operations (operation, detail) VALUES (?, ?)",
-                ("rebuild_semantic_index", f"text={text_count} visual={visual_count} processed={processed} root={root}"),
+                ("rebuild_semantic_index", f"mode={mode} text={text_count} visual={visual_count} clip={clip_count} processed={processed} root={root}"),
             )
         except Exception:
             # The index is already committed; an audit-log lock should not turn a
             # completed semantic index into a failed job.
             pass
     if progress:
-        progress("index-semantic", processed, total if not cancelled else max(total, processed), "semantic index cancelled" if cancelled else "semantic index complete")
-    return {"ok": not cancelled, "cancelled": cancelled, "processed": processed, "text": text_count, "visual": visual_count, "root": str(root)}
+        progress(f"index-semantic-{mode}", processed, total if not cancelled else max(total, processed), "semantic index cancelled" if cancelled else "semantic index complete")
+    return {"ok": not cancelled, "cancelled": cancelled, "processed": processed, "text": text_count, "visual": visual_count, "clip": clip_count, "mode": mode, "text_model": text_model, "root": str(root)}
 
 
 def semantic_media_search(
@@ -1599,25 +1802,33 @@ def semantic_media_search(
             FROM media_embeddings e
             JOIN media_items m ON m.id=e.media_id
             LEFT JOIN media_tags t ON t.media_id=m.id AND t.state != 'rejected'
-            {where} AND e.kind IN ('text', 'subtitle', 'tag')
+            {where} AND e.kind IN ('text', 'subtitle', 'tag', 'bge_text')
             GROUP BY e.media_id, e.kind, e.model
             """,
             params,
         ).fetchall()
-        scores: dict[int, tuple[float, dict]] = {}
+        scores: dict[int, tuple[float, dict, list[str]]] = {}
+        weights = {"bge_text": 1.15, "text": 1.0, "subtitle": 0.9, "tag": 1.05}
         for row in rows:
             data = dict(row)
+            kind = str(data.get("kind") or "")
             vector = unpack_vector(data.pop("vector", None), int(data.get("dim") or 0))
-            score = cosine_similarity(query_vector, vector)
+            score = cosine_similarity(query_vector, vector) * weights.get(kind, 1.0)
+            if tag:
+                score += 0.08
+            if author:
+                score += 0.05
             media_id = int(data["media_id"])
-            if score > scores.get(media_id, (0.0, {}))[0]:
-                scores[media_id] = (score, data)
-        for score, data in sorted(scores.values(), key=lambda item: item[0], reverse=True)[:limit]:
+            reasons = semantic_match_reasons(data, query, score, kind)
+            if score > scores.get(media_id, (0.0, {}, []))[0]:
+                scores[media_id] = (score, data, reasons)
+        for score, data, reasons in sorted(scores.values(), key=lambda item: item[0], reverse=True)[:limit]:
             data["semantic_score"] = round(score, 6)
+            data["match_reasons"] = reasons
             rows_out.append(data)
     if not rows_out:
         return media_query(q=query, media_type=media_type, tag=tag, author=author, face_group=face_group, favorite=favorite, has_subtitles=has_subtitles, min_duration=min_duration, max_duration=max_duration, resolution=resolution, limit=limit)
-    return {"total": len(rows_out), "limit": limit, "offset": 0, "semantic": True, "items": rows_out}
+    return {"total": len(rows_out), "limit": limit, "offset": 0, "semantic": True, "query": query, "items": rows_out}
 
 
 def similar_media(media_id: int, limit: int = 40) -> dict:
