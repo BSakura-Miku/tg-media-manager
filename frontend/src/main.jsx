@@ -2643,7 +2643,7 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
     return {
       ...base,
       media_type: base.media_type && base.media_type !== 'all' ? base.media_type : (p.media_type || base.media_type || 'all'),
-      tag: base.tag || p.tag || '',
+      tag: base.tag || '',
       author: base.author || p.author || '',
       face_group: base.face_group || p.face_group || '',
       favorite: base.favorite || p.favorite || '',

@@ -244,7 +244,7 @@ def health() -> dict:
 
 @app.get("/api/version")
 def api_version() -> dict:
-    app_version = os.environ.get("APP_SEMVER", "1.1.6").lstrip("v") or "1.1.6"
+    app_version = os.environ.get("APP_SEMVER", "1.1.7").lstrip("v") or "1.1.7"
     build_commit = os.environ.get("APP_VERSION", "dev")
     build_time = os.environ.get("APP_BUILT_AT", "")
     return {
@@ -1173,7 +1173,7 @@ def api_media(
     if semantic and q.strip() and not include_risk and not randomize:
         parsed = parse_natural_search(q.strip())
         semantic_media_type = media_type if media_type != "all" else (parsed.get("media_type") or "all")
-        semantic_tag = tag.strip() or str(parsed.get("tag") or "")
+        semantic_tag = tag.strip()
         semantic_author = author.strip() or str(parsed.get("author") or "")
         semantic_face_group = face_group.strip() or str(parsed.get("face_group") or "")
         semantic_favorite = favorite.strip().lower() or str(parsed.get("favorite") or "")
