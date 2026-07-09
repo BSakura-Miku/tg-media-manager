@@ -3,7 +3,7 @@
 IMAGE ?= tg-media-manager
 TAG ?= latest
 DOCKERHUB_REPO ?= bsakuramiku/tg-media-manager
-APP_SEMVER ?= 1.1.7
+APP_SEMVER ?= 1.1.8
 APP_VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 APP_BUILT_AT ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 BUILD_ARGS = --build-arg APP_SEMVER=$(APP_SEMVER) --build-arg APP_VERSION=$(APP_VERSION) --build-arg APP_BUILT_AT=$(APP_BUILT_AT)
