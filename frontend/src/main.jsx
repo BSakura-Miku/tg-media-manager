@@ -21,6 +21,8 @@ import {
   Languages,
   LockKeyhole,
   Moon,
+  Maximize2,
+  Pause,
   Play,
   RefreshCw,
   RotateCcw,
@@ -36,6 +38,8 @@ import {
   TerminalSquare,
   Trash2,
   Users,
+  Volume2,
+  VolumeX,
   XCircle,
 } from 'lucide-react';
 import './styles.css';
@@ -362,6 +366,11 @@ const i18n = {
     subtitles: 'Subtitles',
     originalSubtitles: 'Original subtitles',
     bilingualSubtitles: 'Bilingual subtitles',
+    playVideo: 'Play video',
+    pauseVideo: 'Pause video',
+    muteVideo: 'Mute video',
+    unmuteVideo: 'Unmute video',
+    fullscreenVideo: 'Fullscreen',
     noTranscript: 'No transcript yet',
     mediaSearch: 'Search media, tags, authors',
     quickFindTitle: 'Quick Find',
@@ -880,6 +889,11 @@ const i18n = {
     subtitles: '字幕',
     originalSubtitles: '原文字幕',
     bilingualSubtitles: '双语字幕',
+    playVideo: '播放',
+    pauseVideo: '暂停',
+    muteVideo: '静音',
+    unmuteVideo: '取消静音',
+    fullscreenVideo: '全屏',
     noTranscript: '还没有转写内容',
     mediaSearch: '搜索媒体、标签、作者',
     quickFindTitle: '快找',
@@ -3231,9 +3245,17 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
   const [authorDraft, setAuthorDraft] = useState(data.author || '');
   const [busyAction, setBusyAction] = useState('');
   const [contactSheetMissing, setContactSheetMissing] = useState(false);
+  const videoRef = useRef(null);
+  const videoShellRef = useRef(null);
+  const [videoPlaying, setVideoPlaying] = useState(false);
+  const [videoMuted, setVideoMuted] = useState(false);
   const isFavorite = tags.some(tag => tag.tag === 'Favorite' && tag.state !== 'rejected');
   useEffect(() => setAuthorDraft(data.author || ''), [data.id, data.author]);
   useEffect(() => setContactSheetMissing(false), [data.id]);
+  useEffect(() => {
+    setVideoPlaying(false);
+    setVideoMuted(false);
+  }, [data.id]);
   useEffect(() => {
     function handleKeyDown(event) {
       if (event.key === 'Escape') close();
@@ -3332,6 +3354,44 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
       await refreshDetail();
     });
   }
+  async function toggleVideoPlayback(event) {
+    event?.preventDefault();
+    event?.stopPropagation();
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      if (video.paused) await video.play();
+      else video.pause();
+    } catch (exc) {
+      setFeedbackMessage(exc.message || String(exc));
+    }
+  }
+  function toggleVideoMuted(event) {
+    event?.preventDefault();
+    event?.stopPropagation();
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setVideoMuted(video.muted);
+  }
+  async function enterVideoFullscreen(event) {
+    event?.preventDefault();
+    event?.stopPropagation();
+    const video = videoRef.current;
+    const target = videoShellRef.current || video;
+    if (!video || !target) return;
+    try {
+      if (video.webkitEnterFullscreen) {
+        video.webkitEnterFullscreen();
+        return;
+      }
+      if (target.requestFullscreen) {
+        await target.requestFullscreen();
+      }
+    } catch (exc) {
+      setFeedbackMessage(exc.message || String(exc));
+    }
+  }
   return (
     <ModalPortal>
     <div className="viewerBackdrop" role="dialog" aria-modal="true">
@@ -3351,10 +3411,34 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
         <div className="viewerBody">
           <div className="viewerMedia">
             {data.media_type === 'video' ? (
-              <video src={`/api/media/${data.id}/file`} controls poster={`/api/media/${data.id}/thumbnail?v=${THUMBNAIL_REVISION}`}>
-                {hasPlayableSubtitles && <track kind="subtitles" srcLang={data.transcript?.language || 'und'} label={t.originalSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=original`} default />}
-                {hasPlayableSubtitles && <track kind="subtitles" srcLang="zh" label={t.bilingualSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=bilingual`} />}
-              </video>
+              <div className="videoShell" ref={videoShellRef}>
+                <video
+                  ref={videoRef}
+                  src={`/api/media/${data.id}/file`}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  poster={`/api/media/${data.id}/thumbnail?v=${THUMBNAIL_REVISION}`}
+                  onPlay={() => setVideoPlaying(true)}
+                  onPause={() => setVideoPlaying(false)}
+                  onVolumeChange={event => setVideoMuted(event.currentTarget.muted || event.currentTarget.volume === 0)}
+                >
+                  {hasPlayableSubtitles && <track kind="subtitles" srcLang={data.transcript?.language || 'und'} label={t.originalSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=original`} default />}
+                  {hasPlayableSubtitles && <track kind="subtitles" srcLang="zh" label={t.bilingualSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=bilingual`} />}
+                </video>
+                <div className="videoOverlayControls" onClick={event => event.stopPropagation()}>
+                  <button type="button" onClick={toggleVideoPlayback} title={videoPlaying ? t.pauseVideo : t.playVideo} aria-label={videoPlaying ? t.pauseVideo : t.playVideo}>
+                    {videoPlaying ? <Pause size={18} /> : <Play size={18} />}
+                    <span>{videoPlaying ? t.pauseVideo : t.playVideo}</span>
+                  </button>
+                  <button type="button" onClick={toggleVideoMuted} title={videoMuted ? t.unmuteVideo : t.muteVideo} aria-label={videoMuted ? t.unmuteVideo : t.muteVideo}>
+                    {videoMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                  </button>
+                  <button type="button" onClick={enterVideoFullscreen} title={t.fullscreenVideo} aria-label={t.fullscreenVideo}>
+                    <Maximize2 size={18} />
+                  </button>
+                </div>
+              </div>
             ) : <img src={`/api/media/${data.id}/file`} alt={data.filename} />}
           </div>
           <div className="viewerInfo">
