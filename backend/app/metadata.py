@@ -1454,21 +1454,244 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     return float(sum(left[i] * right[i] for i in range(count)))
 
 
+NL_NORMALIZE_REPLACEMENTS = {
+    "漏出": "露出",
+    "室外": "户外",
+    "外边": "户外",
+    "外面": "户外",
+    "屋里": "室内",
+    "房里": "室内",
+    "宾馆": "酒店",
+    "旅馆": "酒店",
+    "光脚": "裸足",
+    "赤脚": "裸足",
+    "美脚": "美足",
+    "jk服": "JK制服",
+    "jk制服": "JK制服",
+    "coser": "COS",
+    "角色扮演": "COS",
+    "对镜": "镜前自拍",
+    "自摄": "自拍",
+    "自录": "自拍",
+    "口述": "口播",
+}
+
+
 NL_TAG_ALIASES = [
-    ("JK学生", ("jk", "学生", "校服", "制服", "水手服", "教室", "校园", "学校", "课堂")),
-    ("COS角色", ("cos", "cosplay", "角色", "扮演")),
-    ("自拍露脸", ("自拍", "露脸", "正脸", "脸")),
-    ("黑丝白丝", ("黑丝", "白丝", "丝袜", "裤袜")),
-    ("室内居家", ("室内", "居家", "卧室", "酒店", "房间", "浴室", "教室")),
-    ("户外露出", ("户外", "室外", "露出", "漏出", "野外", "外拍")),
-    ("足交足控", ("足", "足控", "脚", "脚丫", "足交", "裸足", "赤足", "光脚", "脚底")),
-    ("水手服制服", ("水手服", "制服", "校服", "jk服", "jk制服")),
+    (
+        "JK学生",
+        (
+            "jk",
+            "jk服",
+            "jk制服",
+            "学生",
+            "学妹",
+            "校服",
+            "校园",
+            "学校",
+            "教室",
+            "课堂",
+            "课桌",
+            "黑板",
+            "同学",
+            "百褶裙",
+            "白衬衫",
+        ),
+    ),
+    (
+        "COS角色",
+        (
+            "cos",
+            "cosplay",
+            "coser",
+            "角色",
+            "扮演",
+            "角色扮演",
+            "假发",
+            "二次元",
+            "洛丽塔",
+            "lolita",
+            "原神",
+            "碧蓝",
+            "明日方舟",
+            "猫娘",
+            "兽耳",
+            "巫女",
+            "女仆",
+            "兔女郎",
+        ),
+    ),
+    (
+        "自拍露脸",
+        (
+            "自拍",
+            "自摄",
+            "自录",
+            "露脸",
+            "正脸",
+            "看镜头",
+            "镜前",
+            "镜子",
+            "对镜",
+            "手机拍",
+            "第一视角",
+            "主观",
+            "pov",
+        ),
+    ),
+    (
+        "黑丝白丝",
+        (
+            "黑丝",
+            "白丝",
+            "灰丝",
+            "肉丝",
+            "丝袜",
+            "裤袜",
+            "连裤袜",
+            "长筒袜",
+            "过膝袜",
+            "白袜",
+            "黑袜",
+        ),
+    ),
+    (
+        "室内居家",
+        (
+            "室内",
+            "屋里",
+            "房里",
+            "房间",
+            "卧室",
+            "床上",
+            "沙发",
+            "家里",
+            "家中",
+            "居家",
+            "酒店",
+            "宾馆",
+            "浴室",
+            "洗手间",
+            "厕所",
+            "厨房",
+            "客厅",
+            "教室",
+            "房内",
+            "室内拍",
+        ),
+    ),
+    (
+        "户外露出",
+        (
+            "户外",
+            "室外",
+            "外面",
+            "外边",
+            "外拍",
+            "野外",
+            "公园",
+            "街拍",
+            "街上",
+            "车里",
+            "车内",
+            "地铁",
+            "电梯",
+            "楼道",
+            "楼梯间",
+            "公共",
+            "公共场所",
+            "露出",
+            "漏出",
+            "野拍",
+        ),
+    ),
+    (
+        "足交足控",
+        (
+            "足控",
+            "脚",
+            "脚丫",
+            "脚趾",
+            "脚底",
+            "脚心",
+            "脚掌",
+            "足交",
+            "裸足",
+            "赤足",
+            "赤脚",
+            "光脚",
+            "美足",
+        ),
+    ),
+    (
+        "水手服制服",
+        (
+            "水手服",
+            "制服",
+            "校服",
+            "jk服",
+            "jk制服",
+            "衬衫",
+            "领带",
+            "领结",
+            "百褶裙",
+            "职业装",
+            "护士",
+            "女仆",
+            "兔女郎",
+        ),
+    ),
+    ("有人声", ("有声", "说话", "语音", "声音", "台词", "对白", "口播", "直播")),
+    ("剧情对白", ("剧情", "对话", "对白", "台词", "聊天", "老师", "同学")),
+    ("自拍口播", ("口播", "直播", "自述", "自拍视频")),
+    ("低语耳语", ("低语", "耳语", "小声", "轻声", "气声", "悄悄话")),
+    ("甜妹音", ("甜妹", "甜声", "甜美", "可爱声", "软萌")),
+    ("成熟声线", ("御姐", "成熟", "姐姐音", "低沉", "成熟声线")),
 ]
+
+
+SEARCH_TAG_EXPANSIONS = {
+    "JK学生": ("JK学生", "学生制服", "校服", "水手服", "校园", "教室", "课桌", "百褶裙"),
+    "COS角色": ("COS角色", "cosplay", "角色扮演", "假发", "二次元", "女仆", "兽耳"),
+    "自拍露脸": ("自拍露脸", "正脸", "看镜头", "镜前自拍", "手机拍", "第一视角"),
+    "黑丝白丝": ("黑丝白丝", "丝袜", "裤袜", "白袜", "黑袜", "过膝袜"),
+    "室内居家": ("室内居家", "房间", "卧室", "床上", "沙发", "酒店", "浴室", "教室"),
+    "户外露出": ("户外露出", "户外", "室外", "外拍", "街拍", "公园", "公共场景", "露出"),
+    "足交足控": ("足交足控", "裸足", "光脚", "美足", "脚底", "脚趾", "足部特写"),
+    "水手服制服": ("水手服制服", "制服", "校服", "JK制服", "衬衫", "领带", "职业装"),
+    "有人声": ("有人声", "说话", "语音", "台词", "对白", "声音"),
+    "剧情对白": ("剧情对白", "剧情", "对话", "台词", "对白"),
+    "自拍口播": ("自拍口播", "口播", "直播", "自述", "自拍视频"),
+    "低语耳语": ("低语耳语", "低语", "耳语", "小声", "轻声"),
+    "甜妹音": ("甜妹音", "甜美声线", "软萌声线", "可爱声线"),
+    "成熟声线": ("成熟声线", "御姐声线", "姐姐音", "低沉声线"),
+}
+
+
+NL_QUERY_EXPANSIONS = {
+    "telegram": ("tg", "电报", "telegram"),
+    "twitter": ("推特", "twitter", "x.com", "x平台"),
+    "douyin": ("抖音", "douyin", "短视频"),
+    "onlyfans": ("onlyfans", "only fans"),
+    "4K": ("4k", "2160p", "超清", "高码率"),
+    "1080P": ("1080p", "fhd", "高清"),
+    "720P": ("720p", "hd"),
+}
+
+
+def normalize_nl_search_text(text: str) -> str:
+    normalized = text or ""
+    for source, target in NL_NORMALIZE_REPLACEMENTS.items():
+        normalized = normalized.replace(source, target)
+    return normalized
 
 
 def parse_natural_search(query: str) -> dict:
     text = (query or "").strip()
+    normalized_text = normalize_nl_search_text(text)
     lowered = text.lower()
+    normalized_lowered = normalized_text.lower()
+    haystack = f"{lowered} {normalized_lowered}"
     parsed = {
         "q": text,
         "semantic_query": text,
@@ -1483,47 +1706,55 @@ def parse_natural_search(query: str) -> dict:
         "resolution": "",
         "explain": [],
     }
-    if re.search(r"(视频|影片|video|mp4|mov)", lowered):
+    if re.search(r"(视频|影片|片子|片|video|mp4|mov)", haystack):
         parsed["media_type"] = "video"
         parsed["explain"].append("媒体类型: 视频")
-    elif re.search(r"(图片|照片|photo|image|jpg|png)", lowered):
+    elif re.search(r"(图片|照片|图|photo|image|jpg|png)", haystack):
         parsed["media_type"] = "photo"
         parsed["explain"].append("媒体类型: 图片")
-    if re.search(r"(收藏|喜欢|favorite|fav)", lowered):
+    if re.search(r"(收藏|喜欢|标星|favorite|fav)", haystack):
         parsed["favorite"] = "true"
         parsed["explain"].append("只看收藏")
-    if re.search(r"(有字幕|有转写|字幕|台词|语音|对白)", lowered):
+    if re.search(r"(有字幕|有转写|字幕|台词|语音|对白|说话|有声)", haystack):
         parsed["has_subtitles"] = "true"
         parsed["explain"].append("需要字幕/转写")
-    duration_min = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|min|minute).*?(?:以上|大于|超过|\+|起)", lowered)
-    duration_max = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|min|minute).*?(?:以下|小于|以内|内)", lowered)
+    duration_min = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|min|minute).*?(?:以上|大于|超过|\+|起)", haystack)
+    duration_max = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|min|minute).*?(?:以下|小于|以内)", haystack)
     if duration_min:
         parsed["min_duration"] = float(duration_min.group(1)) * 60
         parsed["explain"].append(f"时长 >= {duration_min.group(1)} 分钟")
-    elif re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|sec|second).*?(?:以上|大于|超过|\+|起)", lowered):
-        value = re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|sec|second).*?(?:以上|大于|超过|\+|起)", lowered)
+    elif re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|sec|second).*?(?:以上|大于|超过|\+|起)", haystack):
+        value = re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|sec|second).*?(?:以上|大于|超过|\+|起)", haystack)
         parsed["min_duration"] = float(value.group(1))
         parsed["explain"].append(f"时长 >= {value.group(1)} 秒")
     if duration_max:
         parsed["max_duration"] = float(duration_max.group(1)) * 60
         parsed["explain"].append(f"时长 <= {duration_max.group(1)} 分钟")
-    if re.search(r"4k|2160", lowered):
+    if re.search(r"4k|2160|超清", haystack):
         parsed["resolution"] = "4K"
         parsed["explain"].append("分辨率: 4K")
-    elif re.search(r"1080|fhd", lowered):
+    elif re.search(r"1080|fhd|高清", haystack):
         parsed["resolution"] = "1080"
         parsed["explain"].append("分辨率: 1080")
-    elif re.search(r"720|hd", lowered):
+    elif re.search(r"720|hd", haystack):
         parsed["resolution"] = "720"
         parsed["explain"].append("分辨率: 720")
     tags = []
     for canonical, aliases in NL_TAG_ALIASES:
-        if any(alias.lower() in lowered for alias in aliases):
+        if any(alias.lower() in haystack for alias in aliases):
             tags.append(canonical)
+    expansion_terms = []
     if tags:
         parsed["tag"] = ",".join(dict.fromkeys(tags))
         parsed["explain"].append("标签: " + parsed["tag"])
-        parsed["semantic_query"] = " ".join([text, parsed["tag"], " ".join(dict.fromkeys(tags))]).strip()
+        for tag in dict.fromkeys(tags):
+            expansion_terms.extend(SEARCH_TAG_EXPANSIONS.get(tag, ()))
+    for label, aliases in NL_QUERY_EXPANSIONS.items():
+        if any(alias.lower() in haystack for alias in aliases):
+            expansion_terms.append(label)
+            expansion_terms.extend(aliases)
+    semantic_parts = [text, normalized_text, parsed["tag"], *tags, *expansion_terms]
+    parsed["semantic_query"] = " ".join(part for part in dict.fromkeys(semantic_parts) if part).strip()
     author_match = re.search(r"(?:作者|人物|演员|creator|author)[:： ]+([\w\u3040-\u30ff\u3400-\u9fff.-]{2,40})", text, re.I)
     if author_match:
         parsed["author"] = author_match.group(1)
