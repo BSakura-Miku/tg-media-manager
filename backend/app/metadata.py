@@ -1455,14 +1455,14 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
 
 
 NL_TAG_ALIASES = [
-    ("JK学生", ("jk", "学生", "校服", "制服", "水手服")),
+    ("JK学生", ("jk", "学生", "校服", "制服", "水手服", "教室", "校园", "学校", "课堂")),
     ("COS角色", ("cos", "cosplay", "角色", "扮演")),
     ("自拍露脸", ("自拍", "露脸", "正脸", "脸")),
     ("黑丝白丝", ("黑丝", "白丝", "丝袜", "裤袜")),
-    ("室内居家", ("室内", "居家", "卧室", "酒店", "房间", "浴室")),
-    ("户外露出", ("户外", "室外", "露出", "野外")),
-    ("足交足控", ("足", "足控", "脚", "脚丫", "足交")),
-    ("水手服制服", ("水手服", "制服", "校服")),
+    ("室内居家", ("室内", "居家", "卧室", "酒店", "房间", "浴室", "教室")),
+    ("户外露出", ("户外", "室外", "露出", "漏出", "野外", "外拍")),
+    ("足交足控", ("足", "足控", "脚", "脚丫", "足交", "裸足", "赤足", "光脚", "脚底")),
+    ("水手服制服", ("水手服", "制服", "校服", "jk服", "jk制服")),
 ]
 
 
@@ -1523,6 +1523,7 @@ def parse_natural_search(query: str) -> dict:
     if tags:
         parsed["tag"] = ",".join(dict.fromkeys(tags))
         parsed["explain"].append("标签: " + parsed["tag"])
+        parsed["semantic_query"] = " ".join([text, parsed["tag"], " ".join(dict.fromkeys(tags))]).strip()
     author_match = re.search(r"(?:作者|人物|演员|creator|author)[:： ]+([\w\u3040-\u30ff\u3400-\u9fff.-]{2,40})", text, re.I)
     if author_match:
         parsed["author"] = author_match.group(1)

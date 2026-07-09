@@ -1182,7 +1182,7 @@ def api_media(
         semantic_max_duration = max_duration_value if max_duration_value is not None else parsed.get("max_duration")
         semantic_resolution = resolution.strip() or str(parsed.get("resolution") or "")
         return semantic_media_search(
-            q=q.strip(),
+            q=str(parsed.get("semantic_query") or q.strip()),
             media_type=semantic_media_type,
             tag=semantic_tag,
             author=semantic_author,
