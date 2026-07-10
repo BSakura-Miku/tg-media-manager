@@ -38,6 +38,40 @@ class AuthSessionTests(unittest.TestCase):
         self.assertEqual(result["id"], 42)
         self.assertTrue(result["queued"])
 
+    def test_semantic_endpoint_forwards_structured_ai_filters(self) -> None:
+        understanding = {
+            "parsed": {
+                "semantic_query": "教室 JK 裸足",
+                "media_type": "video",
+                "author": "作者甲",
+                "face_group": "FaceGroup_1",
+                "favorite": "true",
+                "has_subtitles": "true",
+                "min_duration": 600.0,
+                "max_duration": 1800.0,
+                "resolution": "4K",
+            },
+            "intent": {"prefer": ["JK学生", "足交足控"]},
+        }
+        with patch.object(main, "understand_search_query", return_value=understanding), patch.object(
+            main, "semantic_media_search", return_value={"items": []}
+        ) as search:
+            result = main.api_semantic_search(q="口语查询", limit=12)
+        self.assertEqual(result, {"items": []})
+        search.assert_called_once_with(
+            q="教室 JK 裸足",
+            media_type="video",
+            author="作者甲",
+            face_group="FaceGroup_1",
+            favorite="true",
+            has_subtitles="true",
+            min_duration=600.0,
+            max_duration=1800.0,
+            resolution="4K",
+            limit=12,
+            intent={"prefer": ["JK学生", "足交足控"]},
+        )
+
 
 class ModelDownloadSecurityTests(unittest.TestCase):
     @staticmethod

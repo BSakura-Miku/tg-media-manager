@@ -1454,7 +1454,19 @@ def api_rebuild_semantic() -> dict:
 def api_semantic_search(q: str = Query("", max_length=300), limit: int = Query(80, ge=1, le=200)) -> dict:
     understanding = understand_search_query(q)
     parsed = understanding.get("parsed") or {}
-    return semantic_media_search(q=str(parsed.get("semantic_query") or q), limit=limit, intent=understanding.get("intent") or {})
+    return semantic_media_search(
+        q=str(parsed.get("semantic_query") or q),
+        media_type=str(parsed.get("media_type") or "all"),
+        author=str(parsed.get("author") or ""),
+        face_group=str(parsed.get("face_group") or ""),
+        favorite=str(parsed.get("favorite") or ""),
+        has_subtitles=str(parsed.get("has_subtitles") or ""),
+        min_duration=parsed.get("min_duration"),
+        max_duration=parsed.get("max_duration"),
+        resolution=str(parsed.get("resolution") or ""),
+        limit=limit,
+        intent=understanding.get("intent") or {},
+    )
 
 
 @app.get("/api/media/{media_id}/similar")
