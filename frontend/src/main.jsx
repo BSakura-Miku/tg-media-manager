@@ -3387,6 +3387,41 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
   }, [data.id]);
   useEffect(() => {
     const video = videoRef.current;
+    if (!video || data.media_type !== 'video') return undefined;
+    const syncReadyState = () => {
+      if (video.error) {
+        setVideoReady(false);
+        setVideoPlaying(false);
+        setVideoError(t.videoLoadError);
+        return;
+      }
+      if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        setVideoReady(true);
+        setVideoError('');
+      }
+      setVideoPlaying(!video.paused);
+      setVideoMuted(video.muted || video.volume === 0);
+    };
+    const handleError = () => {
+      setVideoReady(false);
+      setVideoPlaying(false);
+      setVideoError(t.videoLoadError);
+      setFeedbackMessage(t.videoLoadError);
+    };
+    syncReadyState();
+    video.addEventListener('loadedmetadata', syncReadyState);
+    video.addEventListener('loadeddata', syncReadyState);
+    video.addEventListener('canplay', syncReadyState);
+    video.addEventListener('error', handleError);
+    return () => {
+      video.removeEventListener('loadedmetadata', syncReadyState);
+      video.removeEventListener('loadeddata', syncReadyState);
+      video.removeEventListener('canplay', syncReadyState);
+      video.removeEventListener('error', handleError);
+    };
+  }, [data.id, data.media_type, t.videoLoadError]);
+  useEffect(() => {
+    const video = videoRef.current;
     if (!video) return;
     const tracks = Array.from(video.textTracks || []);
     tracks.forEach((track, index) => {
