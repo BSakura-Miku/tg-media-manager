@@ -27,6 +27,9 @@ Default media mount in `docker-compose.yml`:
 - All moves are logged through the existing `_MANIFESTS/applied_moves.csv` workflow.
 - Face and image model support is designed for local-only inference; no uploads are performed.
 - Web Settings are stored in `/data/tg_media_manager.sqlite3`, not baked into the Docker image.
+- NAS deployments require `APP_PASSWORD` and an independent random `APP_SECRET` in the local Compose `.env` file.
+- Authentication uses a signed, expiring, HTTP-only session cookie. Model downloads reject private-network targets, redirects to unsafe targets, unbounded payloads, and unverified custom sources by default.
+- `.env`, databases, media, models, embeddings, thumbnails, and transcripts must stay outside Git. The repository contains variable names and examples only, never deployment secrets.
 
 ## Web Features
 
@@ -78,7 +81,36 @@ Start on NAS:
 
 ```bash
 cd /volume1/docker/tg-media-manager
+cp .env.nas.example .env
+# Replace both placeholder values before starting. Keep APP_SECRET different
+# from APP_PASSWORD; `openssl rand -hex 32` is suitable for APP_SECRET.
 docker compose up -d
+```
+
+The NAS image can also be transferred without Docker Hub:
+
+```bash
+docker buildx build --platform linux/amd64 \
+  --build-arg APP_SEMVER=1.2.0 \
+  -t tg-media-manager:nas-1.2.0-amd64 \
+  -f docker/Dockerfile.clip --load .
+docker save tg-media-manager:nas-1.2.0-amd64 -o /tmp/tg-media-manager-1.2.0.tar
+```
+
+Back up `./data/tg_media_manager.sqlite3` before changing the image. Schema upgrades are additive and idempotent, but a database backup remains the rollback boundary.
+
+## Search And Indexing
+
+- Filename, tags, authors, face groups, subtitles, and media metadata remain directly searchable.
+- BGE text embeddings and OpenCLIP image embeddings provide local semantic ranking. If a model is absent, the API reports the fallback instead of labelling a hash vector as an AI embedding.
+- Existing OpenCLIP JSONL caches and face-group CSV manifests are imported into SQLite, avoiding a full inference rerun after an upgrade.
+- Full workflows repair missing thumbnails, preserve the earliest original filename, backfill hashes incrementally, and finish with a quality gate. Partial coverage is reported as `warning`, not a false success.
+- Timed subtitles use Faster-Whisper when SenseVoice output lacks usable timestamps. Confirmed no-speech results are not repeatedly reprocessed.
+
+Run the local quality gate before deployment:
+
+```bash
+make check
 ```
 
 ## Vision Builds

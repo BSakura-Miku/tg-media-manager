@@ -366,6 +366,11 @@ const i18n = {
     subtitles: 'Subtitles',
     originalSubtitles: 'Original subtitles',
     bilingualSubtitles: 'Bilingual subtitles',
+    subtitlesOff: 'Subtitles off',
+    subtitleUnavailable: 'No timed subtitles are available for this video.',
+    videoLoadError: 'The video could not be loaded or the browser does not support its codec.',
+    videoNotReady: 'The video is still loading. Try again when it is ready.',
+    fullscreenUnavailable: 'Fullscreen is not available in this browser.',
     playVideo: 'Play video',
     pauseVideo: 'Pause video',
     muteVideo: 'Mute video',
@@ -889,6 +894,11 @@ const i18n = {
     subtitles: '字幕',
     originalSubtitles: '原文字幕',
     bilingualSubtitles: '双语字幕',
+    subtitlesOff: '关闭字幕',
+    subtitleUnavailable: '这个视频暂时没有可用的带时间轴字幕。',
+    videoLoadError: '视频加载失败，或浏览器不支持该编码。',
+    videoNotReady: '视频仍在加载，就绪后再试。',
+    fullscreenUnavailable: '当前浏览器不支持全屏。',
     playVideo: '播放',
     pauseVideo: '暂停',
     muteVideo: '静音',
@@ -1194,13 +1204,17 @@ function api(path, options) {
   });
 }
 
+function isAbortError(error) {
+  return error?.name === 'AbortError' || String(error?.message || '').toLowerCase().includes('aborted');
+}
+
 function Stat({ label, value, icon: Icon, tone = 'blue', sub = '', onClick }) {
   const Tag = onClick ? 'button' : 'div';
   return <Tag className={`stat ${tone} ${onClick ? 'clickable' : ''}`} onClick={onClick || undefined}><div className="statIcon"><Icon size={24} /></div><div><div className="statValue">{value ?? 0}</div><div className="statLabel">{label}</div>{sub && <div className="statSub">{sub}</div>}</div></Tag>;
 }
 
 function JobBadge({ status, kind, label }) {
-  const tone = kind || (status === 'done' ? 'completed' : status === 'failed' ? 'error' : status);
+  const tone = kind || (status === 'done' ? 'completed' : status === 'failed' ? 'error' : ['warning', 'interrupted'].includes(status) ? 'warning' : status);
   const Icon = tone === 'completed' ? CheckCircle2 : tone === 'error' ? XCircle : Activity;
   return <span className={`badge ${tone} ${status}`}><Icon size={13} />{label || status}</span>;
 }
@@ -1246,7 +1260,7 @@ function jobTextBlob(job) {
 }
 
 function isInterruptedJob(job) {
-  return job?.status === 'failed' && jobTextBlob(job).includes('interrupted by service restart');
+  return job?.status === 'interrupted' || (job?.status === 'failed' && jobTextBlob(job).includes('interrupted by service restart'));
 }
 
 function isCancelledJob(job) {
@@ -1262,6 +1276,7 @@ function isStaleJob(job) {
 
 function jobKind(job) {
   if (job?.status === 'done') return 'completed';
+  if (['warning', 'interrupted'].includes(job?.status)) return 'warning';
   if (['queued', 'running'].includes(job?.status)) return isStaleJob(job) ? 'warning' : 'running';
   if (isCancelledJob(job) || isInterruptedJob(job)) return 'warning';
   if (job?.status === 'failed') return 'error';
@@ -1281,6 +1296,7 @@ function jobKindLabel(kind, t) {
 function jobDiagnostic(job, t) {
   if (isStaleJob(job)) return t.jobStaleHint;
   if (isInterruptedJob(job)) return t.jobInterruptedHint;
+  if (job?.status === 'warning') return job?.message || job?.stderr || job?.stdout || t.warningJobs;
   if (isCancelledJob(job)) return t.jobCancelledHint;
   return job?.message || job?.stderr || job?.stdout || job?.created_at || '';
 }
@@ -1522,6 +1538,9 @@ function App() {
   const [cancelingJobId, setCancelingJobId] = useState(null);
   const modelDraftDirtyRef = useRef(false);
   const manifestDraftDirtyRef = useRef(false);
+  const settingsDirtyRef = useRef(false);
+  const requestControllersRef = useRef(new Map());
+  const requestSequenceRef = useRef(new Map());
   const [auth, setAuth] = useState({ enabled: false, authenticated: true, local_only: true });
   const [version, setVersion] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
@@ -1532,36 +1551,118 @@ function App() {
   });
   const t = i18n[language] || i18n['zh-CN'];
 
-  async function refresh() {
-    const [s, j, a, f, suggestions, cfg, mon, modelCatalog, ver, diag, saved] = await Promise.all([
-      api('/api/summary'),
-      api('/api/jobs?limit=120'),
-      api('/api/authors').catch(() => []),
-      api('/api/face-groups').catch(() => []),
-      api('/api/face-merge-suggestions').catch(() => []),
-      api('/api/settings').catch(() => null),
-      api('/api/monitor').catch(() => null),
-      api('/api/models').catch(() => ({ root: '/models', models: [] })),
-      api('/api/version').catch(() => null),
-      api('/api/diagnostics').catch(() => null),
-      api('/api/saved-searches').catch(() => []),
-    ]);
-    setSummary(s);
-    setJobs(j);
-    setAuthors(a);
-    setFaces(f);
-    setFaceSuggestions(suggestions);
-    setMonitor(mon);
-    setModels(modelCatalog);
-    if (diag) setDiagnostics(diag);
-    setSavedSearches(saved || []);
-    if (!manifestDraftDirtyRef.current) setManifestDraft(modelCatalog?.manifest_url || '');
-    if (!modelDraftDirtyRef.current) setModelDrafts(Object.fromEntries((modelCatalog?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
-    if (ver) setVersion(ver);
-    if (cfg) {
-      setSettings(cfg);
-      setBrowsePath(cfg.media_root || '/media');
+  async function runLatestRequest(key, request, commit) {
+    requestControllersRef.current.get(key)?.abort();
+    const controller = new AbortController();
+    const sequence = Number(requestSequenceRef.current.get(key) || 0) + 1;
+    requestControllersRef.current.set(key, controller);
+    requestSequenceRef.current.set(key, sequence);
+    try {
+      const data = await request(controller.signal);
+      if (controller.signal.aborted || requestSequenceRef.current.get(key) !== sequence) return null;
+      commit?.(data);
+      return data;
+    } catch (exc) {
+      if (isAbortError(exc) || controller.signal.aborted) return null;
+      throw exc;
+    } finally {
+      if (requestSequenceRef.current.get(key) === sequence) requestControllersRef.current.delete(key);
     }
+  }
+
+  function loadSummary() {
+    return runLatestRequest('summary', signal => api('/api/summary', { signal }), setSummary);
+  }
+
+  function loadJobs() {
+    return runLatestRequest('jobs', signal => api('/api/jobs?limit=120', { signal }), data => setJobs(data || []));
+  }
+
+  function loadSavedSearches() {
+    return runLatestRequest('saved-searches', signal => api('/api/saved-searches', { signal }), data => setSavedSearches(data || []));
+  }
+
+  function loadAuthors() {
+    return runLatestRequest('authors', signal => api('/api/authors', { signal }), data => setAuthors(data || []));
+  }
+
+  function loadFaces() {
+    return runLatestRequest(
+      'faces',
+      signal => Promise.all([
+        api('/api/face-groups', { signal }).catch(exc => { if (isAbortError(exc)) throw exc; return []; }),
+        api('/api/face-merge-suggestions', { signal }).catch(exc => { if (isAbortError(exc)) throw exc; return []; }),
+      ]),
+      ([groups, suggestions]) => {
+        setFaces(groups || []);
+        setFaceSuggestions(suggestions || []);
+      },
+    );
+  }
+
+  function loadDiagnostics() {
+    return runLatestRequest('diagnostics', signal => api('/api/diagnostics', { signal }), setDiagnostics);
+  }
+
+  function loadMonitor() {
+    return runLatestRequest('monitor', signal => api('/api/monitor', { signal }), setMonitor);
+  }
+
+  function loadSettings({ force = false } = {}) {
+    if (settingsDirtyRef.current && !force) return Promise.resolve(null);
+    return runLatestRequest('settings', signal => api('/api/settings', { signal }), data => {
+      if (settingsDirtyRef.current && !force) return;
+      setSettings(data);
+      setBrowsePath(data?.media_root || '/media');
+    });
+  }
+
+  function loadVersion() {
+    return runLatestRequest('version', signal => api('/api/version', { signal }), setVersion);
+  }
+
+  function updateSettings(value) {
+    settingsDirtyRef.current = true;
+    setSettings(value);
+  }
+
+  function abortInactivePageRequests(page) {
+    const pageKeys = new Set(['jobs', 'job-detail', 'saved-searches', 'media-list', 'media-append', 'library-search', 'random-media', 'random-media-append', 'tag-graph', 'similarity', 'models', 'diagnostics', 'authors', 'faces', 'settings', 'monitor', 'directory-browser']);
+    const allowed = new Set({
+      dashboard: ['jobs', 'media-list', 'tag-graph'],
+      jobs: ['jobs', 'job-detail'],
+      logs: ['jobs'],
+      quickFind: ['saved-searches', 'media-list', 'media-append'],
+      library: ['media-list', 'media-append', 'library-search', 'similarity'],
+      tagGraph: ['tag-graph'],
+      randomFlow: ['random-media', 'random-media-append'],
+      models: ['models'],
+      diagnostics: ['diagnostics', 'models'],
+      authors: ['authors'],
+      faces: ['faces'],
+      settings: ['settings', 'monitor', 'directory-browser'],
+    }[page] || []);
+    pageKeys.forEach(key => {
+      if (!allowed.has(key)) requestControllersRef.current.get(key)?.abort();
+    });
+  }
+
+  async function refreshActivePage() {
+    if (!auth.authenticated || document.visibilityState === 'hidden') return;
+    abortInactivePageRequests(active);
+    const tasks = [];
+    if (active === 'dashboard') tasks.push(loadSummary(), loadJobs(), loadTagGraph(), loadMedia({ limit: 12, offset: 0 }));
+    else if (active === 'jobs' || active === 'logs') tasks.push(loadJobs());
+    else if (active === 'quickFind') tasks.push(loadSavedSearches(), loadMedia({ limit: 80, offset: 0 }));
+    else if (active === 'library') tasks.push(loadSimilarity());
+    else if (active === 'tagGraph') tasks.push(loadTagGraph());
+    else if (active === 'randomFlow') tasks.push(loadRandomMedia({ limit: 80, offset: 0, seed: Date.now() }));
+    else if (active === 'models') tasks.push(loadModels());
+    else if (active === 'diagnostics') tasks.push(loadDiagnostics(), loadModels());
+    else if (active === 'authors') tasks.push(loadAuthors());
+    else if (active === 'faces') tasks.push(loadFaces());
+    else if (active === 'settings') tasks.push(loadSettings(), loadMonitor());
+    await Promise.all(tasks);
   }
 
   useEffect(() => {
@@ -1578,43 +1679,55 @@ function App() {
   }, [mediaZoom]);
 
   useEffect(() => {
-    api('/api/auth/status').then(status => {
+    const controller = new AbortController();
+    api('/api/auth/status', { signal: controller.signal }).then(status => {
       setAuth(status);
-      api('/api/version').then(setVersion).catch(() => {});
+      loadVersion().catch(() => {});
       if (status.authenticated) {
-        refresh().catch(exc => setError(exc.message));
-        loadMedia().catch(() => {});
-        loadRandomMedia().catch(() => {});
-        loadTagGraph().catch(() => {});
-        loadSimilarity().catch(() => {});
-        loadModels().catch(() => {});
+        loadSummary().catch(exc => setError(exc.message));
       }
-    }).catch(exc => setError(exc.message));
+    }).catch(exc => { if (!isAbortError(exc)) setError(exc.message); });
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
     if (!auth.authenticated) return undefined;
-    const id = setInterval(() => refresh().catch(() => {}), 4000);
-    return () => clearInterval(id);
-  }, [auth.authenticated]);
+    refreshActivePage().catch(exc => { if (!isAbortError(exc)) setError(exc.message); });
+    return undefined;
+  }, [auth.authenticated, active]);
 
   useEffect(() => {
-    if (!auth.authenticated || active !== 'jobs' || !selectedJob?.id) return undefined;
-    const id = setInterval(() => openJob(selectedJob.id).catch(() => {}), 4000);
+    if (!auth.authenticated || !['jobs', 'logs'].includes(active) || !jobs.some(job => ['queued', 'running'].includes(job.status))) return undefined;
+    const poll = () => {
+      if (document.visibilityState === 'hidden') return;
+      loadJobs().then(() => {
+        if (active === 'jobs' && selectedJob?.id) openJob(selectedJob.id).catch(() => {});
+      }).catch(() => {});
+    };
+    const id = setInterval(poll, 3000);
     return () => clearInterval(id);
-  }, [auth.authenticated, active, selectedJob?.id]);
+  }, [auth.authenticated, active, selectedJob?.id, jobs.some(job => ['queued', 'running'].includes(job.status))]);
+
+  useEffect(() => {
+    if (!auth.authenticated) return undefined;
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshActivePage().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [auth.authenticated, active]);
+
+  useEffect(() => () => {
+    requestControllersRef.current.forEach(controller => controller.abort());
+    requestControllersRef.current.clear();
+  }, []);
 
   async function login(password) {
     setError('');
     await api('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
     const status = await api('/api/auth/status');
     setAuth(status);
-    await refresh();
-    await loadMedia();
-    await loadRandomMedia();
-    await loadTagGraph();
-    await loadSimilarity();
-    await loadModels();
+    await Promise.all([loadVersion(), loadSummary(), loadSavedSearches(), loadMedia()]);
   }
 
   async function lockPrivacy() {
@@ -1647,7 +1760,7 @@ function App() {
     setMessage('');
     try {
       const created = await api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command }) });
-      await refresh();
+      await loadJobs();
       await openJob(created.id);
       setActive('jobs');
     } catch (exc) {
@@ -1658,9 +1771,14 @@ function App() {
   }
 
   async function openJob(id) {
-    const [job, log] = await Promise.all([api(`/api/jobs/${id}`), api(`/api/jobs/${id}/log`)]);
-    setSelectedJob(job);
-    setJobLog(log);
+    return runLatestRequest(
+      'job-detail',
+      signal => Promise.all([api(`/api/jobs/${id}`, { signal }), api(`/api/jobs/${id}/log`, { signal })]),
+      ([job, log]) => {
+        setSelectedJob(job);
+        setJobLog(log);
+      },
+    );
   }
 
   async function cancelJob(id) {
@@ -1671,7 +1789,7 @@ function App() {
     try {
       await api(`/api/jobs/${id}/cancel`, { method: 'POST' });
       setMessage(t.cancelRequested);
-      await refresh();
+      await loadJobs();
       await openJob(id);
     } catch (exc) {
       setError(exc.message);
@@ -1689,7 +1807,8 @@ function App() {
     setError('');
     setSearchLoading(true);
     try {
-      const data = await api(`/api/search?q=${encodeURIComponent(nextQuery)}&source=${encodeURIComponent(nextSource)}&limit=200`);
+      const data = await runLatestRequest('library-search', signal => api(`/api/search?q=${encodeURIComponent(nextQuery)}&source=${encodeURIComponent(nextSource)}&limit=200`, { signal }));
+      if (!data) return;
       setResults(data.results);
       setActive('library');
     } catch (exc) {
@@ -1731,7 +1850,9 @@ function App() {
       offset: String(params.offset || 0),
     });
     if (!params.append) setMediaFilters(filters);
-    const data = await api(`/api/media?${search.toString()}`);
+    const requestKey = params.append ? 'media-append' : 'media-list';
+    const data = await runLatestRequest(requestKey, signal => api(`/api/media?${search.toString()}`, { signal }));
+    if (!data) return null;
     if (params.append) {
       let addedCount = 0;
       setMediaResults(current => {
@@ -1764,7 +1885,9 @@ function App() {
       limit: String(params.limit || 80),
       offset: String(params.offset || 0),
     });
-    const data = await api(`/api/media?${search.toString()}`);
+    const requestKey = params.append ? 'random-media-append' : 'random-media';
+    const data = await runLatestRequest(requestKey, signal => api(`/api/media?${search.toString()}`, { signal }));
+    if (!data) return null;
     if (params.append) {
       let addedCount = 0;
       setRandomResults(current => {
@@ -1812,23 +1935,19 @@ function App() {
       limit_edges: String(params.limit_edges || 220),
       min_edge: String(params.min_edge || 2),
     });
-    const data = await api(`/api/tags/graph?${search.toString()}`);
-    setTagGraph(data);
-    return data;
+    return runLatestRequest('tag-graph', signal => api(`/api/tags/graph?${search.toString()}`, { signal }), setTagGraph);
   }
 
   async function loadSimilarity() {
-    const data = await api('/api/media/similarity-groups?limit=80');
-    setSimilarityResults(data);
-    return data;
+    return runLatestRequest('similarity', signal => api('/api/media/similarity-groups?limit=80', { signal }), setSimilarityResults);
   }
 
   async function loadModels() {
-    const data = await api('/api/models');
-    setModels(data);
-    if (!manifestDraftDirtyRef.current) setManifestDraft(data?.manifest_url || '');
-    if (!modelDraftDirtyRef.current) setModelDrafts(Object.fromEntries((data?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
-    return data;
+    return runLatestRequest('models', signal => api('/api/models', { signal }), data => {
+      setModels(data);
+      if (!manifestDraftDirtyRef.current) setManifestDraft(data?.manifest_url || '');
+      if (!modelDraftDirtyRef.current) setModelDrafts(Object.fromEntries((data?.models || []).map(model => [model.id, { url: model.source_url || '', sha256: model.sha256 || '' }])));
+    });
   }
 
   async function saveSearch(name, filters) {
@@ -1854,9 +1973,9 @@ function App() {
     try {
       const saved = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
       setSettings(saved);
+      settingsDirtyRef.current = false;
       setLanguage(saved.language || language);
       setMessage(t.settingsSaved);
-      await refresh();
     } catch (exc) {
       setError(exc.message);
     }
@@ -1865,7 +1984,8 @@ function App() {
   async function browse(path) {
     setError('');
     try {
-      const data = await api(`/api/directories?path=${encodeURIComponent(path)}`);
+      const data = await runLatestRequest('directory-browser', signal => api(`/api/directories?path=${encodeURIComponent(path)}`, { signal }));
+      if (!data) return;
       setBrowsePath(data.path);
       setDirectories(data.directories || []);
     } catch (exc) {
@@ -1878,7 +1998,7 @@ function App() {
     setError('');
     try {
       await api('/api/face-groups/name', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ face_group: faceGroup, actor_name: actorName.trim() }) });
-      await refresh();
+      await loadFaces();
     } catch (exc) {
       setError(exc.message);
     }
@@ -1891,7 +2011,7 @@ function App() {
     setError('');
     try {
       await api('/api/face-groups/merge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source_group: sourceGroup, target_group: targetGroup }) });
-      await refresh();
+      await loadFaces();
       setMessage(`${sourceGroup} -> ${targetGroup}`);
     } catch (exc) {
       setError(exc.message);
@@ -1904,7 +2024,7 @@ function App() {
     setError('');
     try {
       await api('/api/face-groups/merge-named', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor_name: actorName }) });
-      await refresh();
+      await loadFaces();
       setMessage(t.mergeSameNameDone);
     } catch (exc) {
       setError(exc.message);
@@ -1918,7 +2038,7 @@ function App() {
     setError('');
     try {
       await api('/api/authors/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ old_name: oldName, new_name: newName.trim() }) });
-      await refresh();
+      await loadAuthors();
       setMessage(`${oldName} -> ${newName.trim()}`);
     } catch (exc) {
       setError(exc.message);
@@ -1931,7 +2051,7 @@ function App() {
     setError('');
     try {
       await api('/api/authors/exclude', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor_name: actorName }) });
-      await refresh();
+      await loadAuthors();
       setMessage(`${t.excludeAuthor}: ${actorName}`);
     } catch (exc) {
       setError(exc.message);
@@ -1942,7 +2062,7 @@ function App() {
     setError('');
     try {
       await api('/api/authors/sync', { method: 'POST' });
-      await refresh();
+      await loadAuthors();
       setMessage(t.syncAuthorsDone);
     } catch (exc) {
       setError(exc.message);
@@ -2006,7 +2126,7 @@ function App() {
     try {
       await api('/api/monitor/check', { method: 'POST' });
       setMessage(t.checkNow);
-      await refresh();
+      await loadMonitor();
     } catch (exc) {
       setError(exc.message);
     }
@@ -2046,7 +2166,7 @@ function App() {
             <button className="iconButton" title={t.viewSwitcher} onClick={() => setActive('library')}><Grid3X3 size={18} /></button>
             <button className="iconButton" onClick={() => setLanguage(language === 'zh-CN' ? 'en' : 'zh-CN')} title={t.language}><Languages size={18} /></button>
             <button className="iconButton" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Theme">{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
-            <button className="iconButton" onClick={refresh} title="Refresh"><RefreshCw size={18} /></button>
+            <button className="iconButton" onClick={() => refreshActivePage().catch(exc => setError(exc.message))} title="Refresh"><RefreshCw size={18} /></button>
           </div>
         </header>
 
@@ -2082,11 +2202,11 @@ function App() {
         {active === 'tagGraph' && <TagGraphPanel graph={tagGraph} loadTagGraph={loadTagGraph} openFilteredMedia={openFilteredMedia} t={t} />}
         {active === 'randomFlow' && <RandomFlowPanel mediaResults={randomResults} loadRandomMedia={loadRandomMedia} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} setMediaZoom={setMediaZoom} t={t} />}
         {active === 'models' && <ModelsPanel catalog={models} drafts={modelDrafts} setDrafts={setModelDrafts} manifestDraft={manifestDraft} setManifestDraft={setManifestDraft} modelDraftDirtyRef={modelDraftDirtyRef} manifestDraftDirtyRef={manifestDraftDirtyRef} saveModelSource={saveModelSource} saveManifestSource={saveManifestSource} pullModel={pullModel} deleteModel={deleteModel} start={start} busy={busy || hasRunning} t={t} />}
-        {active === 'diagnostics' && <DiagnosticsPanel diagnostics={diagnostics} refresh={refresh} start={start} busy={busy || hasRunning} t={t} />}
+        {active === 'diagnostics' && <DiagnosticsPanel diagnostics={diagnostics} refresh={loadDiagnostics} start={start} busy={busy || hasRunning} t={t} />}
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
-        {active === 'settings' && <SettingsPanel settings={settings} setSettings={setSettings} saveSettings={saveSettings} browse={browse} directories={directories} browsePath={browsePath} monitor={monitor} checkMonitorNow={checkMonitorNow} t={t} />}
+        {active === 'settings' && <SettingsPanel settings={settings} setSettings={updateSettings} saveSettings={saveSettings} browse={browse} directories={directories} browsePath={browsePath} monitor={monitor} checkMonitorNow={checkMonitorNow} t={t} />}
       </section>
     </main>
   );
@@ -2358,7 +2478,7 @@ function jobPercent(job) {
   const processed = Number(job.processed || 0);
   const total = Number(job.total || 0);
   const derived = total > 0 ? Math.floor((processed / total) * 100) : 0;
-  if (job.status === 'done') return 100;
+  if (job.status === 'done' || (job.status === 'warning' && total > 0 && processed >= total)) return 100;
   return Math.max(0, Math.min(100, Math.max(value, derived)));
 }
 
@@ -2445,9 +2565,9 @@ function LogPanel({ selectedJob, jobLog, start, cancelJob, cancelingJobId, hasRu
   const next = selectedJob ? jobNextStep(selectedJob.command, t) : '';
   const actions = selectedJob ? jobNextActions(selectedJob.command, t, start, setActive) : [];
   const canStop = selectedJob && ['queued', 'running'].includes(selectedJob.status);
-  const canResume = selectedJob && ['cancelled', 'failed'].includes(selectedJob.status);
+  const canResume = selectedJob && ['cancelled', 'failed', 'interrupted', 'warning'].includes(selectedJob.status);
   const isCanceling = selectedJob && cancelingJobId === selectedJob.id;
-  const canRetryFrames = selectedJob && ['failed', 'cancelled'].includes(selectedJob.status) && (
+  const canRetryFrames = selectedJob && ['failed', 'cancelled', 'interrupted', 'warning'].includes(selectedJob.status) && (
     String(selectedJob.command || '').includes('extract-frames') ||
     String(selectedJob.stage || '').includes('frame') ||
     String(jobLog?.stdout || '').toLowerCase().includes('frame') ||
@@ -2965,6 +3085,7 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, onDeleted, onPatched, 
     setLoadingMore(true);
     try {
       const data = await loadRandomMedia({ ...filters, append: true, limit: 80, offset: items.length, seed });
+      if (!data) return;
       if (!data.items?.length || Number(data.added_count || 0) === 0) setExhausted(true);
     } catch (exc) {
       setPanelError(exc.message);
@@ -3065,6 +3186,7 @@ function LibraryPanel({ results, mediaResults, mediaFilters, similarityResults, 
     setLoadingMore(true);
     try {
       const data = await loadMedia({ q: mediaQuery, media_type: mediaType, tag: mediaTag, author: mediaAuthor, append: true, limit: 64, offset: items.length });
+      if (!data) return;
       if (!data.items?.length || Number(data.added_count || 0) === 0) setExhausted(true);
     } catch (exc) {
       setPanelError(exc.message);
@@ -3249,13 +3371,29 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
   const videoShellRef = useRef(null);
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [videoMuted, setVideoMuted] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
+  const [videoError, setVideoError] = useState('');
+  const [subtitleMode, setSubtitleMode] = useState(hasPlayableSubtitles ? 'original' : 'off');
   const isFavorite = tags.some(tag => tag.tag === 'Favorite' && tag.state !== 'rejected');
   useEffect(() => setAuthorDraft(data.author || ''), [data.id, data.author]);
   useEffect(() => setContactSheetMissing(false), [data.id]);
   useEffect(() => {
     setVideoPlaying(false);
     setVideoMuted(false);
+    setVideoReady(false);
+    setVideoError('');
+    setFeedbackMessage('');
+    setSubtitleMode(hasPlayableSubtitles ? 'original' : 'off');
   }, [data.id]);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const tracks = Array.from(video.textTracks || []);
+    tracks.forEach((track, index) => {
+      const mode = index === 0 ? 'original' : 'bilingual';
+      track.mode = subtitleMode === mode ? 'showing' : 'disabled';
+    });
+  }, [data.id, hasPlayableSubtitles, subtitleMode, videoReady]);
   useEffect(() => {
     function handleKeyDown(event) {
       if (event.key === 'Escape') close();
@@ -3358,7 +3496,10 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
     event?.preventDefault();
     event?.stopPropagation();
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !videoReady || videoError) {
+      setFeedbackMessage(videoError || t.videoNotReady);
+      return;
+    }
     try {
       if (video.paused) await video.play();
       else video.pause();
@@ -3370,7 +3511,10 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
     event?.preventDefault();
     event?.stopPropagation();
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !videoReady || videoError) {
+      setFeedbackMessage(videoError || t.videoNotReady);
+      return;
+    }
     video.muted = !video.muted;
     setVideoMuted(video.muted);
   }
@@ -3379,23 +3523,38 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
     event?.stopPropagation();
     const video = videoRef.current;
     const target = videoShellRef.current || video;
-    if (!video || !target) return;
+    if (!video || !target || !videoReady || videoError) {
+      setFeedbackMessage(videoError || t.videoNotReady);
+      return;
+    }
     try {
+      if (target.requestFullscreen) {
+        await target.requestFullscreen();
+        return;
+      }
       if (video.webkitEnterFullscreen) {
         video.webkitEnterFullscreen();
         return;
       }
-      if (target.requestFullscreen) {
-        await target.requestFullscreen();
-      }
+      setFeedbackMessage(t.fullscreenUnavailable);
     } catch (exc) {
       setFeedbackMessage(exc.message || String(exc));
     }
   }
+  function changeSubtitleMode(event) {
+    const nextMode = event.target.value;
+    if (nextMode !== 'off' && !hasPlayableSubtitles) {
+      setSubtitleMode('off');
+      setFeedbackMessage(t.subtitleUnavailable);
+      return;
+    }
+    setSubtitleMode(nextMode);
+    setFeedbackMessage(nextMode === 'off' ? t.subtitlesOff : nextMode === 'bilingual' ? t.bilingualSubtitles : t.originalSubtitles);
+  }
   return (
     <ModalPortal>
-    <div className="viewerBackdrop" role="dialog" aria-modal="true">
-      <div className="viewerPanel">
+    <div className="viewerBackdrop" role="dialog" aria-modal="true" aria-label={t.mediaDetail} onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
+      <div className="viewerPanel" onMouseDown={event => event.stopPropagation()}>
         <div className="viewerHead">
           <h2>{t.mediaDetail}</h2>
           <div className="viewerActions">
@@ -3403,7 +3562,7 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
             <button className="iconButton" onClick={rebuildThumbnail} disabled={!!busyAction || loading} title={t.rebuildThumbnail} aria-label={t.rebuildThumbnail}><RefreshCw size={18} /></button>
             {data.media_type === 'video' && <button className="iconButton" onClick={rebuildVideoOverview} disabled={!!busyAction || loading} title={t.rebuildVideoOverview} aria-label={t.rebuildVideoOverview}><Film size={18} /></button>}
             <button className="iconButton dangerIcon" onClick={deleteMedia} disabled={!!busyAction || loading} title={t.deleteMedia} aria-label={t.deleteMedia}><Trash2 size={18} /></button>
-            <button className="iconButton" onClick={close} title={t.close} aria-label={t.close}><XCircle size={18} /></button>
+            <button type="button" className="iconButton" onClick={close} title={t.close} aria-label={t.close}><XCircle size={18} /></button>
           </div>
         </div>
         {loading && <div className="hintBox compact"><span>{t.loadingDetail}</span></div>}
@@ -3419,6 +3578,9 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
                   playsInline
                   preload="metadata"
                   poster={`/api/media/${data.id}/thumbnail?v=${THUMBNAIL_REVISION}`}
+                  onLoadedMetadata={() => { setVideoReady(true); setVideoError(''); }}
+                  onCanPlay={() => { setVideoReady(true); setVideoError(''); }}
+                  onError={() => { setVideoReady(false); setVideoPlaying(false); setVideoError(t.videoLoadError); setFeedbackMessage(t.videoLoadError); }}
                   onPlay={() => setVideoPlaying(true)}
                   onPause={() => setVideoPlaying(false)}
                   onVolumeChange={event => setVideoMuted(event.currentTarget.muted || event.currentTarget.volume === 0)}
@@ -3427,17 +3589,27 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
                   {hasPlayableSubtitles && <track kind="subtitles" srcLang="zh" label={t.bilingualSubtitles} src={`/api/media/${data.id}/subtitles.vtt?mode=bilingual`} />}
                 </video>
                 <div className="videoOverlayControls" onClick={event => event.stopPropagation()}>
-                  <button type="button" onClick={toggleVideoPlayback} title={videoPlaying ? t.pauseVideo : t.playVideo} aria-label={videoPlaying ? t.pauseVideo : t.playVideo}>
+                  <button type="button" onClick={toggleVideoPlayback} disabled={!videoReady || !!videoError} title={videoPlaying ? t.pauseVideo : t.playVideo} aria-label={videoPlaying ? t.pauseVideo : t.playVideo}>
                     {videoPlaying ? <Pause size={18} /> : <Play size={18} />}
                     <span>{videoPlaying ? t.pauseVideo : t.playVideo}</span>
                   </button>
-                  <button type="button" onClick={toggleVideoMuted} title={videoMuted ? t.unmuteVideo : t.muteVideo} aria-label={videoMuted ? t.unmuteVideo : t.muteVideo}>
+                  <button type="button" onClick={toggleVideoMuted} disabled={!videoReady || !!videoError} title={videoMuted ? t.unmuteVideo : t.muteVideo} aria-label={videoMuted ? t.unmuteVideo : t.muteVideo}>
                     {videoMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
                   </button>
-                  <button type="button" onClick={enterVideoFullscreen} title={t.fullscreenVideo} aria-label={t.fullscreenVideo}>
+                  <label className={`subtitleControl ${hasPlayableSubtitles ? '' : 'isUnavailable'}`} title={hasPlayableSubtitles ? t.subtitles : t.subtitleUnavailable}>
+                    <span>{t.subtitles}</span>
+                    <select value={subtitleMode} onChange={changeSubtitleMode} disabled={!hasPlayableSubtitles || !videoReady || !!videoError} aria-label={t.subtitles}>
+                      <option value="off">{t.subtitlesOff}</option>
+                      <option value="original">{t.originalSubtitles}</option>
+                      <option value="bilingual">{t.bilingualSubtitles}</option>
+                    </select>
+                  </label>
+                  <button type="button" onClick={enterVideoFullscreen} disabled={!videoReady || !!videoError} title={t.fullscreenVideo} aria-label={t.fullscreenVideo}>
                     <Maximize2 size={18} />
                   </button>
                 </div>
+                {videoError && <div className="videoStateError" role="alert">{videoError}</div>}
+                {!videoError && feedbackMessage && <div className="videoControlFeedback" role="status" aria-live="polite">{feedbackMessage}</div>}
               </div>
             ) : <img src={`/api/media/${data.id}/file`} alt={data.filename} />}
           </div>
@@ -3482,7 +3654,7 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
                 </span>
               ))}
             </div>
-            {feedbackMessage && <div className="hintBox smallHint"><span>{feedbackMessage}</span></div>}
+            {feedbackMessage && <div className="hintBox smallHint" role="status" aria-live="polite"><span>{feedbackMessage}</span></div>}
             {timeline.length > 0 && (
               <>
                 <h3>{t.timeline}</h3>
@@ -3627,7 +3799,18 @@ function AuthorCard({ author, openAuthor, renameAuthor, excludeAuthor, t }) {
   const [target, setTarget] = useState(author.name);
   useEffect(() => setTarget(author.name), [author.name]);
   return (
-    <article className="authorCard clickableCard" onClick={() => openAuthor(author)}>
+    <article
+      className="authorCard clickableCard"
+      role="button"
+      tabIndex={0}
+      aria-label={`${t.showMedia}: ${author.name}`}
+      onClick={() => openAuthor(author)}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
+        event.preventDefault();
+        openAuthor(author);
+      }}
+    >
       <div className="authorThumb"><span>{author.name.slice(0, 2)}</span><img src={`${author.thumbnail_url}?v=${encodeURIComponent(author.files)}`} alt={author.name} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} /></div>
       <div className="authorMeta">
         <strong>{author.name}</strong>
@@ -3731,7 +3914,18 @@ function FaceCard({ face, openFace, nameFace, t }) {
   const [actor, setActor] = useState(face.actor_name || '');
   useEffect(() => setActor(face.actor_name || ''), [face.actor_name]);
   return (
-    <article className="faceCard clickableCard" onClick={() => openFace(face)}>
+    <article
+      className="faceCard clickableCard"
+      role="button"
+      tabIndex={0}
+      aria-label={`${t.showMedia}: ${face.actor_name || face.face_group}`}
+      onClick={() => openFace(face)}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
+        event.preventDefault();
+        openFace(face);
+      }}
+    >
       <div className="thumb"><img src={`${face.thumbnail_url}?v=${encodeURIComponent(face.representative_frame || '')}`} alt={face.face_group} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} /></div>
       <div className="faceMeta">
         <strong>{face.face_group}</strong>

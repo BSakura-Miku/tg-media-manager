@@ -6,5 +6,10 @@ models/
 __pycache__/
 *.pyc
 .DS_Store
+.env
+.env.*
+!.env.nas.example
+*.tar
+*.tar.gz
 docs/ui-audit/**/*.png
 docs/ui-audit/**/*.json

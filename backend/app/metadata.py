@@ -12,6 +12,7 @@ import shlex
 import shutil
 import struct
 import subprocess
+import threading
 import time
 from collections import defaultdict
 from io import StringIO
@@ -291,16 +292,44 @@ def infer_source_from_path(root: Path, path: Path) -> str:
     return rel.parts[0]
 
 
+NORMALIZED_MEDIA_NAME_RE = re.compile(
+    r"(?i)^(?:VID|IMG)_\d{8}(?:_\d{6})?(?:_[^.]*)?_[0-9a-f]{8}\.[a-z0-9]+$"
+)
+
+
+def looks_like_normalized_media_name(value: str) -> bool:
+    return bool(NORMALIZED_MEDIA_NAME_RE.match(Path(value or "").name))
+
+
 def upsert_media(conn, root: Path, path: Path, media_type: str, manifest: dict, applied: dict) -> int:
     stat = path.stat()
     rel_path = safe_relative(root, path)
     parsed = parse_filename(path.name, path)
-    original_trace = trace_original_source(root, rel_path, manifest.get("hash", ""), manifest.get("hash8", ""), path.name)
-    original_name = original_trace.get("display_original_name") or manifest.get("original_name") or Path(applied.get("original_path", "")).name or path.name
     width = int(float(manifest["width"])) if manifest.get("width") else None
     height = int(float(manifest["height"])) if manifest.get("height") else None
     duration = float(manifest["duration"]) if manifest.get("duration") else None
-    existing = conn.execute("SELECT width, height, duration, resolution FROM media_items WHERE path=?", (str(path),)).fetchone()
+    existing = conn.execute(
+        "SELECT width, height, duration, resolution, original_name, sha256, hash8 FROM media_items WHERE path=?",
+        (str(path),),
+    ).fetchone()
+    preserved_sha256 = str(existing["sha256"] or "") if existing is not None else ""
+    preserved_hash8 = str(existing["hash8"] or "") if existing is not None else ""
+    sha256 = str(manifest.get("hash") or preserved_sha256)
+    hash8 = str(manifest.get("hash8") or preserved_hash8 or sha256[:8])
+    original_trace = trace_original_source(root, rel_path, sha256, hash8, path.name)
+    traced_original = (
+        original_trace.get("display_original_name")
+        or manifest.get("original_name")
+        or Path(applied.get("original_path", "")).name
+        or path.name
+    )
+    existing_original = str(existing["original_name"] or "") if existing is not None else ""
+    if existing_original and not looks_like_normalized_media_name(existing_original):
+        original_name = existing_original
+    elif existing_original and (not traced_original or looks_like_normalized_media_name(traced_original)):
+        original_name = existing_original
+    else:
+        original_name = traced_original
     if existing is not None:
         width = width if width is not None else existing["width"]
         height = height if height is not None else existing["height"]
@@ -318,8 +347,8 @@ def upsert_media(conn, root: Path, path: Path, media_type: str, manifest: dict, 
         "media_type": media_type,
         "size_bytes": stat.st_size,
         "mtime": stat.st_mtime,
-        "sha256": manifest.get("hash", ""),
-        "hash8": manifest.get("hash8", ""),
+        "sha256": sha256,
+        "hash8": hash8,
         "width": width,
         "height": height,
         "duration": duration,
@@ -401,10 +430,19 @@ def rebuild_metadata_index(root: Path | None = None, progress: ProgressCallback 
             progress("index-metadata", indexed, total, last_rel_path)
     with connect() as conn:
         if seen_paths:
-            placeholders = ",".join("?" for _ in seen_paths)
-            conn.execute(f"DELETE FROM media_items WHERE path NOT IN ({placeholders})", list(seen_paths))
+            conn.execute("CREATE TEMP TABLE IF NOT EXISTS scan_seen_paths (path TEXT PRIMARY KEY)")
+            conn.execute("DELETE FROM scan_seen_paths")
+            conn.executemany("INSERT OR IGNORE INTO scan_seen_paths(path) VALUES (?)", ((path,) for path in seen_paths))
+            conn.execute(
+                """
+                DELETE FROM media_items
+                WHERE root=?
+                  AND NOT EXISTS (SELECT 1 FROM scan_seen_paths seen WHERE seen.path=media_items.path)
+                """,
+                (str(root),),
+            )
         else:
-            conn.execute("DELETE FROM media_items")
+            conn.execute("DELETE FROM media_items WHERE root=?", (str(root),))
         conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("rebuild_metadata_index", f"indexed={indexed} root={root}"))
     vision = import_vision_outputs(root, progress=progress, cancel_check=cancel_check)
     if vision.get("cancelled"):
@@ -513,6 +551,63 @@ def probe_media_metadata(path: Path, media_type: str) -> dict:
     return {"probe_status": "skipped", "probe_error": "unsupported media type"}
 
 
+def sha256_file(path: Path, chunk_size: int = 4 * 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def backfill_media_hashes(
+    root: Path | None = None,
+    limit: int | None = None,
+    progress: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
+) -> dict:
+    """Incrementally fill full SHA256/hash8 for media that do not have both values."""
+    init_db()
+    root = root or output_root()
+    sql = """
+        SELECT id, path, sha256, hash8
+        FROM media_items
+        WHERE root=? AND (sha256='' OR hash8='')
+        ORDER BY id
+    """
+    params: list[object] = [str(root)]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(max(0, int(limit)))
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    total = len(rows)
+    processed = updated = failed = 0
+    if progress:
+        progress("hash-backfill", 0, total, "")
+    for row in rows:
+        if cancel_check and cancel_check():
+            return {"ok": False, "cancelled": True, "processed": processed, "total": total, "updated": updated, "failed": failed, "root": str(root)}
+        path = Path(row["path"])
+        processed += 1
+        try:
+            digest = str(row["sha256"] or "") or sha256_file(path)
+            short = str(row["hash8"] or "") or digest[:8]
+            with connect() as conn:
+                conn.execute(
+                    "UPDATE media_items SET sha256=?, hash8=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (digest, short, int(row["id"])),
+                )
+            updated += 1
+        except OSError:
+            failed += 1
+        if progress and (processed == total or processed % 25 == 0):
+            progress("hash-backfill", processed, total, safe_relative(root, path))
+    return {"ok": failed == 0, "processed": processed, "total": total, "updated": updated, "failed": failed, "root": str(root)}
+
+
 def backfill_media_metadata(
     root: Path | None = None,
     limit: int | None = None,
@@ -531,10 +626,12 @@ def backfill_media_metadata(
                 OR height IS NULL
                 OR resolution=''
                 OR (media_type='video' AND (duration IS NULL OR duration <= 0))
+                OR sha256=''
+                OR hash8=''
             )
         """
     sql = f"""
-        SELECT id, path, media_type
+        SELECT id, path, media_type, width, height, duration, resolution, sha256, hash8
         FROM media_items
         WHERE {where}
         ORDER BY id
@@ -549,6 +646,8 @@ def backfill_media_metadata(
     updated = 0
     failed = 0
     skipped = 0
+    hashed = 0
+    hash_failed = 0
     started = time.time()
     if progress:
         progress("metadata-backfill", 0, total, "")
@@ -569,23 +668,41 @@ def backfill_media_metadata(
         path = Path(row["path"])
         media_type = row["media_type"]
         processed += 1
+        needs_probe = (
+            row["width"] is None
+            or row["height"] is None
+            or not row["resolution"]
+            or (media_type == "video" and (row["duration"] is None or float(row["duration"] or 0) <= 0))
+        )
         if not path.exists():
             failed += 1
             meta = {"probe_status": "failed", "probe_error": "file missing"}
-        else:
+        elif needs_probe:
             meta = probe_media_metadata(path, media_type)
-        if meta.get("probe_status") in {"ok", "partial"}:
-            updated += 1
-        elif meta.get("probe_status") == "skipped":
-            skipped += 1
+            if meta.get("probe_status") in {"ok", "partial"}:
+                updated += 1
+            elif meta.get("probe_status") == "skipped":
+                skipped += 1
+            else:
+                failed += 1
         else:
-            failed += 1
+            meta = {"probe_status": "unchanged", "probe_error": ""}
+        sha256 = str(row["sha256"] or "")
+        hash8 = str(row["hash8"] or "")
+        if path.exists() and (not sha256 or not hash8):
+            try:
+                sha256 = sha256 or sha256_file(path)
+                hash8 = hash8 or sha256[:8]
+                hashed += 1
+            except OSError:
+                hash_failed += 1
         width = meta.get("width")
         height = meta.get("height")
         duration = meta.get("duration")
         resolution = meta.get("resolution") or (f"{width}x{height}" if width and height else "")
         with connect() as conn:
-            conn.execute(
+            if needs_probe:
+                conn.execute(
                 """
                 INSERT INTO media_metadata (
                     media_id, width, height, duration, resolution, codec, frame_rate,
@@ -605,7 +722,7 @@ def backfill_media_metadata(
                     probe_error=excluded.probe_error,
                     probed_at=CURRENT_TIMESTAMP
                 """,
-                (
+                    (
                     media_id,
                     width,
                     height,
@@ -617,8 +734,8 @@ def backfill_media_metadata(
                     meta.get("container") or "",
                     meta.get("probe_status") or "failed",
                     meta.get("probe_error") or "",
-                ),
-            )
+                    ),
+                )
             if meta.get("probe_status") in {"ok", "partial"}:
                 conn.execute(
                     """
@@ -632,17 +749,24 @@ def backfill_media_metadata(
                     """,
                     (width, height, duration, resolution, resolution, media_id),
                 )
+            if sha256 or hash8:
+                conn.execute(
+                    "UPDATE media_items SET sha256=?, hash8=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (sha256, hash8, media_id),
+                )
         if progress and (processed == total or processed % 25 == 0):
             progress("metadata-backfill", processed, total, safe_relative(root, path))
     if progress:
         progress("metadata-backfill", total, total, "")
     return {
-        "ok": True,
+        "ok": failed == 0 and hash_failed == 0,
         "processed": processed,
         "total": total,
         "updated": updated,
         "failed": failed,
         "skipped": skipped,
+        "hashed": hashed,
+        "hash_failed": hash_failed,
         "root": str(root),
         "elapsed_seconds": round(time.time() - started, 3),
     }
@@ -683,7 +807,15 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
                 segments = []
             if timed_transcript_segments(segments):
                 timed_transcripts += 1
-        faces = conn.execute("SELECT COUNT(*) AS count FROM media_tags WHERE category='face_group' OR tag LIKE 'FaceGroup_%'").fetchone()["count"]
+        faces = conn.execute(
+            """
+            SELECT COUNT(DISTINCT t.media_id) AS count
+            FROM media_tags t
+            JOIN media_items m ON m.id=t.media_id
+            WHERE m.root=? AND (t.category='face_group' OR t.tag LIKE 'FaceGroup_%') AND t.state != 'rejected'
+            """,
+            (str(root),),
+        ).fetchone()["count"]
         vision_labels = conn.execute("SELECT COUNT(DISTINCT media_id) AS count FROM media_tags WHERE source IN ('vision', 'openclip', 'calibrated-vision') OR category IN ('scene_environment', 'clothing_style', 'shooting_method', 'content_type', 'vision')").fetchone()["count"]
         embeddings = conn.execute("SELECT kind, COUNT(DISTINCT media_id) AS count FROM media_embeddings GROUP BY kind").fetchall()
         failed_jobs = conn.execute(
@@ -710,6 +842,7 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
     thumb_count = sum(1 for _ in thumbs_dir.rglob("*.jpg")) if thumbs_dir.exists() else 0
     subtitles = root / "_MANIFESTS" / "subtitles"
     subtitle_count = sum(1 for _ in subtitles.rglob("*.vtt")) if subtitles.exists() else 0
+    face_group_rows = len(read_csv(root / "_MANIFESTS" / "face_groups.csv"))
     try:
         from .thumbnail_tools import thumbnail_health_summary
 
@@ -866,6 +999,7 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
             "photos": int(totals["photos"] or 0),
             "other": int(totals["other"] or 0),
             "faces": int(faces or 0),
+            "face_group_rows": int(face_group_rows),
             "metadata_rows": int(meta_rows["total"] or 0),
             "metadata_ok": int(meta_rows["ok"] or 0),
             "metadata_failed": int(meta_rows["failed"] or 0),
@@ -899,13 +1033,22 @@ def import_vision_outputs(root: Path | None = None, progress: ProgressCallback |
     manifests = root / "_MANIFESTS"
     labels = read_csv(manifests / "vision_labels.csv")
     frames = read_csv(manifests / "frame_index.csv")
+    face_groups = read_csv(manifests / "face_groups.csv")
     label_by_path = {row.get("media_path", ""): row for row in labels if row.get("media_path")}
     imported_tags = 0
+    face_group_tags = 0
+    desired_face_tags: set[tuple[int, str]] = set()
     timeline_segments = 0
     with connect() as conn:
-        media_rows = conn.execute("SELECT id, relative_path, media_type FROM media_items").fetchall()
-    media_by_path = {row["relative_path"]: {"id": int(row["id"]), "media_type": row["media_type"]} for row in media_rows}
-    total = len(labels) + len(frames)
+        media_rows = conn.execute("SELECT id, path, relative_path, media_type FROM media_items WHERE root=?", (str(root),)).fetchall()
+    media_by_path: dict[str, dict] = {}
+    for row in media_rows:
+        item = {"id": int(row["id"]), "media_type": row["media_type"]}
+        for key in (str(row["relative_path"] or ""), str(row["path"] or "")):
+            if key:
+                media_by_path[key] = item
+                media_by_path[key.replace("\\", "/")] = item
+    total = len(labels) + len(frames) + len(face_groups)
     done = 0
     if progress:
         progress("index-vision", 0, total, "_MANIFESTS/vision_labels.csv")
@@ -939,9 +1082,43 @@ def import_vision_outputs(root: Path | None = None, progress: ProgressCallback |
         done += len(batch)
         if progress:
             progress("index-vision", done, total, "_MANIFESTS/vision_labels.csv")
+    for batch_start in range(0, len(face_groups), batch_size):
+        if cancel_check and cancel_check():
+            return {"vision_tags": imported_tags, "face_group_tags": face_group_tags, "timeline_segments": timeline_segments, "cancelled": True}
+        batch = face_groups[batch_start:batch_start + batch_size]
+        with connect() as conn:
+            for row in batch:
+                group = str(row.get("face_group") or "").strip()
+                media_path = str(row.get("media_path") or "").strip()
+                if not group or not media_path:
+                    continue
+                media = media_by_path.get(media_path) or media_by_path.get(media_path.replace("\\", "/"))
+                if media is None and Path(media_path).is_absolute():
+                    try:
+                        media = media_by_path.get(str(Path(media_path).relative_to(root)))
+                    except ValueError:
+                        media = None
+                if media is None:
+                    continue
+                try:
+                    confidence = float(row.get("det_score") or 1.0)
+                except (TypeError, ValueError):
+                    confidence = 1.0
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO media_tags (media_id, tag, category, confidence, source, state)
+                    VALUES (?, ?, 'face_group', ?, 'face-cluster', 'confirmed')
+                    """,
+                    (media["id"], group, max(0.0, min(1.0, confidence))),
+                )
+                desired_face_tags.add((int(media["id"]), group))
+        done += len(batch)
+        if progress:
+            progress("index-vision", done, total, "_MANIFESTS/face_groups.csv")
+    face_group_tags = len(desired_face_tags)
     for batch_start in range(0, len(frames), batch_size):
         if cancel_check and cancel_check():
-            return {"vision_tags": imported_tags, "timeline_segments": timeline_segments, "cancelled": True}
+            return {"vision_tags": imported_tags, "face_group_tags": face_group_tags, "timeline_segments": timeline_segments, "cancelled": True}
         batch = frames[batch_start:batch_start + batch_size]
         with connect() as conn:
             for row in batch:
@@ -985,10 +1162,25 @@ def import_vision_outputs(root: Path | None = None, progress: ProgressCallback |
             current = batch[-1].get("media_path", "") if batch else "_MANIFESTS/frame_index.csv"
             progress("index-vision", done, total, current)
     with connect() as conn:
-        conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("import_vision_outputs", f"vision_tags={imported_tags} timeline_segments={timeline_segments} root={root}"))
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS desired_face_tags (media_id INTEGER, tag TEXT, PRIMARY KEY(media_id, tag))")
+        conn.execute("DELETE FROM desired_face_tags")
+        conn.executemany("INSERT OR IGNORE INTO desired_face_tags(media_id, tag) VALUES (?, ?)", desired_face_tags)
+        conn.execute(
+            """
+            DELETE FROM media_tags
+            WHERE source='face-cluster'
+              AND media_id IN (SELECT id FROM media_items WHERE root=?)
+              AND NOT EXISTS (
+                  SELECT 1 FROM desired_face_tags wanted
+                  WHERE wanted.media_id=media_tags.media_id AND wanted.tag=media_tags.tag
+              )
+            """,
+            (str(root),),
+        )
+        conn.execute("INSERT INTO media_operations (operation, detail) VALUES (?, ?)", ("import_vision_outputs", f"vision_tags={imported_tags} face_group_tags={face_group_tags} timeline_segments={timeline_segments} root={root}"))
     if progress:
         progress("index-vision", total, total, "_MANIFESTS/frame_index.csv")
-    return {"vision_tags": imported_tags, "timeline_segments": timeline_segments}
+    return {"vision_tags": imported_tags, "face_group_tags": face_group_tags, "timeline_segments": timeline_segments}
 
 
 def read_vision_embeddings(root: Path | None = None) -> dict[str, dict]:
@@ -1011,6 +1203,95 @@ def read_vision_embeddings(root: Path | None = None) -> dict[str, dict]:
             if media_path and isinstance(embedding, list) and embedding:
                 embeddings[media_path] = row
     return embeddings
+
+
+def import_clip_embeddings(
+    root: Path | None = None,
+    progress: ProgressCallback | None = None,
+    cancel_check: CancelCheck | None = None,
+    limit: int | None = None,
+    only_missing: bool = True,
+) -> dict:
+    """Import cached OpenCLIP image vectors without loading or running a vision model."""
+    init_db()
+    root = root or output_root()
+    source = root / "_MANIFESTS" / "vision_embeddings.jsonl"
+    if not source.exists():
+        return {"ok": False, "error": "vision_embeddings.jsonl not found", "imported": 0, "skipped": 0, "root": str(root)}
+    with connect() as conn:
+        media_rows = conn.execute("SELECT id, path, relative_path FROM media_items WHERE root=?", (str(root),)).fetchall()
+        existing_media = {
+            int(row["media_id"])
+            for row in conn.execute(
+                "SELECT DISTINCT e.media_id FROM media_embeddings e JOIN media_items m ON m.id=e.media_id WHERE m.root=? AND e.kind='clip_image'",
+                (str(root),),
+            ).fetchall()
+        }
+    media_by_path: dict[str, int] = {}
+    for row in media_rows:
+        for key in (str(row["relative_path"] or ""), str(row["path"] or "")):
+            if key:
+                media_by_path[key] = int(row["id"])
+                media_by_path[key.replace("\\", "/")] = int(row["id"])
+    with source.open("r", encoding="utf-8", errors="replace") as count_handle:
+        total = sum(1 for line in count_handle if line.strip())
+    if limit is not None:
+        total = min(total, max(0, int(limit)))
+    imported = skipped = failed = processed = 0
+    if progress:
+        progress("index-clip-cache", 0, total, str(source.name))
+    with source.open("r", encoding="utf-8", errors="replace") as handle, connect() as conn:
+        for line in handle:
+            if limit is not None and processed >= max(0, int(limit)):
+                break
+            if not line.strip():
+                continue
+            if cancel_check and cancel_check():
+                conn.commit()
+                return {"ok": False, "cancelled": True, "processed": processed, "total": total, "imported": imported, "skipped": skipped, "failed": failed, "root": str(root)}
+            processed += 1
+            item: dict = {}
+            try:
+                item = json.loads(line)
+                media_path = str(item.get("media_path") or "")
+                media_id = media_by_path.get(media_path) or media_by_path.get(media_path.replace("\\", "/"))
+                vector = item.get("embedding")
+                if not media_id or not isinstance(vector, list) or not vector:
+                    skipped += 1
+                    continue
+                if only_missing and media_id in existing_media:
+                    skipped += 1
+                    continue
+                values = [float(value) for value in vector]
+                norm = math.sqrt(sum(value * value for value in values)) or 1.0
+                values = [value / norm for value in values]
+                model_name = str(item.get("model") or os.environ.get("OPENCLIP_MODEL", "ViT-L-14"))
+                pretrained = str(item.get("pretrained") or os.environ.get("OPENCLIP_PRETRAINED", "laion2b_s32b_b82k"))
+                model = f"openclip:{model_name}:{pretrained}"
+                conn.execute("DELETE FROM media_embeddings WHERE media_id=? AND kind='clip_image'", (media_id,))
+                conn.execute(
+                    """
+                    INSERT INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
+                    VALUES (?, 'clip_image', ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (media_id, model, len(values), pack_vector(values), media_path[:4000]),
+                )
+                existing_media.add(media_id)
+                imported += 1
+            except (json.JSONDecodeError, TypeError, ValueError, struct.error):
+                failed += 1
+            if processed % 250 == 0:
+                conn.commit()
+                if progress:
+                    progress("index-clip-cache", processed, total, str(item.get("media_path") or "") if isinstance(item, dict) else "")
+        conn.commit()
+        conn.execute(
+            "INSERT INTO media_operations (operation, detail) VALUES (?, ?)",
+            ("import_clip_embeddings", f"imported={imported} skipped={skipped} failed={failed} source={source}"),
+        )
+    if progress:
+        progress("index-clip-cache", processed, total, str(source.name))
+    return {"ok": failed == 0, "processed": processed, "total": total, "imported": imported, "skipped": skipped, "failed": failed, "root": str(root)}
 
 
 def dot_score(left: list[float], right: list[float]) -> float:
@@ -1942,17 +2223,181 @@ def model_file_exists(model_id: str) -> bool:
         return False
 
 
+_SEMANTIC_BACKEND_LOCK = threading.Lock()
+_BGE_BACKEND: dict | None = None
+_BGE_BACKEND_KEY: tuple[str, str] | None = None
+_OPENCLIP_TEXT_BACKEND: dict | None = None
+_OPENCLIP_TEXT_BACKEND_KEY: tuple[str, str, str] | None = None
+
+
+def _registry_model_path(model_id: str) -> Path | None:
+    try:
+        from .model_manager import MODEL_REGISTRY
+
+        relative = (MODEL_REGISTRY.get(model_id) or {}).get("path")
+        return Path(os.environ.get("MODEL_ROOT", "/models")) / str(relative) if relative else None
+    except Exception:
+        return None
+
+
+def bge_asset_paths() -> tuple[Path | None, Path | None]:
+    explicit_model = os.environ.get("BGE_MODEL_PATH", "").strip()
+    registered = Path(explicit_model) if explicit_model else _registry_model_path("bge-small-text")
+    if registered is None:
+        return None, None
+    model_path = registered
+    asset_root = registered.parent
+    if registered.suffix.lower() != ".onnx":
+        asset_root = registered
+        model_path = registered / "onnx" / "model_quantized.onnx"
+        if not model_path.exists():
+            model_path = registered / "model.onnx"
+    explicit_tokenizer = os.environ.get("BGE_TOKENIZER_PATH", "").strip()
+    tokenizer_path = Path(explicit_tokenizer) if explicit_tokenizer else asset_root / "tokenizer.json"
+    if not tokenizer_path.exists() and model_path.parent.parent != model_path.parent:
+        parent_candidate = model_path.parent.parent / "tokenizer.json"
+        if parent_candidate.exists():
+            tokenizer_path = parent_candidate
+    return model_path, tokenizer_path
+
+
+def _load_bge_backend() -> dict | None:
+    global _BGE_BACKEND, _BGE_BACKEND_KEY
+    model_path, tokenizer_path = bge_asset_paths()
+    if model_path is None or tokenizer_path is None:
+        return None
+    key = (str(model_path), str(tokenizer_path))
+    if _BGE_BACKEND is not None and _BGE_BACKEND_KEY == key:
+        return _BGE_BACKEND
+    if not model_path.is_file() or not tokenizer_path.is_file():
+        return None
+    with _SEMANTIC_BACKEND_LOCK:
+        if _BGE_BACKEND is not None and _BGE_BACKEND_KEY == key:
+            return _BGE_BACKEND
+        try:
+            import numpy as np  # type: ignore
+            import onnxruntime as ort  # type: ignore
+            from tokenizers import Tokenizer  # type: ignore
+
+            available = ort.get_available_providers()
+            providers = [name for name in ("OpenVINOExecutionProvider", "CPUExecutionProvider") if name in available]
+            session = ort.InferenceSession(str(model_path), providers=providers or available)
+            tokenizer = Tokenizer.from_file(str(tokenizer_path))
+            backend = {
+                "session": session,
+                "tokenizer": tokenizer,
+                "numpy": np,
+                "model": "bge-small-zh-v1.5-onnx",
+                "max_length": max(8, int(os.environ.get("BGE_MAX_LENGTH", "512"))),
+            }
+            _BGE_BACKEND = backend
+            _BGE_BACKEND_KEY = key
+            return backend
+        except Exception:
+            return None
+
+
+def bge_text_vector(text: str) -> list[float]:
+    backend = _load_bge_backend()
+    if backend is None or not text.strip():
+        return []
+    try:
+        np = backend["numpy"]
+        encoding = backend["tokenizer"].encode(text[:12000])
+        max_length = int(backend["max_length"])
+        ids = list(encoding.ids[:max_length])
+        attention = list(encoding.attention_mask[:max_length])
+        type_ids = list(encoding.type_ids[:max_length])
+        if not ids:
+            return []
+        input_names = {item.name for item in backend["session"].get_inputs()}
+        feed = {}
+        if "input_ids" in input_names:
+            feed["input_ids"] = np.asarray([ids], dtype=np.int64)
+        if "attention_mask" in input_names:
+            feed["attention_mask"] = np.asarray([attention], dtype=np.int64)
+        if "token_type_ids" in input_names:
+            feed["token_type_ids"] = np.asarray([type_ids], dtype=np.int64)
+        outputs = backend["session"].run(None, feed)
+        values = np.asarray(outputs[0], dtype=np.float32)
+        if values.ndim == 3:
+            # BGE v1.5 is trained and published with CLS pooling.
+            values = values[:, 0, :]
+        if values.ndim == 2:
+            values = values[0]
+        values = values.reshape(-1)
+        norm = float(np.linalg.norm(values)) or 1.0
+        return [float(value) for value in values / norm]
+    except Exception:
+        return []
+
+
+def _load_openclip_text_backend() -> dict | None:
+    global _OPENCLIP_TEXT_BACKEND, _OPENCLIP_TEXT_BACKEND_KEY
+    model_name = os.environ.get("OPENCLIP_MODEL", "ViT-L-14")
+    pretrained = os.environ.get("OPENCLIP_PRETRAINED", "laion2b_s32b_b82k")
+    device = os.environ.get("OPENCLIP_TEXT_DEVICE", "cpu")
+    key = (model_name, pretrained, device)
+    if _OPENCLIP_TEXT_BACKEND is not None and _OPENCLIP_TEXT_BACKEND_KEY == key:
+        return _OPENCLIP_TEXT_BACKEND
+    with _SEMANTIC_BACKEND_LOCK:
+        if _OPENCLIP_TEXT_BACKEND is not None and _OPENCLIP_TEXT_BACKEND_KEY == key:
+            return _OPENCLIP_TEXT_BACKEND
+        try:
+            import open_clip  # type: ignore
+            import torch  # type: ignore
+
+            model, _, _ = open_clip.create_model_and_transforms(model_name, pretrained=pretrained, device=device)
+            model.eval()
+            backend = {
+                "torch": torch,
+                "model_instance": model,
+                "tokenizer": open_clip.get_tokenizer(model_name),
+                "device": device,
+                "model": f"openclip:{model_name}:{pretrained}",
+            }
+            _OPENCLIP_TEXT_BACKEND = backend
+            _OPENCLIP_TEXT_BACKEND_KEY = key
+            return backend
+        except Exception:
+            return None
+
+
+def openclip_text_vector(text: str) -> tuple[list[float], str]:
+    backend = _load_openclip_text_backend()
+    if backend is None or not text.strip():
+        return [], ""
+    try:
+        torch = backend["torch"]
+        tokens = backend["tokenizer"]([text]).to(backend["device"])
+        with torch.no_grad():
+            features = backend["model_instance"].encode_text(tokens)
+            features /= features.norm(dim=-1, keepdim=True)
+        return [float(value) for value in features[0].detach().cpu().tolist()], str(backend["model"])
+    except Exception:
+        return [], ""
+
+
+def text_embedding(text: str) -> tuple[list[float], str, str]:
+    vector = bge_text_vector(text)
+    if vector:
+        backend = _load_bge_backend() or {}
+        return vector, "bge_text", str(backend.get("model") or "bge-small-zh-v1.5-onnx")
+    return hashed_text_vector(text), "text", "local-hash-128"
+
+
 def embedding_kind_for_text() -> tuple[str, str]:
-    if model_file_exists("bge-small-text"):
-        return "bge_text", "bge-small-zh-v1.5-local"
+    backend = _load_bge_backend()
+    if backend is not None:
+        return "bge_text", str(backend.get("model") or "bge-small-zh-v1.5-onnx")
     return "text", "local-hash-128"
 
 
 def semantic_query_vector(query: str, preferred_kind: str = "") -> tuple[list[float], str]:
-    kind, model = embedding_kind_for_text()
     if preferred_kind in {"text", "subtitle", "tag"}:
-        kind, model = "text", "local-hash-128"
-    return hashed_text_vector(query), model
+        return hashed_text_vector(query), "local-hash-128"
+    vector, _kind, model = text_embedding(query)
+    return vector, model
 
 
 def visual_signature_for_media(root: Path, row: dict, conn) -> str:
@@ -1980,7 +2425,7 @@ def visual_signature_for_media(root: Path, row: dict, conn) -> str:
     return ""
 
 
-def clip_embedding_for_media(root: Path, row: dict, vision_embeddings: dict[str, dict]) -> list[float]:
+def clip_embedding_record_for_media(root: Path, row: dict, vision_embeddings: dict[str, dict]) -> tuple[list[float], str]:
     candidates = [
         str(row.get("relative_path") or ""),
         str(row.get("path") or ""),
@@ -1997,10 +2442,16 @@ def clip_embedding_for_media(root: Path, row: dict, vision_embeddings: dict[str,
             try:
                 values = [float(value) for value in vector]
             except (TypeError, ValueError):
-                return []
+                return [], ""
             norm = math.sqrt(sum(value * value for value in values)) or 1.0
-            return [value / norm for value in values]
-    return []
+            model_name = str(item.get("model") or os.environ.get("OPENCLIP_MODEL", "ViT-L-14"))
+            pretrained = str(item.get("pretrained") or os.environ.get("OPENCLIP_PRETRAINED", "laion2b_s32b_b82k"))
+            return [value / norm for value in values], f"openclip:{model_name}:{pretrained}"
+    return [], ""
+
+
+def clip_embedding_for_media(root: Path, row: dict, vision_embeddings: dict[str, dict]) -> list[float]:
+    return clip_embedding_record_for_media(root, row, vision_embeddings)[0]
 
 
 def rebuild_semantic_index(
@@ -2019,7 +2470,12 @@ def rebuild_semantic_index(
     cancelled = False
     mode = mode if mode in {"all", "text", "vision"} else "all"
     text_kind, text_model = embedding_kind_for_text()
-    vision_embeddings = read_vision_embeddings(root) if mode in {"all", "vision"} else {}
+    clip_import = {"imported": 0, "skipped": 0}
+    if mode in {"all", "vision"}:
+        clip_import = import_clip_embeddings(root, progress=progress, cancel_check=cancel_check, limit=limit, only_missing=True)
+        if clip_import.get("cancelled"):
+            return {"ok": False, "cancelled": True, "processed": 0, "text": 0, "visual": 0, "clip": int(clip_import.get("imported") or 0), "mode": mode, "root": str(root)}
+        clip_count = int(clip_import.get("imported") or 0)
     with connect() as conn:
         rows = [dict(row) for row in conn.execute("SELECT * FROM media_items ORDER BY id").fetchall()]
         if limit:
@@ -2037,14 +2493,16 @@ def rebuild_semantic_index(
                 transcript = str(transcript_row["text"] or "") if transcript_row else ""
                 text = media_semantic_text(row, tags, transcript)
                 if text.strip():
-                    vector = hashed_text_vector(text)
+                    vector, row_text_kind, row_text_model = text_embedding(text)
+                    conn.execute("DELETE FROM media_embeddings WHERE media_id=? AND kind IN ('text', 'bge_text')", (row["id"],))
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                         """,
-                        (row["id"], text_kind, text_model, len(vector), pack_vector(vector), text[:4000]),
+                        (row["id"], row_text_kind, row_text_model, len(vector), pack_vector(vector), text[:4000]),
                     )
+                    text_kind, text_model = row_text_kind, row_text_model
                     text_count += 1
                 if tags:
                     tag_text = " ".join(tags)
@@ -2077,16 +2535,6 @@ def rebuild_semantic_index(
                         (row["id"], len(visual_vector), pack_vector(visual_vector), visual_sig[:256]),
                     )
                     visual_count += 1
-                clip_vector = clip_embedding_for_media(root, row, vision_embeddings)
-                if clip_vector:
-                    conn.execute(
-                        """
-                        INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
-                        VALUES (?, 'clip_image', 'openclip-local', ?, ?, ?, CURRENT_TIMESTAMP)
-                        """,
-                        (row["id"], len(clip_vector), pack_vector(clip_vector), row.get("relative_path") or row.get("filename") or ""),
-                    )
-                    clip_count += 1
             processed += 1
             if processed % 100 == 0:
                 conn.commit()
@@ -2104,7 +2552,7 @@ def rebuild_semantic_index(
             pass
     if progress:
         progress(f"index-semantic-{mode}", processed, total if not cancelled else max(total, processed), "semantic index cancelled" if cancelled else "semantic index complete")
-    return {"ok": not cancelled, "cancelled": cancelled, "processed": processed, "text": text_count, "visual": visual_count, "clip": clip_count, "mode": mode, "text_model": text_model, "root": str(root)}
+    return {"ok": not cancelled, "cancelled": cancelled, "processed": processed, "text": text_count, "visual": visual_count, "clip": clip_count, "clip_import": clip_import, "mode": mode, "text_model": text_model, "root": str(root)}
 
 
 def semantic_media_search(
@@ -2124,7 +2572,9 @@ def semantic_media_search(
     query = q.strip()
     if not query:
         return media_query(limit=limit)
-    query_vector = hashed_text_vector(query)
+    hash_query_vector = hashed_text_vector(query)
+    bge_query_vector = bge_text_vector(query)
+    clip_query_vector, clip_query_model = openclip_text_vector(query)
     rows_out = []
     clauses = ["m.risk_state='normal'"]
     params: list[object] = []
@@ -2160,58 +2610,79 @@ def semantic_media_search(
         params.extend([f"%{resolution}%", f"%{resolution}%"])
     where = f"WHERE {' AND '.join(clauses)}"
     with connect() as conn:
-        rows = conn.execute(
+        candidate_limit = max(limit, min(50000, int(os.environ.get("SEMANTIC_SEARCH_CANDIDATE_LIMIT", "20000"))))
+        cursor = conn.execute(
             f"""
-            SELECT e.media_id, e.kind, e.model, e.dim, e.vector, m.*, GROUP_CONCAT(t.tag, ',') AS tags
-            FROM media_embeddings e
-            JOIN media_items m ON m.id=e.media_id
-            LEFT JOIN media_tags t ON t.media_id=m.id AND t.state != 'rejected'
-            {where} AND e.kind IN ('text', 'subtitle', 'tag', 'bge_text')
-            GROUP BY e.media_id, e.kind, e.model
+            WITH candidates AS (
+                SELECT m.id
+                FROM media_items m
+                {where}
+                ORDER BY m.id DESC
+                LIMIT ?
+            )
+            SELECT e.media_id, e.kind, e.model, e.dim, e.vector, m.*,
+                   (SELECT GROUP_CONCAT(t.tag, ',') FROM media_tags t WHERE t.media_id=m.id AND t.state != 'rejected') AS tags
+            FROM candidates c
+            JOIN media_items m ON m.id=c.id
+            JOIN media_embeddings e ON e.media_id=m.id
+            WHERE e.kind IN ('text', 'subtitle', 'tag', 'bge_text', 'clip_image')
+            ORDER BY m.id DESC, e.kind
             """,
-            params,
-        ).fetchall()
+            [*params, candidate_limit],
+        )
         scores: dict[int, tuple[float, dict, list[str]]] = {}
-        weights = {"bge_text": 1.15, "text": 1.0, "subtitle": 0.9, "tag": 1.05}
+        weights = {"bge_text": 1.15, "text": 1.0, "subtitle": 0.9, "tag": 1.05, "clip_image": 1.1}
         preferred_tags = [str(item).strip() for item in ((intent or {}).get("prefer") or []) if str(item).strip()]
         must_tags = [str(item).strip() for item in ((intent or {}).get("must") or []) if str(item).strip()]
         excluded_tags = [str(item).strip() for item in ((intent or {}).get("exclude") or []) if str(item).strip()]
         excluded_terms = [str(item).strip().lower() for item in ((intent or {}).get("exclude_terms") or []) if str(item).strip()]
-        for row in rows:
-            data = dict(row)
-            kind = str(data.get("kind") or "")
-            item_tags = [part.strip() for part in str(data.get("tags") or "").split(",") if part.strip()]
-            if excluded_tags and any(any(excluded.lower() in item.lower() for item in item_tags) for excluded in excluded_tags):
-                continue
-            item_search_text = " ".join([
-                str(data.get("filename") or ""),
-                str(data.get("original_name") or ""),
-                str(data.get("author") or ""),
-                str(data.get("tags") or ""),
-            ]).lower()
-            if excluded_terms and any(term in item_search_text for term in excluded_terms):
-                continue
-            vector = unpack_vector(data.pop("vector", None), int(data.get("dim") or 0))
-            score = cosine_similarity(query_vector, vector) * weights.get(kind, 1.0)
-            item_tag_text = " ".join(item_tags).lower()
-            preferred_hits = [tag_name for tag_name in preferred_tags if tag_name.lower() in item_tag_text]
-            must_hits = [tag_name for tag_name in must_tags if tag_name.lower() in item_tag_text]
-            if preferred_hits:
-                score += min(0.28, 0.07 * len(preferred_hits))
-            if must_hits:
-                score += min(0.36, 0.12 * len(must_hits))
-            if tag:
-                score += 0.08
-            if author:
-                score += 0.05
-            media_id = int(data["media_id"])
-            reasons = semantic_match_reasons(data, query, score, kind)
-            if preferred_hits:
-                reasons.append("AI意图命中: " + ",".join(preferred_hits[:3]))
-            if must_hits:
-                reasons.append("强意图命中: " + ",".join(must_hits[:3]))
-            if score > scores.get(media_id, (0.0, {}, []))[0]:
-                scores[media_id] = (score, data, reasons[:5])
+        while True:
+            batch = cursor.fetchmany(500)
+            if not batch:
+                break
+            for row in batch:
+                data = dict(row)
+                kind = str(data.get("kind") or "")
+                item_tags = [part.strip() for part in str(data.get("tags") or "").split(",") if part.strip()]
+                if excluded_tags and any(any(excluded.lower() in item.lower() for item in item_tags) for excluded in excluded_tags):
+                    continue
+                item_search_text = " ".join([
+                    str(data.get("filename") or ""),
+                    str(data.get("original_name") or ""),
+                    str(data.get("author") or ""),
+                    str(data.get("tags") or ""),
+                ]).lower()
+                if excluded_terms and any(term in item_search_text for term in excluded_terms):
+                    continue
+                vector = unpack_vector(data.pop("vector", None), int(data.get("dim") or 0))
+                if kind == "bge_text":
+                    query_vector = bge_query_vector
+                elif kind == "clip_image":
+                    query_vector = clip_query_vector if clip_query_vector and (not clip_query_model or data.get("model") in {clip_query_model, "openclip-local"}) else []
+                else:
+                    query_vector = hash_query_vector
+                if not query_vector or len(query_vector) != len(vector):
+                    continue
+                score = cosine_similarity(query_vector, vector) * weights.get(kind, 1.0)
+                item_tag_text = " ".join(item_tags).lower()
+                preferred_hits = [tag_name for tag_name in preferred_tags if tag_name.lower() in item_tag_text]
+                must_hits = [tag_name for tag_name in must_tags if tag_name.lower() in item_tag_text]
+                if preferred_hits:
+                    score += min(0.28, 0.07 * len(preferred_hits))
+                if must_hits:
+                    score += min(0.36, 0.12 * len(must_hits))
+                if tag:
+                    score += 0.08
+                if author:
+                    score += 0.05
+                media_id = int(data["media_id"])
+                reasons = semantic_match_reasons(data, query, score, kind)
+                if preferred_hits:
+                    reasons.append("AI意图命中: " + ",".join(preferred_hits[:3]))
+                if must_hits:
+                    reasons.append("强意图命中: " + ",".join(must_hits[:3]))
+                if score > scores.get(media_id, (-2.0, {}, []))[0]:
+                    scores[media_id] = (score, data, reasons[:5])
         for score, data, reasons in sorted(scores.values(), key=lambda item: item[0], reverse=True)[:limit]:
             data["semantic_score"] = round(score, 6)
             data["match_reasons"] = reasons
@@ -2822,16 +3293,24 @@ def timed_transcript_segments(segments: list[dict]) -> list[dict]:
     return out
 
 
-def write_subtitle_files(conn, media_id: int, segments: list[dict], text: str) -> None:
+def write_subtitle_files(conn, media_id: int, segments: list[dict], text: str) -> bool:
     timed = timed_transcript_segments(segments)
     if not timed:
-        return
+        return False
     row = conn.execute("SELECT root FROM media_items WHERE id=?", (media_id,)).fetchone()
     root = Path(row["root"]) if row and row["root"] else output_root()
     out_dir = subtitle_dir(root)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{media_id}.vtt").write_text(transcript_to_vtt(timed, text, "original"), encoding="utf-8")
     (out_dir / f"{media_id}.bilingual.vtt").write_text(transcript_to_vtt(timed, text, "bilingual"), encoding="utf-8")
+    return True
+
+
+def remove_subtitle_files(conn, media_id: int) -> None:
+    row = conn.execute("SELECT root FROM media_items WHERE id=?", (media_id,)).fetchone()
+    root = Path(row["root"]) if row and row["root"] else output_root()
+    for suffix in (".vtt", ".bilingual.vtt"):
+        (subtitle_dir(root) / f"{media_id}{suffix}").unlink(missing_ok=True)
 
 
 def subtitle_for_media(media_id: int, mode: str = "original") -> tuple[str, Path | None]:
@@ -2902,33 +3381,54 @@ def save_transcript(conn, media_id: int, result: dict, model_name: str, include_
         (media_id, f"segments={len(segments)} model={model_name} engine={engine}"),
     )
     try:
-        write_subtitle_files(conn, media_id, segments, text)
+        if not write_subtitle_files(conn, media_id, segments, text):
+            remove_subtitle_files(conn, media_id)
     except OSError:
         pass
 
 
-def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "base") -> dict:
+def transcript_needs_timed_rerun(segments_json: str | None, text: str | None = "", source: str | None = "") -> bool:
+    try:
+        segments = json.loads(segments_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return True
+    if not str(text or "").strip() and str(source or "").lower() == "faster-whisper":
+        return False
+    return not bool(timed_transcript_segments(segments if isinstance(segments, list) else []))
+
+
+def transcription_candidates(root: Path, limit: int | None = None) -> list:
     query = """
-        SELECT id, path, filename
-        FROM media_items
-        WHERE media_type='video'
-          AND NOT EXISTS (SELECT 1 FROM media_transcripts tr WHERE tr.media_id=media_items.id)
-        ORDER BY mtime DESC
+        SELECT m.id, m.path, m.filename, tr.text AS transcript_text, tr.segments_json, tr.source AS transcript_source
+        FROM media_items m
+        LEFT JOIN media_transcripts tr ON tr.media_id=m.id
+        WHERE m.media_type='video' AND m.root=?
+        ORDER BY m.mtime DESC
     """
-    args: tuple[int, ...] = ()
-    if limit is not None:
-        query += " LIMIT ?"
-        args = (limit,)
     with connect() as conn:
-        rows = conn.execute(query, args).fetchall()
+        candidates = conn.execute(query, (str(root),)).fetchall()
+    rows = [
+        row
+        for row in candidates
+        if row["segments_json"] is None
+        or transcript_needs_timed_rerun(row["segments_json"], row["transcript_text"], row["transcript_source"])
+    ]
+    if limit is not None:
+        rows = rows[:max(0, int(limit))]
+    return rows
+
+
+def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "base") -> dict:
+    rows = transcription_candidates(root, limit)
     if not rows:
-        return {"ok": True, "processed": 0, "segments": 0}
+        return {"ok": True, "processed": 0, "segments": 0, "timed_subtitles": 0, "failed": 0, "errors": []}
     total = len(rows)
     print("TGMM_PROGRESS " + json.dumps({"stage": "transcribe", "processed": 0, "total": total, "progress": 0, "message": "loading model"}, ensure_ascii=False), flush=True)
     legacy_engine = os.environ.get("ASR_ENGINE", "auto").strip().lower()
     transcript_engine = os.environ.get("TRANSCRIPT_ENGINE", legacy_engine).strip().lower()
     audio_tag_mode = os.environ.get("AUDIO_TAG_MODE", "sensevoice-sample").strip().lower()
     audio_tag_sample_seconds = configured_seconds("AUDIO_TAG_SAMPLE_SECONDS", 30)
+    generate_timed_subtitles = os.environ.get("GENERATE_TIMED_SUBTITLES", "true").strip().lower() in {"1", "true", "yes", "on"}
     if transcript_engine == "whisper":
         transcript_engine = "faster-whisper"
     if transcript_engine == "sensevoice":
@@ -2955,6 +3455,7 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
     segment_count = 0
     errors = []
     warnings = []
+    timed_count = 0
     with TemporaryDirectory(prefix="tgmm_audio_") as tmpdir:
         tmp_root = Path(tmpdir)
         with connect() as conn:
@@ -2964,6 +3465,7 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                     return {"ok": False, "processed": processed, "segments": segment_count, "cancelled": True, "errors": errors[:20]}
                 path = Path(row["path"])
                 if not path.exists():
+                    errors.append({"id": row["id"], "error": "media file missing"})
                     continue
                 wav = tmp_root / f"{row['id']}.wav"
                 ok, audio_error = extract_audio_wav(path, wav)
@@ -3001,6 +3503,21 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                             errors.append({"id": row["id"], "error": "no ASR engine available"})
                             continue
                         result = transcribe_with_faster_whisper(wav, model, model_name)
+                    if result and not timed_transcript_segments(result.get("segments") or []) and generate_timed_subtitles:
+                        if model is None:
+                            try:
+                                from faster_whisper import WhisperModel  # type: ignore
+                                device = os.environ.get("WHISPER_DEVICE", "cpu")
+                                compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+                                model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=os.environ.get("MODEL_ROOT", "/models"))
+                            except Exception as exc:
+                                warnings.append({"id": row["id"], "warning": "timed subtitle fallback unavailable", "detail": repr(exc)})
+                        if model is not None:
+                            timed_result = transcribe_with_faster_whisper(wav, model, model_name)
+                            if timed_transcript_segments(timed_result.get("segments") or []):
+                                result = timed_result
+                            else:
+                                warnings.append({"id": row["id"], "warning": "ASR returned transcript without usable timestamps"})
                     save_transcript(conn, int(row["id"]), result, result.get("model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "SenseVoiceSmall.gguf"), include_text_tags=audio_tag_mode != "off")
                     if result.get("engine") != "sensevoice-gguf" and audio_tag_mode in {"sensevoice-sample", "sensevoice-full"} and sensevoice_available:
                         tag_wav = wav
@@ -3023,6 +3540,8 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                     conn.commit()
                     processed += 1
                     segment_count += len(result.get("segments") or [])
+                    if timed_transcript_segments(result.get("segments") or []):
+                        timed_count += 1
                 except Exception as exc:
                     errors.append({"id": row["id"], "error": repr(exc)})
                 print(
@@ -3041,7 +3560,15 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                     ),
                     flush=True,
                 )
-    response = {"ok": True, "processed": processed, "segments": segment_count, "errors": errors[:20]}
+    response = {
+        "ok": len(errors) == 0,
+        "partial": bool(processed and errors),
+        "processed": processed,
+        "segments": segment_count,
+        "timed_subtitles": timed_count,
+        "failed": len(errors),
+        "errors": errors[:20],
+    }
     if warnings:
         response["warnings"] = warnings[:20]
     return response

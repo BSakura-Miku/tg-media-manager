@@ -789,6 +789,69 @@ select, input {
   background: rgba(34, 50, 80, .72);
   border-color: rgba(255, 255, 255, .34);
 }
+.videoOverlayControls button:disabled,
+.videoOverlayControls select:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+.subtitleControl {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px 0 11px;
+  border: 1px solid rgba(255, 255, 255, .22);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(5, 8, 14, .58);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+  backdrop-filter: blur(14px);
+  pointer-events: auto;
+  font-size: 12px;
+  font-weight: 750;
+}
+.subtitleControl select {
+  min-width: 116px;
+  height: 30px;
+  padding: 0 24px 0 8px;
+  border-color: rgba(255, 255, 255, .18);
+  color: #fff;
+  background: rgba(20, 29, 45, .92);
+}
+.subtitleControl.isUnavailable {
+  opacity: .62;
+}
+.videoStateError {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  z-index: 4;
+  width: min(420px, calc(100% - 32px));
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 122, 144, .46);
+  border-radius: 8px;
+  color: #fff;
+  background: rgba(70, 17, 30, .9);
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+.videoControlFeedback {
+  position: absolute;
+  left: 50%;
+  bottom: 54px;
+  z-index: 4;
+  max-width: calc(100% - 32px);
+  padding: 7px 11px;
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(5, 8, 14, .78);
+  transform: translateX(-50%);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .3);
+  font-size: 12px;
+  font-weight: 720;
+  text-align: center;
+  pointer-events: none;
+}
 .viewerInfo {
   display: grid;
   align-content: start;
@@ -993,6 +1056,11 @@ select, input {
 .clickableCard:hover {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
   transform: translateY(-1px);
+}
+.clickableCard:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 72%, white 12%);
+  outline-offset: 3px;
+  border-color: var(--accent);
 }
 .graphLayout {
   display: grid;
@@ -2735,6 +2803,9 @@ i.blue { background: var(--accent); }
   .orbitNode:not(.orbitCenter) { min-width: 88px; max-width: 112px; }
   .mediaCard { grid-template-rows: 190px 1fr; }
   .mediaThumb { height: 190px; min-height: 190px; }
+  .videoOverlayControls { flex-wrap: wrap; }
+  .subtitleControl > span { display: none; }
+  .subtitleControl select { min-width: 106px; }
 }
 
 /* v1.1 gallery refinement: quieter material, natural media ratios, elastic graph */

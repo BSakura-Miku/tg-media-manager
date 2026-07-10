@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import base64
 import hashlib
 import hmac
 import json
 import subprocess
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
@@ -29,9 +31,6 @@ from .metadata import (
     media_query,
     mime_for,
     parse_natural_search,
-    rebuild_metadata_index,
-    rebuild_semantic_index,
-    rebuild_similarity_index,
     risk_queue,
     semantic_media_search,
     set_tag_feedback,
@@ -46,7 +45,14 @@ from .metadata import (
     understand_search_query,
     vision_calibrator_status,
 )
-from .model_manager import MODEL_REGISTRY, delete_model, model_catalog, sha256_setting_key, source_setting_key
+from .model_manager import (
+    MODEL_REGISTRY,
+    delete_model,
+    model_catalog,
+    sha256_setting_key,
+    source_setting_key,
+    validate_download_url,
+)
 
 try:
     from PIL import Image, ImageChops, ImageOps
@@ -56,14 +62,40 @@ except Exception:
     ImageOps = None
 
 
-app = FastAPI(title="TG Media Manager")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    init_db()
+    mark_interrupted_jobs()
+    for warning in auth_security_status()["security_warnings"]:
+        print(f"TGMM_SECURITY_WARNING {warning}", flush=True)
+    start_monitor_thread()
+    yield
+
+
+app = FastAPI(title="TG Media Manager", lifespan=app_lifespan)
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def configured_cors_origins() -> list[str]:
+    return [origin.strip() for origin in os.environ.get("APP_CORS_ORIGINS", "").split(",") if origin.strip()]
+
+
+_cors_origins = configured_cors_origins()
+if _cors_origins:
+    allow_any_origin = "*" in _cors_origins and env_bool("APP_CORS_ALLOW_ANY", False)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"] if allow_any_origin else [origin for origin in _cors_origins if origin != "*"],
+        allow_credentials=not allow_any_origin,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Accept", "Authorization", "Content-Type"],
+    )
 
 
 def parse_optional_float(value: str | float | int | None, minimum: float = 0) -> float | None:
@@ -180,23 +212,82 @@ class AuthRequest(BaseModel):
     password: str
 
 
-@app.on_event("startup")
-def startup() -> None:
-    init_db()
-    mark_interrupted_jobs()
-    start_monitor_thread()
-
-
 def auth_password() -> str:
     return os.environ.get("APP_PASSWORD", "")
 
 
-def auth_token() -> str:
-    password = auth_password()
-    if not password:
+def auth_session_ttl() -> int:
+    try:
+        return max(300, min(int(os.environ.get("APP_SESSION_TTL_SECONDS", "43200")), 2_592_000))
+    except ValueError:
+        return 43_200
+
+
+def auth_signing_key() -> bytes:
+    secret = os.environ.get("APP_SECRET", "").strip()
+    if secret:
+        return secret.encode("utf-8")
+    # Keep password-only installations compatible while ensuring that a password
+    # change invalidates all existing sessions. APP_SECRET is still recommended.
+    return hashlib.sha256(f"tgmm-session:{auth_password()}".encode("utf-8")).digest()
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def issue_auth_token(now: int | None = None) -> str:
+    if not auth_password():
         return ""
-    secret = os.environ.get("APP_SECRET", "tg-media-manager-local")
-    return hashlib.sha256(f"{secret}:{password}".encode()).hexdigest()
+    issued_at = int(time.time() if now is None else now)
+    payload = _b64url_encode(
+        json.dumps(
+            {"v": 1, "iat": issued_at, "exp": issued_at + auth_session_ttl()},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+    signature = hmac.new(auth_signing_key(), payload.encode("ascii"), hashlib.sha256).digest()
+    return f"{payload}.{_b64url_encode(signature)}"
+
+
+def auth_session_valid(token: str, now: int | None = None) -> bool:
+    if not auth_password() or not token or "." not in token:
+        return False
+    try:
+        payload, supplied_signature = token.rsplit(".", 1)
+        expected_signature = _b64url_encode(hmac.new(auth_signing_key(), payload.encode("ascii"), hashlib.sha256).digest())
+        if not hmac.compare_digest(supplied_signature, expected_signature):
+            return False
+        data = json.loads(_b64url_decode(payload))
+        current = int(time.time() if now is None else now)
+        return data.get("v") == 1 and int(data["iat"]) <= current <= int(data["exp"])
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        return False
+
+
+def auth_security_status() -> dict:
+    enabled = bool(auth_password())
+    local_only = env_bool("APP_LOCAL_ONLY", False)
+    warnings = []
+    if not enabled:
+        warnings.append("Authentication is disabled; anyone who can reach this service has full access.")
+    elif not os.environ.get("APP_SECRET", "").strip():
+        warnings.append("APP_SECRET is not configured; the session key is derived from APP_PASSWORD.")
+    if not local_only and not enabled:
+        warnings.append("The service is not declared local-only and has no password protection.")
+    return {
+        "enabled": enabled,
+        "local_only": local_only,
+        "cookie_secure": env_bool("APP_COOKIE_SECURE", False),
+        "session_ttl_seconds": auth_session_ttl(),
+        "security_warnings": warnings,
+        "exposed_without_auth": not enabled and not local_only,
+    }
 
 
 @app.middleware("http")
@@ -208,7 +299,7 @@ async def optional_password_gate(request: Request, call_next):
     if path.startswith("/api/auth") or path.startswith("/assets") or path in {"/api/health", "/api/version"}:
         return await call_next(request)
     cookie = request.cookies.get("tgmm_auth", "")
-    if hmac.compare_digest(cookie, auth_token()):
+    if auth_session_valid(cookie):
         return await call_next(request)
     if path.startswith("/api/"):
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
@@ -217,9 +308,10 @@ async def optional_password_gate(request: Request, call_next):
 
 @app.get("/api/auth/status")
 def api_auth_status(request: Request) -> dict:
-    enabled = bool(auth_password())
-    authenticated = not enabled or hmac.compare_digest(request.cookies.get("tgmm_auth", ""), auth_token())
-    return {"enabled": enabled, "authenticated": authenticated, "local_only": True}
+    status = auth_security_status()
+    status["authenticated"] = not status["enabled"] or auth_session_valid(request.cookies.get("tgmm_auth", ""))
+    status["request_is_local"] = bool(request.client and request.client.host in {"127.0.0.1", "::1", "localhost"})
+    return status
 
 
 @app.post("/api/auth/login")
@@ -228,13 +320,29 @@ def api_auth_login(req: AuthRequest, response: Response) -> dict:
         return {"ok": True, "enabled": False}
     if not hmac.compare_digest(req.password, auth_password()):
         raise HTTPException(status_code=401, detail="Invalid password")
-    response.set_cookie("tgmm_auth", auth_token(), httponly=True, samesite="strict")
+    ttl = auth_session_ttl()
+    response.set_cookie(
+        "tgmm_auth",
+        issue_auth_token(),
+        max_age=ttl,
+        expires=ttl,
+        httponly=True,
+        secure=env_bool("APP_COOKIE_SECURE", False),
+        samesite="strict",
+        path="/",
+    )
     return {"ok": True, "enabled": True}
 
 
 @app.post("/api/auth/logout")
 def api_auth_logout(response: Response) -> dict:
-    response.delete_cookie("tgmm_auth")
+    response.delete_cookie(
+        "tgmm_auth",
+        secure=env_bool("APP_COOKIE_SECURE", False),
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
     return {"ok": True}
 
 
@@ -388,14 +496,19 @@ def api_save_model_source(req: ModelSourceRequest) -> dict:
     spec = MODEL_REGISTRY.get(req.model_id)
     if not spec:
         raise HTTPException(status_code=404, detail="Unknown model")
-    if spec.get("kind") != "file":
-        raise HTTPException(status_code=400, detail="Only direct file models can use custom source URLs")
+    if spec.get("kind") not in {"file", "archive"}:
+        raise HTTPException(status_code=400, detail="Only file and archive models can use custom source URLs")
     url = req.url.strip()
     sha256 = req.sha256.strip()
-    if url and not (url.startswith("https://") or url.startswith("http://")):
-        raise HTTPException(status_code=400, detail="Model URL must start with http:// or https://")
     if sha256 and (len(sha256) != 64 or any(char not in "0123456789abcdefABCDEF" for char in sha256)):
         raise HTTPException(status_code=400, detail="SHA256 must be a 64-character hex string")
+    if url:
+        try:
+            validate_download_url(url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if env_bool("MODEL_REQUIRE_SHA256_CUSTOM", True) and not sha256:
+            raise HTTPException(status_code=400, detail="A SHA256 checksum is required for custom model URLs")
     save_settings({
         source_setting_key(req.model_id): url,
         sha256_setting_key(req.model_id): sha256,
@@ -406,8 +519,11 @@ def api_save_model_source(req: ModelSourceRequest) -> dict:
 @app.post("/api/models/manifest-source")
 def api_save_model_manifest_source(req: ModelManifestRequest) -> dict:
     url = req.url.strip()
-    if url and not (url.startswith("https://") or url.startswith("http://")):
-        raise HTTPException(status_code=400, detail="Manifest URL must start with http:// or https://")
+    if url:
+        try:
+            validate_download_url(url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     save_settings({"model_manifest_url": url})
     return model_catalog()
 
@@ -1306,14 +1422,22 @@ def api_risk(limit: int = Query(100, ge=1, le=300)) -> dict:
     return risk_queue(limit=limit)
 
 
-@app.post("/api/media/rebuild-index")
+def enqueue_rebuild_job(command: str) -> dict:
+    try:
+        job_id = create_job(command)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, "queued": True, "id": job_id, "command": command}
+
+
+@app.post("/api/media/rebuild-index", status_code=202)
 def api_rebuild_media_index() -> dict:
-    return rebuild_metadata_index(output_root())
+    return enqueue_rebuild_job("index-metadata")
 
 
-@app.post("/api/media/rebuild-similarity")
+@app.post("/api/media/rebuild-similarity", status_code=202)
 def api_rebuild_similarity() -> dict:
-    return rebuild_similarity_index(output_root())
+    return enqueue_rebuild_job("index-similarity")
 
 
 @app.get("/api/media/similarity-groups")
@@ -1321,9 +1445,9 @@ def api_similarity_groups(limit: int = Query(100, ge=1, le=300)) -> dict:
     return similarity_groups(limit=limit)
 
 
-@app.post("/api/media/rebuild-semantic")
+@app.post("/api/media/rebuild-semantic", status_code=202)
 def api_rebuild_semantic() -> dict:
-    return rebuild_semantic_index(output_root())
+    return enqueue_rebuild_job("index-semantic")
 
 
 @app.get("/api/media/semantic-search")

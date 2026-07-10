@@ -4,6 +4,21 @@ services:
     image: ${TG_MEDIA_MANAGER_IMAGE:-bsakuramiku/tg-media-manager:clip-amd64}
     platform: linux/amd64
     restart: unless-stopped
+    init: true
+    # Defaults to root for compatibility with the existing NAS share and iGPU.
+    # Set PUID/PGID to a NAS account after verifying /media, /data, /models and
+    # /dev/dri/renderD128 are writable/readable by that account.
+    user: "${PUID:-0}:${PGID:-0}"
+    stop_grace_period: 2m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "8787:8787"
     environment:
@@ -21,13 +36,22 @@ services:
       SENSEVOICE_GGUF_MODEL: /models/sensevoice/SenseVoiceSmall.gguf
       SENSEVOICE_GGUF_URL: ${SENSEVOICE_GGUF_URL:-}
       CUSTOM_DETECTOR_ONNX_URL: ${CUSTOM_DETECTOR_ONNX_URL:-}
-      APP_PASSWORD: ${APP_PASSWORD:-}
+      APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in the NAS compose .env file}
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET in the NAS compose .env file}
+      APP_LOCAL_ONLY: ${APP_LOCAL_ONLY:-false}
+      APP_COOKIE_SECURE: ${APP_COOKIE_SECURE:-false}
+      APP_SESSION_TTL_SECONDS: ${APP_SESSION_TTL_SECONDS:-43200}
+      APP_CORS_ORIGINS: ${APP_CORS_ORIGINS:-}
+      MODEL_ALLOW_HTTP_DOWNLOADS: ${MODEL_ALLOW_HTTP_DOWNLOADS:-false}
+      MODEL_REQUIRE_SHA256_CUSTOM: ${MODEL_REQUIRE_SHA256_CUSTOM:-true}
+      MODEL_MAX_DOWNLOAD_BYTES: ${MODEL_MAX_DOWNLOAD_BYTES:-17179869184}
       ENABLE_PERCEPTUAL_HASH: ${ENABLE_PERCEPTUAL_HASH:-false}
       ENABLE_QUICK_HASH: ${ENABLE_QUICK_HASH:-false}
       FFMPEG_HWACCEL: ${FFMPEG_HWACCEL:-vaapi}
       FFMPEG_HW_DEVICE: ${FFMPEG_HW_DEVICE:-/dev/dri/renderD128}
       FACE_PROVIDERS: ${FACE_PROVIDERS:-OpenVINOExecutionProvider,CPUExecutionProvider}
       OPENVINO_DEVICE: ${OPENVINO_DEVICE:-GPU}
+      GENERATE_TIMED_SUBTITLES: ${GENERATE_TIMED_SUBTITLES:-true}
     devices:
       - /dev/dri:/dev/dri
     volumes:

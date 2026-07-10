@@ -73,5 +73,8 @@ ENV APP_SEMVER=$APP_SEMVER
 ENV APP_IMAGE=$APP_IMAGE
 ENV APP_BUILT_AT=$APP_BUILT_AT
 
+# Runtime UID/GID is intentionally selected by Compose. NAS media shares often
+# require an existing host UID, so the image does not force a user that could
+# silently make /media, /data, /models, or /dev/dri unusable.
 EXPOSE 8787
 CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8787"]

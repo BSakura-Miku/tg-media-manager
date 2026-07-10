@@ -4,6 +4,7 @@ import os
 import json
 import signal
 import select
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -12,7 +13,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from .db import connect, get_settings
-from .metadata import backfill_media_metadata, import_vision_outputs, rebuild_metadata_index, rebuild_semantic_index, rebuild_similarity_index, train_vision_calibrators, transcribe_videos
+from .metadata import backfill_media_hashes, backfill_media_metadata, import_vision_outputs, rebuild_metadata_index, rebuild_semantic_index, rebuild_similarity_index, train_vision_calibrators, transcribe_videos
 from .model_manager import pull_model
 from .thumbnail_tools import repair_thumbnail_cache
 
@@ -22,7 +23,7 @@ ALLOWED_COMMANDS = {
     "workflow-review-cleanup": [["normalize-organized"], ["classify-keywords"], ["organize-review"], ["refresh-state"], ["__metadata_index__"]],
     "workflow-face-balanced": [["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"]],
     "workflow-vision-plan": [["extract-frames"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"]],
-    "workflow-full-library": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["normalize-organized"], ["organize-review"], ["refresh-state"], ["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"], ["dedupe-organized", "--apply"], ["__similarity_index__"], ["__transcribe__"], ["__metadata_index__"], ["__metadata_backfill__"], ["__semantic_index__"]],
+    "workflow-full-library": [["scan"], ["analyze-filenames"], ["classify-keywords"], ["apply"], ["normalize-organized"], ["organize-review"], ["refresh-state"], ["extract-frames"], ["face-scan"], ["face-cluster", "--threshold", "0.80"], ["face-cluster-report"], ["apply-face-groups"], ["vision-scan"], ["__vision_index__"], ["apply-vision-labels"], ["dedupe-organized", "--apply"], ["__similarity_index__"], ["__transcribe__"], ["__metadata_index__"], ["__metadata_backfill__"], ["__thumbnail_repair__"], ["__semantic_index__"], ["__quality_gate__"]],
     "workflow-transcribe-sample": [["__transcribe_sample__"], ["__metadata_index__"]],
     "model-pull-openclip-vit-l": [["__model_pull__", "openclip-vit-l"]],
     "model-pull-openclip-vit-h": [["__model_pull__", "openclip-vit-h"]],
@@ -67,6 +68,7 @@ ALLOWED_COMMANDS = {
     "apply-vision-labels": ["apply-vision-labels", "--apply"],
     "index-metadata": ["__metadata_index__"],
     "metadata-backfill": ["__metadata_backfill__"],
+    "hash-backfill": ["__hash_backfill__"],
     "repair-thumbnails": ["__thumbnail_repair__"],
     "index-similarity": ["__similarity_index__"],
     "index-semantic": ["__semantic_index__"],
@@ -99,12 +101,14 @@ PIPELINE_STAGES = {
     "__vision_calibrator_train__": "train-vision-calibrator",
     "__metadata_index__": "index-metadata",
     "__metadata_backfill__": "metadata-backfill",
+    "__hash_backfill__": "hash-backfill",
     "__thumbnail_repair__": "thumbnail-repair",
     "__similarity_index__": "index-similarity",
     "__semantic_index__": "index-semantic",
     "__semantic_text_index__": "index-semantic-text",
     "__semantic_vision_index__": "index-semantic-vision",
     "__diagnose_search__": "diagnose-search",
+    "__quality_gate__": "quality-gate",
     "__transcribe_sample__": "transcribe",
     "__transcribe__": "transcribe",
     "__model_pull__": "model-download",
@@ -143,8 +147,7 @@ def mark_interrupted_jobs() -> int:
         conn.execute(
             """
             UPDATE jobs
-            SET status='failed',
-                progress=0,
+            SET status='interrupted',
                 finished_at=CURRENT_TIMESTAMP,
                 message='interrupted by service restart; cached outputs are kept and the job can be rerun',
                 stderr=CASE
@@ -217,6 +220,7 @@ def hardware_env(settings: dict) -> dict[str, str]:
     env["TRANSCRIPT_ENGINE"] = transcript_engine
     env["AUDIO_TAG_MODE"] = audio_tag_mode
     env["AUDIO_TAG_SAMPLE_SECONDS"] = str(settings.get("audio_tag_sample_seconds") or os.environ.get("AUDIO_TAG_SAMPLE_SECONDS", "30"))
+    env["GENERATE_TIMED_SUBTITLES"] = str(settings.get("generate_timed_subtitles") or os.environ.get("GENERATE_TIMED_SUBTITLES", "true"))
     env["SENSEVOICE_GGUF_BIN"] = settings.get("sensevoice_gguf_bin") or os.environ.get("SENSEVOICE_GGUF_BIN", "llama-sensevoice")
     env["SENSEVOICE_GGUF_MODEL"] = settings.get("sensevoice_gguf_model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "/models/sensevoice/SenseVoiceSmall.gguf")
     if settings.get("sensevoice_gguf_command") or os.environ.get("SENSEVOICE_GGUF_COMMAND"):
@@ -240,8 +244,19 @@ def update_job_progress(job_id: int, **values) -> None:
             params.append(value)
     fields.append("heartbeat_at=CURRENT_TIMESTAMP")
     params.append(job_id)
-    with connect() as conn:
-        conn.execute(f"UPDATE jobs SET {', '.join(fields)} WHERE id=?", params)
+    last_error: Exception | None = None
+    for attempt in range(5):
+        try:
+            with connect() as conn:
+                conn.execute(f"UPDATE jobs SET {', '.join(fields)} WHERE id=?", params)
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            last_error = exc
+            time.sleep(0.1 * (2**attempt))
+    if last_error is not None:
+        raise last_error
 
 
 def step_stage(step: list[str]) -> str:
@@ -426,6 +441,43 @@ def metadata_progress_printer(stage: str, processed: int, total: int, current: s
     )
 
 
+def assess_quality_gate(diagnostics: dict) -> dict:
+    coverage = {str(item.get("id")): item for item in diagnostics.get("coverage", [])}
+    warnings: list[str] = []
+    hard_checks = {
+        "dimensions": 95,
+        "duration": 95,
+        "resolution": 95,
+        "tags": 90,
+        "thumbnails": 90,
+        "text_vectors": 95,
+        "image_vectors": 90,
+    }
+    for capability, minimum in hard_checks.items():
+        item = coverage.get(capability) or {}
+        percent = int(item.get("percent") or 0)
+        total = int(item.get("total") or 0)
+        if total and percent < minimum:
+            warnings.append(f"{capability} coverage {percent}% is below {minimum}%")
+    timed = coverage.get("timed_subtitles") or {}
+    if int(timed.get("total") or 0) and int(timed.get("percent") or 0) < 50:
+        warnings.append(
+            f"timed subtitle coverage is {int(timed.get('percent') or 0)}%; text-only transcripts are not playable subtitles"
+        )
+    face_rows = int(diagnostics.get("media", {}).get("face_group_rows") or 0)
+    linked_faces = int(diagnostics.get("media", {}).get("faces") or 0)
+    if face_rows and linked_faces == 0:
+        warnings.append("face groups are not linked into the virtual media index")
+    return {
+        "ok": not warnings,
+        "warnings": warnings,
+        "coverage": {
+            key: coverage.get(key, {})
+            for key in [*hard_checks, "timed_subtitles", "bge_text_vectors", "clip_image_vectors"]
+        },
+    }
+
+
 def run_job(job_id: int, command: str) -> None:
     settings = get_settings()
     media_root = settings.get("media_root") or os.environ.get("MEDIA_ROOT", "/media")
@@ -449,7 +501,7 @@ def run_job(job_id: int, command: str) -> None:
             "OPENCLIP_MODEL", "OPENCLIP_PRETRAINED", "OPENCLIP_STRONG_MODEL",
             "OPENCLIP_STRONG_PRETRAINED", "OPENCLIP_STRONG_THRESHOLD", "OPENCLIP_STRONG_LOW_CONF_ONLY",
             "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE", "ASR_ENGINE", "TRANSCRIPT_ENGINE", "AUDIO_TAG_MODE", "AUDIO_TAG_SAMPLE_SECONDS", "SENSEVOICE_GGUF_BIN",
-            "SENSEVOICE_GGUF_MODEL", "SENSEVOICE_GGUF_COMMAND", "TRANSCRIBE_MAX_SECONDS",
+            "SENSEVOICE_GGUF_MODEL", "SENSEVOICE_GGUF_COMMAND", "TRANSCRIBE_MAX_SECONDS", "GENERATE_TIMED_SUBTITLES",
         }
     })
     if source_dirs:
@@ -458,9 +510,11 @@ def run_job(job_id: int, command: str) -> None:
         message = " && ".join(
             "index-metadata" if step == ["__metadata_index__"] else
             "metadata-backfill" if step == ["__metadata_backfill__"] else
+            "hash-backfill" if step == ["__hash_backfill__"] else
             "repair-thumbnails" if step == ["__thumbnail_repair__"] else
             "index-vision" if step == ["__vision_index__"] else
             "train-vision-calibrator" if step == ["__vision_calibrator_train__"] else
+            "quality-gate" if step == ["__quality_gate__"] else
             "index-similarity" if step == ["__similarity_index__"] else
             "transcribe-sample" if step == ["__transcribe_sample__"] else
             "transcribe" if step == ["__transcribe__"] else
@@ -472,6 +526,7 @@ def run_job(job_id: int, command: str) -> None:
     try:
         stdout_parts = []
         stderr_parts = []
+        job_warnings: list[str] = []
         returncode = 0
         total_steps = len(steps)
         for index, step in enumerate(steps, start=1):
@@ -497,7 +552,30 @@ def run_job(job_id: int, command: str) -> None:
                     "metadata backfill running",
                 )
                 stdout_parts.append(f"$ metadata-backfill\n{captured}\n{result}")
-                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
+                if result.get("cancelled"):
+                    returncode = 130
+                elif not result.get("ok") and int(result.get("processed") or 0) > 0:
+                    job_warnings.append(
+                        f"metadata backfill completed with {int(result.get('failed') or 0)} probe failures and {int(result.get('hash_failed') or 0)} hash failures"
+                    )
+                    returncode = 0
+                else:
+                    returncode = 0 if result.get("ok") else 1
+            elif step == ["__hash_backfill__"]:
+                result, captured = run_internal_with_progress(
+                    job_id,
+                    "hash-backfill",
+                    lambda: backfill_media_hashes(Path(output_root), progress=metadata_progress_printer, cancel_check=lambda: is_cancel_requested(job_id)),
+                    "hash backfill running",
+                )
+                stdout_parts.append(f"$ hash-backfill\n{captured}\n{result}")
+                if result.get("cancelled"):
+                    returncode = 130
+                elif int(result.get("failed") or 0) > 0 and int(result.get("processed") or 0) > 0:
+                    job_warnings.append(f"hash backfill completed with {int(result.get('failed') or 0)} failures")
+                    returncode = 0
+                else:
+                    returncode = 0 if result.get("ok") else 1
             elif step == ["__thumbnail_repair__"]:
                 result, captured = run_internal_with_progress(
                     job_id,
@@ -551,16 +629,40 @@ def run_job(job_id: int, command: str) -> None:
                 result = media_index_diagnostics(Path(output_root))
                 stdout_parts.append(f"$ diagnose-search\n{json.dumps(result, ensure_ascii=False)[:6000]}")
                 returncode = 0
+            elif step == ["__quality_gate__"]:
+                from .metadata import media_index_diagnostics
+
+                result = media_index_diagnostics(Path(output_root))
+                gate_result = assess_quality_gate(result)
+                if job_warnings:
+                    gate_result["warnings"] = [*job_warnings, *gate_result["warnings"]]
+                    gate_result["ok"] = False
+                stdout_parts.append(f"$ quality-gate\n{json.dumps(gate_result, ensure_ascii=False)}")
+                if gate_result["warnings"]:
+                    stderr_parts.append("quality gate warnings:\n" + "\n".join(f"- {warning}" for warning in gate_result["warnings"]))
+                    returncode = 2
             elif step == ["__transcribe_sample__"]:
                 update_job_progress(job_id, stage="transcribe", message="transcribe sample running")
                 result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=5), "transcribe sample still running")
                 stdout_parts.append(f"$ transcribe-sample\n{captured}\n{result}")
-                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
+                if result.get("cancelled"):
+                    returncode = 130
+                elif result.get("partial"):
+                    job_warnings.append(f"transcription sample completed with {int(result.get('failed') or 0)} failures")
+                    returncode = 0
+                else:
+                    returncode = 0 if result.get("ok") else 1
             elif step == ["__transcribe__"]:
                 update_job_progress(job_id, stage="transcribe", message="full transcribe running")
                 result, captured = run_internal_with_progress(job_id, "transcribe", lambda: transcribe_videos(Path(output_root), limit=None), "full transcribe still running")
                 stdout_parts.append(f"$ transcribe\n{captured}\n{result}")
-                returncode = 130 if result.get("cancelled") else (0 if result.get("ok") else 1)
+                if result.get("cancelled"):
+                    returncode = 130
+                elif result.get("partial"):
+                    job_warnings.append(f"transcription completed with {int(result.get('failed') or 0)} failures")
+                    returncode = 0
+                else:
+                    returncode = 0 if result.get("ok") else 1
             elif step and step[0] == "__model_pull__":
                 model_id = step[1]
                 update_job_progress(job_id, stage="model-download", message=f"pulling {model_id}")
@@ -579,15 +681,21 @@ def run_job(job_id: int, command: str) -> None:
                 if err:
                     stderr_parts.append(f"$ {' '.join(step_args)}\n{err}")
                 returncode = code
-                if code != 0:
-                    break
             update_job_progress(job_id, progress=int(index / max(1, total_steps) * 100), message=f"{stage} done")
-        status = "done" if returncode == 0 else ("cancelled" if returncode == 130 else "failed")
+            if returncode not in {0, 2}:
+                break
+        status = "warning" if returncode == 0 and job_warnings else "done" if returncode == 0 else ("warning" if returncode == 2 else "cancelled" if returncode == 130 else "failed")
         with connect() as conn:
-            if status == "done":
+            if status in {"done", "warning"}:
                 conn.execute(
                     "UPDATE jobs SET status=?, progress=100, finished_at=CURRENT_TIMESTAMP, stdout=?, stderr=?, message=?, heartbeat_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (status, "\n".join(stdout_parts)[-20000:], "\n".join(stderr_parts)[-20000:], f"exit {returncode}", job_id),
+                    (
+                        status,
+                        "\n".join(stdout_parts)[-20000:],
+                        "\n".join(stderr_parts)[-20000:],
+                        "completed with quality warnings" if status == "warning" else f"exit {returncode}",
+                        job_id,
+                    ),
                 )
             else:
                 conn.execute(

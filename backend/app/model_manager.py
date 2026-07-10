@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,6 +26,146 @@ def model_root() -> Path:
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def max_download_bytes() -> int:
+    try:
+        configured = int(os.environ.get("MODEL_MAX_DOWNLOAD_BYTES", str(16 * 1024**3)))
+    except ValueError:
+        configured = 16 * 1024**3
+    return max(1024 * 1024, configured)
+
+
+def _redact_url(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return "[invalid URL]"
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    redacted_query = urllib.parse.urlencode([(key, "REDACTED") for key, _ in query])
+    return urllib.parse.urlunsplit((parsed.scheme, host, parsed.path, redacted_query, ""))
+
+
+def validate_download_url(url: str) -> str:
+    """Reject non-public download targets before every request and redirect."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError as exc:
+        raise ValueError("Invalid model URL") from exc
+    allowed_schemes = {"https"}
+    if _env_bool("MODEL_ALLOW_HTTP_DOWNLOADS", False):
+        allowed_schemes.add("http")
+    if parsed.scheme.lower() not in allowed_schemes:
+        raise ValueError("Model URL must use HTTPS")
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("Model URL must contain a public host and no embedded credentials")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Model URL contains an invalid port") from exc
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("Model URL contains an invalid port")
+    host = parsed.hostname.rstrip(".").lower()
+    if host in {"localhost", "metadata.google.internal"} or host.endswith((".localhost", ".local", ".internal")):
+        raise ValueError("Model URL host is not public")
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(host, port or 443, type=socket.SOCK_STREAM)}
+    except socket.gaierror as exc:
+        raise ValueError("Model URL host could not be resolved") from exc
+    if not addresses:
+        raise ValueError("Model URL host could not be resolved")
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address.split("%", 1)[0])
+        except ValueError as exc:
+            raise ValueError("Model URL resolved to an invalid address") from exc
+        if not ip.is_global:
+            raise ValueError("Model URL resolves to a private, loopback, link-local, or reserved address")
+    return url
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self, maximum: int = 5) -> None:
+        super().__init__()
+        self.maximum = maximum
+        self.redirects = 0
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        self.redirects += 1
+        if self.redirects > self.maximum:
+            raise urllib.error.HTTPError(req.full_url, code, "Too many redirects", headers, fp)
+        validate_download_url(urllib.parse.urljoin(req.full_url, newurl))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _safe_urlopen(url: str, timeout: int = 30):
+    validate_download_url(url)
+    request = urllib.request.Request(url, headers={"User-Agent": "tg-media-manager/1.0"})
+    try:
+        response = urllib.request.build_opener(_SafeRedirectHandler()).open(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Model download failed with HTTP status {exc.code} from {_redact_url(url)}") from None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise RuntimeError(f"Model download request failed for {_redact_url(url)}") from None
+    try:
+        validate_download_url(response.geturl())
+    except Exception:
+        response.close()
+        raise
+    return response
+
+
+def _copy_limited(source, target, limit: int) -> int:
+    copied = 0
+    while True:
+        chunk = source.read(1024 * 1024)
+        if not chunk:
+            break
+        copied += len(chunk)
+        if copied > limit:
+            raise RuntimeError(f"Extracted model exceeds configured limit of {limit} bytes")
+        target.write(chunk)
+    return copied
+
+
+def _stream_download(url: str, target: Path, progress_name: str, byte_limit: int | None = None) -> int:
+    limit = min(max_download_bytes(), byte_limit) if byte_limit is not None else max_download_bytes()
+    with _safe_urlopen(url, timeout=30) as response, target.open("wb") as fh:
+        try:
+            total = int(response.headers.get("Content-Length") or 0)
+        except ValueError:
+            total = 0
+        if total > limit:
+            raise RuntimeError(f"Model download exceeds configured limit of {limit} bytes")
+        done = 0
+        last_emit = 0.0
+        while True:
+            if _cancelled():
+                raise KeyboardInterrupt("cancelled")
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            done += len(chunk)
+            if done > limit:
+                raise RuntimeError(f"Model download exceeds configured limit of {limit} bytes")
+            fh.write(chunk)
+            now = time.time()
+            if total and now - last_emit > 1:
+                _progress("model-download", done, total, progress_name)
+                last_emit = now
+    return done
 
 
 MODEL_REGISTRY = {
@@ -138,14 +282,29 @@ MODEL_REGISTRY = {
     "bge-small-text": {
         "name": "BGE small text embeddings",
         "category": "search",
-        "kind": "file",
-        "description": "Optional text vector model for transcript, tag, and natural-language search.",
-        "description_zh": "可选文本向量模型，用于字幕、标签和自然语言语义检索。",
-        "path": "embeddings/bge-small/model.onnx",
-        "official_url": "https://huggingface.co/BAAI/bge-small-zh-v1.5",
-        "url_env": "BGE_SMALL_ONNX_URL",
-        "sha256_env": "BGE_SMALL_ONNX_SHA256",
-        "recommended": False,
+        "kind": "runtime-cache",
+        "command": "fixed-snapshot",
+        "description": "Controlled BGE ONNX snapshot for transcript, tag, and natural-language search.",
+        "description_zh": "受控下载的完整 BGE ONNX 模型包，用于字幕、标签和自然语言语义检索。",
+        "path": "embeddings/bge-small",
+        "repo_id": "onnx-community/bge-small-zh-v1.5-ONNX",
+        "revision": "18e2da99700c49ed48c0a0e3683da39348fbbb36",
+        "snapshot_files": [
+            "config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "onnx/model_quantized.onnx",
+            "onnx/model_quantized.onnx_data",
+        ],
+        "required_files": [
+            "config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "onnx/model_quantized.onnx",
+            "onnx/model_quantized.onnx_data",
+        ],
+        "official_url": "https://huggingface.co/onnx-community/bge-small-zh-v1.5-ONNX",
+        "recommended": True,
     },
     "fastvit-t8-onnx": {
         "name": "FastViT T8 ONNX",
@@ -217,6 +376,18 @@ def _is_present(path: Path, kind: str) -> bool:
     if path.is_file():
         return path.stat().st_size > 0
     return any(path.iterdir())
+
+
+def _missing_required_files(path: Path, spec: dict) -> list[str]:
+    missing = []
+    for relative in spec.get("required_files") or []:
+        candidate = path / relative
+        try:
+            if not candidate.is_file() or candidate.stat().st_size <= 0:
+                missing.append(str(relative))
+        except OSError:
+            missing.append(str(relative))
+    return missing
 
 
 def _marker_path(model_id: str) -> Path:
@@ -304,6 +475,10 @@ def _model_status(model_id: str, spec: dict) -> dict:
     present = _is_present(path, str(spec["kind"]))
     bytes_used = _dir_size(path)
     size_note = ""
+    missing_files = _missing_required_files(path, spec)
+    if spec.get("required_files"):
+        present = not missing_files
+        size_note = "complete controlled snapshot" if present else f"missing {len(missing_files)} required files"
     if spec["kind"] == "runtime-cache" and spec.get("command") in {"openclip", "faster-whisper"}:
         bytes_used, size_note = _runtime_cache_size(spec)
         present = _marker_path(model_id).exists() and bytes_used > 0
@@ -321,10 +496,11 @@ def _model_status(model_id: str, spec: dict) -> dict:
         "present": present,
         "bytes": bytes_used,
         "size_note": size_note,
+        "missing_files": missing_files,
         "url_env": spec.get("url_env", ""),
         "url_configured": bool(url),
         "url_source": url_source,
-        "source_url": url,
+        "source_url": _redact_url(url),
         "source_editable": downloadable,
         "official_url": spec.get("official_url", ""),
         "sha256_env": spec.get("sha256_env", ""),
@@ -337,7 +513,7 @@ def model_catalog() -> dict:
     settings = get_settings()
     return {
         "root": str(root),
-        "manifest_url": settings.get("model_manifest_url", "").strip() or _env("MODEL_MANIFEST_URL"),
+        "manifest_url": _redact_url(settings.get("model_manifest_url", "").strip() or _env("MODEL_MANIFEST_URL")),
         "models": [_model_status(model_id, spec) for model_id, spec in MODEL_REGISTRY.items()],
     }
 
@@ -401,65 +577,45 @@ def _verify_sha256(path: Path, expected: str) -> None:
         raise RuntimeError(f"sha256 mismatch for {path.name}: expected {expected}, got {actual}")
 
 
-def _download_file(model_id: str, spec: dict) -> dict:
-    settings = get_settings()
+def _download_configuration(model_id: str, spec: dict, settings: dict) -> tuple[str, str]:
     url = _configured_url(model_id, spec, settings)
     if not url:
         raise RuntimeError(f"No source URL configured for {model_id}; set it in the Web Models page, then pull again")
+    sha256 = _configured_sha256(model_id, spec, settings)
+    source = _configured_url_source(model_id, spec, settings)
+    if source == "settings" and _env_bool("MODEL_REQUIRE_SHA256_CUSTOM", True) and not sha256:
+        raise RuntimeError(f"A SHA256 checksum is required for the custom source configured for {model_id}")
+    validate_download_url(url)
+    return url, sha256
+
+
+def _download_file(model_id: str, spec: dict) -> dict:
+    settings = get_settings()
+    url, sha256 = _download_configuration(model_id, spec, settings)
     path = _safe_path(str(spec["path"]))
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_suffix(path.suffix + ".part")
-    req = urllib.request.Request(url, headers={"User-Agent": "tg-media-manager/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as response, part.open("wb") as fh:
-        total = int(response.headers.get("Content-Length") or 0)
-        done = 0
-        last_emit = 0.0
-        while True:
-            if _cancelled():
-                raise KeyboardInterrupt("cancelled")
-            chunk = response.read(1024 * 1024)
-            if not chunk:
-                break
-            fh.write(chunk)
-            done += len(chunk)
-            now = time.time()
-            if total and now - last_emit > 1:
-                _progress("model-download", done, total, path.name)
-                last_emit = now
-    _verify_sha256(part, _configured_sha256(model_id, spec, settings))
-    part.replace(path)
+    try:
+        _stream_download(url, part, path.name)
+        _verify_sha256(part, sha256)
+        part.replace(path)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
     _progress("model-download", 1, 1, path.name)
     return {"ok": True, "model": model_id, "path": str(path), "bytes": path.stat().st_size}
 
 
 def _download_archive(model_id: str, spec: dict) -> dict:
     settings = get_settings()
-    url = _configured_url(model_id, spec, settings)
-    if not url:
-        raise RuntimeError(f"No source URL configured for {model_id}; set it in the Web Models page, then pull again")
+    url, sha256 = _download_configuration(model_id, spec, settings)
     path = _safe_path(str(spec["path"]))
     path.parent.mkdir(parents=True, exist_ok=True)
     member_name = str(spec.get("archive_member") or path.name)
     with TemporaryDirectory(prefix="tgmm_model_") as tmpdir:
         archive = Path(tmpdir) / "model-archive.tar.gz"
-        req = urllib.request.Request(url, headers={"User-Agent": "tg-media-manager/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as response, archive.open("wb") as fh:
-            total = int(response.headers.get("Content-Length") or 0)
-            done = 0
-            last_emit = 0.0
-            while True:
-                if _cancelled():
-                    raise KeyboardInterrupt("cancelled")
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                fh.write(chunk)
-                done += len(chunk)
-                now = time.time()
-                if total and now - last_emit > 1:
-                    _progress("model-download", done, total, archive.name)
-                    last_emit = now
-        _verify_sha256(archive, _configured_sha256(model_id, spec, settings))
+        _stream_download(url, archive, archive.name)
+        _verify_sha256(archive, sha256)
         with tarfile.open(archive, "r:gz") as tar:
             selected = None
             for member in tar.getmembers():
@@ -467,17 +623,84 @@ def _download_archive(model_id: str, spec: dict) -> dict:
                     selected = member
                     break
             if selected is None:
-                raise RuntimeError(f"{member_name} not found in {url}")
+                raise RuntimeError(f"{member_name} not found in downloaded archive")
             extracted = tar.extractfile(selected)
             if extracted is None:
                 raise RuntimeError(f"Unable to extract {member_name}")
             part = path.with_suffix(path.suffix + ".part")
-            with part.open("wb") as fh:
-                shutil.copyfileobj(extracted, fh)
-            part.chmod(0o755)
-            part.replace(path)
+            try:
+                with part.open("wb") as fh:
+                    _copy_limited(extracted, fh, max_download_bytes())
+                part.chmod(0o755)
+                part.replace(path)
+            except BaseException:
+                part.unlink(missing_ok=True)
+                raise
     _progress("model-download", 1, 1, path.name)
     return {"ok": True, "model": model_id, "path": str(path), "bytes": path.stat().st_size}
+
+
+def _download_fixed_snapshot(model_id: str, spec: dict) -> dict:
+    repo_id = str(spec.get("repo_id") or "")
+    revision = str(spec.get("revision") or "main")
+    if repo_id != "onnx-community/bge-small-zh-v1.5-ONNX":
+        raise RuntimeError("Unsupported controlled snapshot repository")
+    files = [str(item) for item in spec.get("snapshot_files") or []]
+    if not files:
+        raise RuntimeError("Controlled snapshot has no configured files")
+    path = _safe_path(str(spec["path"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = path.with_name(f".{path.name}.snapshot.part")
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    downloaded = 0
+    try:
+        for index, relative in enumerate(files, start=1):
+            relative_path = Path(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise RuntimeError("Unsafe controlled snapshot path")
+            target = staging / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            encoded_path = "/".join(urllib.parse.quote(part, safe="") for part in relative_path.parts)
+            url = f"https://huggingface.co/{repo_id}/resolve/{urllib.parse.quote(revision, safe='')}/{encoded_path}"
+            remaining = max_download_bytes() - downloaded
+            if remaining <= 0:
+                raise RuntimeError(f"Model snapshot exceeds configured limit of {max_download_bytes()} bytes")
+            downloaded += _stream_download(url, target, relative, byte_limit=remaining)
+            _progress("model-download", index, len(files), relative)
+        missing = _missing_required_files(staging, spec)
+        if missing:
+            raise RuntimeError(f"Controlled snapshot is incomplete; missing {', '.join(missing)}")
+        backup = path.with_name(f".{path.name}.snapshot.backup")
+        if backup.exists():
+            if backup.is_dir():
+                shutil.rmtree(backup)
+            else:
+                backup.unlink()
+        if path.exists():
+            path.replace(backup)
+        try:
+            staging.replace(path)
+        except BaseException:
+            if backup.exists() and not path.exists():
+                backup.replace(path)
+            raise
+        if backup.exists():
+            if backup.is_dir():
+                shutil.rmtree(backup)
+            else:
+                backup.unlink()
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    marker = _marker_path(model_id)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps({"model": model_id, "repo_id": repo_id, "revision": revision, "created_at": time.time()}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    _progress("model-download", 1, 1, model_id)
+    return {"ok": True, "model": model_id, "path": str(path), "bytes": _dir_size(path)}
 
 
 def _run_cache_command(model_id: str, spec: dict) -> dict:
@@ -575,4 +798,6 @@ def pull_model(model_id: str) -> dict:
         return _download_file(model_id, spec)
     if spec["kind"] == "archive":
         return _download_archive(model_id, spec)
+    if spec.get("command") == "fixed-snapshot":
+        return _download_fixed_snapshot(model_id, spec)
     return _run_cache_command(model_id, spec)

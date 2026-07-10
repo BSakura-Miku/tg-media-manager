@@ -5,4 +5,5 @@ pillow>=10
 opencv-python-headless>=4.9
 # OpenVINO build includes ONNXRuntime plus Intel CPU/GPU execution providers.
 onnxruntime-openvino>=1.17
+tokenizers>=0.20,<1
 insightface>=0.7.3

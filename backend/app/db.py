@@ -3,7 +3,153 @@ from __future__ import annotations
 import os
 import sqlite3
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
+
+
+SCHEMA_VERSION = 3
+
+
+TABLE_COLUMN_MIGRATIONS: dict[str, Mapping[str, str]] = {
+    "jobs": {
+        "stage": "TEXT NOT NULL DEFAULT ''",
+        "current_item": "TEXT NOT NULL DEFAULT ''",
+        "processed": "INTEGER NOT NULL DEFAULT 0",
+        "total": "INTEGER NOT NULL DEFAULT 0",
+        "success_count": "INTEGER NOT NULL DEFAULT 0",
+        "failed_count": "INTEGER NOT NULL DEFAULT 0",
+        "skipped_count": "INTEGER NOT NULL DEFAULT 0",
+        "cancel_requested": "INTEGER NOT NULL DEFAULT 0",
+        "heartbeat_at": "TEXT",
+        "started_at": "TEXT",
+        "finished_at": "TEXT",
+    },
+    "media_items": {
+        "root": "TEXT NOT NULL DEFAULT ''",
+        "relative_path": "TEXT NOT NULL DEFAULT ''",
+        "original_name": "TEXT NOT NULL DEFAULT ''",
+        "ext": "TEXT NOT NULL DEFAULT ''",
+        "media_type": "TEXT NOT NULL DEFAULT 'other'",
+        "size_bytes": "INTEGER NOT NULL DEFAULT 0",
+        "mtime": "REAL NOT NULL DEFAULT 0",
+        "sha256": "TEXT NOT NULL DEFAULT ''",
+        "hash8": "TEXT NOT NULL DEFAULT ''",
+        "width": "INTEGER",
+        "height": "INTEGER",
+        "duration": "REAL",
+        "resolution": "TEXT NOT NULL DEFAULT ''",
+        "author": "TEXT NOT NULL DEFAULT ''",
+        "person": "TEXT NOT NULL DEFAULT ''",
+        "platform": "TEXT NOT NULL DEFAULT ''",
+        "series": "TEXT NOT NULL DEFAULT ''",
+        "code": "TEXT NOT NULL DEFAULT ''",
+        "scene": "TEXT NOT NULL DEFAULT ''",
+        "quality": "TEXT NOT NULL DEFAULT ''",
+        "source": "TEXT NOT NULL DEFAULT ''",
+        "normalized_path": "TEXT NOT NULL DEFAULT ''",
+        "risk_state": "TEXT NOT NULL DEFAULT 'normal'",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "media_tags": {
+        "category": "TEXT NOT NULL DEFAULT ''",
+        "confidence": "REAL NOT NULL DEFAULT 1.0",
+        "source": "TEXT NOT NULL DEFAULT 'auto'",
+        "state": "TEXT NOT NULL DEFAULT 'confirmed'",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "media_operations": {
+        "media_id": "INTEGER",
+        "operation": "TEXT NOT NULL DEFAULT ''",
+        "detail": "TEXT NOT NULL DEFAULT ''",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "media_timeline_segments": {
+        "media_id": "INTEGER NOT NULL DEFAULT 0",
+        "start_seconds": "REAL NOT NULL DEFAULT 0",
+        "end_seconds": "REAL NOT NULL DEFAULT 0",
+        "label": "TEXT NOT NULL DEFAULT ''",
+        "confidence": "REAL NOT NULL DEFAULT 0",
+        "source": "TEXT NOT NULL DEFAULT 'auto'",
+        "representative_frame": "TEXT NOT NULL DEFAULT ''",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "similarity_groups": {
+        "kind": "TEXT NOT NULL DEFAULT ''",
+        "signature": "TEXT NOT NULL DEFAULT ''",
+        "score": "REAL NOT NULL DEFAULT 1.0",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "similarity_members": {
+        "group_id": "INTEGER NOT NULL DEFAULT 0",
+        "media_id": "INTEGER NOT NULL DEFAULT 0",
+        "role": "TEXT NOT NULL DEFAULT 'candidate'",
+        "score": "REAL NOT NULL DEFAULT 1.0",
+        "detail": "TEXT NOT NULL DEFAULT ''",
+    },
+    "parser_templates": {
+        "name": "TEXT NOT NULL DEFAULT ''",
+        "pattern": "TEXT NOT NULL DEFAULT ''",
+        "enabled": "INTEGER NOT NULL DEFAULT 1",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "media_transcripts": {
+        "media_id": "INTEGER NOT NULL DEFAULT 0",
+        "language": "TEXT NOT NULL DEFAULT ''",
+        "text": "TEXT NOT NULL DEFAULT ''",
+        "segments_json": "TEXT NOT NULL DEFAULT '[]'",
+        "model": "TEXT NOT NULL DEFAULT ''",
+        "source": "TEXT NOT NULL DEFAULT 'faster-whisper'",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "media_metadata": {
+        "media_id": "INTEGER NOT NULL DEFAULT 0",
+        "width": "INTEGER",
+        "height": "INTEGER",
+        "duration": "REAL",
+        "resolution": "TEXT NOT NULL DEFAULT ''",
+        "codec": "TEXT NOT NULL DEFAULT ''",
+        "frame_rate": "REAL",
+        "bit_rate": "INTEGER",
+        "container": "TEXT NOT NULL DEFAULT ''",
+        "probe_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "probe_error": "TEXT NOT NULL DEFAULT ''",
+        "probed_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "tag_feedback": {
+        "media_id": "INTEGER NOT NULL DEFAULT 0",
+        "tag": "TEXT NOT NULL DEFAULT ''",
+        "category": "TEXT NOT NULL DEFAULT ''",
+        "verdict": "INTEGER NOT NULL DEFAULT 0",
+        "source": "TEXT NOT NULL DEFAULT 'manual'",
+        "note": "TEXT NOT NULL DEFAULT ''",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "vision_calibrators": {
+        "tag": "TEXT NOT NULL DEFAULT ''",
+        "model_json": "TEXT NOT NULL DEFAULT '{}'",
+        "category": "TEXT NOT NULL DEFAULT ''",
+        "positive_count": "INTEGER NOT NULL DEFAULT 0",
+        "negative_count": "INTEGER NOT NULL DEFAULT 0",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "saved_searches": {
+        "name": "TEXT NOT NULL DEFAULT ''",
+        "filters_json": "TEXT NOT NULL DEFAULT '{}'",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "media_embeddings": {
+        "media_id": "INTEGER NOT NULL DEFAULT 0",
+        "kind": "TEXT NOT NULL DEFAULT ''",
+        "model": "TEXT NOT NULL DEFAULT ''",
+        "dim": "INTEGER NOT NULL DEFAULT 0",
+        "vector": "BLOB",
+        "text": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    },
+}
 
 
 def db_path() -> Path:
@@ -21,8 +167,48 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
+
+
+def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Mapping[str, str]) -> None:
+    if not _table_exists(conn, table):
+        return
+    existing = {str(row["name"]) for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+    for column, definition in columns.items():
+        if column not in existing:
+            conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {definition}')
+
+
+def migrate_schema(conn: sqlite3.Connection) -> None:
+    """Apply additive, idempotent migrations to every persisted application table."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_version (
+            id INTEGER PRIMARY KEY CHECK (id=1),
+            version INTEGER NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    for table, columns in TABLE_COLUMN_MIGRATIONS.items():
+        _ensure_columns(conn, table, columns)
+    conn.execute(
+        """
+        INSERT INTO schema_version (id, version, updated_at)
+        VALUES (1, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET version=excluded.version, updated_at=CURRENT_TIMESTAMP
+        """,
+        (SCHEMA_VERSION,),
+    )
+
+
 def init_db() -> None:
     with connect() as conn:
+        # Older installations may be missing columns referenced by indexes below.
+        # Run the additive pass before and after table creation so both old and new
+        # databases converge on the same schema safely.
+        migrate_schema(conn)
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS jobs (
@@ -232,21 +418,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_media_embeddings_kind ON media_embeddings(kind);
             """
         )
-        existing = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
-        migrations = {
-            "stage": "ALTER TABLE jobs ADD COLUMN stage TEXT NOT NULL DEFAULT ''",
-            "current_item": "ALTER TABLE jobs ADD COLUMN current_item TEXT NOT NULL DEFAULT ''",
-            "processed": "ALTER TABLE jobs ADD COLUMN processed INTEGER NOT NULL DEFAULT 0",
-            "total": "ALTER TABLE jobs ADD COLUMN total INTEGER NOT NULL DEFAULT 0",
-            "success_count": "ALTER TABLE jobs ADD COLUMN success_count INTEGER NOT NULL DEFAULT 0",
-            "failed_count": "ALTER TABLE jobs ADD COLUMN failed_count INTEGER NOT NULL DEFAULT 0",
-            "skipped_count": "ALTER TABLE jobs ADD COLUMN skipped_count INTEGER NOT NULL DEFAULT 0",
-            "cancel_requested": "ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0",
-            "heartbeat_at": "ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT",
-        }
-        for column, statement in migrations.items():
-            if column not in existing:
-                conn.execute(statement)
+        migrate_schema(conn)
 
 
 def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict]:
