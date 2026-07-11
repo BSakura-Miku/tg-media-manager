@@ -50,6 +50,14 @@ TAG_RULES = [
     ("shooting_method", "自拍露脸", ["自拍", "露脸", "第一视角"]),
     ("shooting_method", "第三视角", ["第三视角", "摄影", "拍摄"]),
     ("content_type", "足交足控", ["足交", "足控", "脚", "美足"]),
+    ("content_type", "口交", ["口交", "吹箫", "口活", "含弄", "舔棒", "blowjob", "oral"]),
+    ("content_type", "手交", ["手交", "手活", "撸动", "打手枪", "handjob"]),
+    ("content_type", "后入", ["后入", "背入", "后背体位", "doggy"]),
+    ("content_type", "骑乘", ["骑乘", "女上位", "坐上去", "cowgirl"]),
+    ("content_type", "内射中出", ["内射", "中出", "无套内射", "体内射精"]),
+    ("content_type", "道具自慰", ["自慰", "自摸", "玩具", "跳蛋", "震动棒", "假阳具", "道具"]),
+    ("content_type", "调教捆绑", ["调教", "捆绑", "束缚", "绑缚", "绳缚", "sm"]),
+    ("clothing_style", "死库水泳装", ["死库水", "学校泳装", "竞泳", "泳装", "泳衣"]),
     ("quality", "4K", ["4k", "2160p"]),
     ("quality", "1080P", ["1080p", "fhd"]),
     ("quality", "720P", ["720p", "hd"]),
@@ -1922,6 +1930,14 @@ NL_TAG_ALIASES = [
             "兔女郎",
         ),
     ),
+    ("口交", ("口交", "吹箫", "口活", "含弄", "舔棒", "blowjob", "oral")),
+    ("手交", ("手交", "手活", "撸动", "打手枪", "handjob")),
+    ("后入", ("后入", "背入", "后背体位", "doggy")),
+    ("骑乘", ("骑乘", "女上位", "坐上去", "cowgirl")),
+    ("内射中出", ("内射", "中出", "无套内射", "体内射精")),
+    ("道具自慰", ("自慰", "自摸", "玩具", "跳蛋", "震动棒", "假阳具", "道具")),
+    ("调教捆绑", ("调教", "捆绑", "束缚", "绑缚", "绳缚", "sm")),
+    ("死库水泳装", ("死库水", "学校泳装", "竞泳", "泳装", "泳衣")),
     ("有人声", ("有声", "说话", "语音", "声音", "台词", "对白", "口播", "直播")),
     ("剧情对白", ("剧情", "对话", "对白", "台词", "聊天", "老师", "同学")),
     ("自拍口播", ("口播", "直播", "自述", "自拍视频")),
@@ -1940,6 +1956,14 @@ SEARCH_TAG_EXPANSIONS = {
     "户外露出": ("户外露出", "户外", "室外", "外拍", "街拍", "公园", "公共场景", "露出"),
     "足交足控": ("足交足控", "裸足", "光脚", "美足", "脚底", "脚趾", "足部特写"),
     "水手服制服": ("水手服制服", "制服", "校服", "JK制服", "衬衫", "领带", "职业装"),
+    "口交": ("口交", "吹箫", "口活", "含弄", "舔棒", "口部服务", "blowjob", "oral"),
+    "手交": ("手交", "手活", "撸动", "手部刺激", "handjob"),
+    "后入": ("后入", "背入", "后背体位", "doggy"),
+    "骑乘": ("骑乘", "女上位", "坐姿", "cowgirl"),
+    "内射中出": ("内射中出", "内射", "中出", "无套内射", "体内射精"),
+    "道具自慰": ("道具自慰", "自慰", "自摸", "玩具", "跳蛋", "震动棒", "假阳具"),
+    "调教捆绑": ("调教捆绑", "调教", "捆绑", "束缚", "绑缚", "绳缚"),
+    "死库水泳装": ("死库水泳装", "死库水", "学校泳装", "竞泳", "泳装", "泳衣"),
     "有人声": ("有人声", "说话", "语音", "台词", "对白", "声音"),
     "剧情对白": ("剧情对白", "剧情", "对话", "台词", "对白"),
     "自拍口播": ("自拍口播", "口播", "直播", "自述", "自拍视频"),
@@ -1947,6 +1971,10 @@ SEARCH_TAG_EXPANSIONS = {
     "甜妹音": ("甜妹音", "甜美声线", "软萌声线", "可爱声线"),
     "成熟声线": ("成熟声线", "御姐声线", "姐姐音", "低沉声线"),
 }
+
+
+_INTENT_ONTOLOGY_LOCK = threading.Lock()
+_INTENT_ONTOLOGY_VECTORS: dict[str, list[float]] = {}
 
 
 NL_QUERY_EXPANSIONS = {
@@ -1986,6 +2014,51 @@ def _alias_negative_context_any(alias: str, *texts: str) -> bool:
     return any(_alias_negative_context(text, alias) for text in texts if text)
 
 
+def intent_tag_terms(tag: str) -> list[str]:
+    terms = [tag]
+    terms.extend(SEARCH_TAG_EXPANSIONS.get(tag, ()))
+    for canonical, aliases in NL_TAG_ALIASES:
+        if canonical == tag:
+            terms.extend(aliases)
+            break
+    return _unique_ordered(terms)
+
+
+def intent_tag_matches(tag: str, data: dict) -> bool:
+    haystack = " ".join(
+        str(data.get(key) or "")
+        for key in ("tags", "filename", "original_name", "relative_path", "author", "person", "scene", "source", "text")
+    ).lower()
+    return any(term.lower() in haystack for term in intent_tag_terms(tag))
+
+
+def bge_intent_matches(text: str, excluded: set[str] | None = None) -> list[tuple[str, float]]:
+    """Map colloquial queries to the local tag ontology with BGE embeddings."""
+    query_vector = bge_text_vector(text)
+    if not query_vector:
+        return []
+    excluded = excluded or set()
+    threshold = float(os.environ.get("INTENT_BGE_THRESHOLD", "0.72"))
+    ranked: list[tuple[str, float]] = []
+    for canonical, _aliases in NL_TAG_ALIASES:
+        if canonical in excluded:
+            continue
+        with _INTENT_ONTOLOGY_LOCK:
+            prototype_vector = _INTENT_ONTOLOGY_VECTORS.get(canonical)
+        if prototype_vector is None:
+            prototype_text = f"{canonical} {' '.join(intent_tag_terms(canonical))}"
+            prototype_vector = bge_text_vector(prototype_text)
+            if prototype_vector:
+                with _INTENT_ONTOLOGY_LOCK:
+                    _INTENT_ONTOLOGY_VECTORS[canonical] = prototype_vector
+        if not prototype_vector or len(prototype_vector) != len(query_vector):
+            continue
+        score = cosine_similarity(query_vector, prototype_vector)
+        if score >= threshold:
+            ranked.append((canonical, score))
+    return sorted(ranked, key=lambda item: item[1], reverse=True)[:3]
+
+
 def understand_search_query(query: str) -> dict:
     text = (query or "").strip()
     normalized_text = normalize_nl_search_text(text)
@@ -1997,6 +2070,7 @@ def understand_search_query(query: str) -> dict:
     exclude_terms: list[str] = []
     semantic_terms: list[str] = [text, normalized_text]
     matched_aliases: list[dict] = []
+    explicit_tags: list[str] = []
 
     for canonical, aliases in NL_TAG_ALIASES:
         positive_aliases = []
@@ -2017,6 +2091,7 @@ def understand_search_query(query: str) -> dict:
             exclude_terms.extend(negative_aliases)
         if positive_aliases:
             prefer.append(canonical)
+            explicit_tags.append(canonical)
             semantic_terms.extend(positive_aliases)
             semantic_terms.extend(SEARCH_TAG_EXPANSIONS.get(canonical, ()))
             matched_aliases.append({"tag": canonical, "aliases": _unique_ordered(positive_aliases), "polarity": "prefer"})
@@ -2026,8 +2101,19 @@ def understand_search_query(query: str) -> dict:
         "clothing": r"(必须|一定要|只看|就要|限定).{0,8}(制服|校服|水手服|黑丝|白丝|丝袜|cos|jk)",
         "media": r"(只看|就要|必须).{0,8}(视频|图片|照片)",
     }
+    has_alternatives = bool(re.search(r"(?:或者|或是|任意|都可以|随便|\bor\b)", haystack))
+    keyword_like_query = len(text) <= 48 and not re.search(r"(?:差不多|类似|相关|可能|大概|随便|推荐)", haystack)
     if any(re.search(pattern, haystack) for pattern in strong_patterns.values()):
         must.extend(prefer)
+    elif len(_unique_ordered(explicit_tags)) >= 2 and keyword_like_query and not has_alternatives:
+        # A short list such as "白丝 学生 口交" is conventionally an AND query.
+        must.extend(explicit_tags)
+
+    inferred_matches = bge_intent_matches(text, excluded=set(prefer) | set(exclude)) if text else []
+    for canonical, score in inferred_matches:
+        prefer.append(canonical)
+        semantic_terms.extend(SEARCH_TAG_EXPANSIONS.get(canonical, ()))
+        matched_aliases.append({"tag": canonical, "aliases": [], "polarity": "semantic", "score": round(score, 4)})
 
     if parsed.get("resolution"):
         semantic_terms.append(str(parsed["resolution"]))
@@ -2071,7 +2157,7 @@ def understand_search_query(query: str) -> dict:
     confidence += 0.06 if parsed.get("resolution") else 0
     confidence = min(0.95, confidence)
     return {
-        "provider": "local-intent-v1",
+        "provider": "hybrid-intent-bge-v2" if inferred_matches else "local-ontology-v2",
         "query": text,
         "normalized_query": normalized_text,
         "confidence": round(confidence, 3),
@@ -2568,6 +2654,7 @@ def semantic_media_search(
     resolution: str = "",
     limit: int = 80,
     intent: dict | None = None,
+    _relax_must_on_empty: bool = True,
 ) -> dict:
     query = q.strip()
     if not query:
@@ -2649,8 +2736,12 @@ def semantic_media_search(
                 item_search_text = " ".join([
                     str(data.get("filename") or ""),
                     str(data.get("original_name") or ""),
+                    str(data.get("relative_path") or ""),
                     str(data.get("author") or ""),
+                    str(data.get("person") or ""),
+                    str(data.get("scene") or ""),
                     str(data.get("tags") or ""),
+                    str(data.get("text") or ""),
                 ]).lower()
                 if excluded_terms and any(term in item_search_text for term in excluded_terms):
                     continue
@@ -2664,9 +2755,10 @@ def semantic_media_search(
                 if not query_vector or len(query_vector) != len(vector):
                     continue
                 score = cosine_similarity(query_vector, vector) * weights.get(kind, 1.0)
-                item_tag_text = " ".join(item_tags).lower()
-                preferred_hits = [tag_name for tag_name in preferred_tags if tag_name.lower() in item_tag_text]
-                must_hits = [tag_name for tag_name in must_tags if tag_name.lower() in item_tag_text]
+                preferred_hits = [tag_name for tag_name in preferred_tags if intent_tag_matches(tag_name, data)]
+                must_hits = [tag_name for tag_name in must_tags if intent_tag_matches(tag_name, data)]
+                if must_tags and len(must_hits) != len(must_tags):
+                    continue
                 if preferred_hits:
                     score += min(0.28, 0.07 * len(preferred_hits))
                 if must_hits:
@@ -2687,6 +2779,26 @@ def semantic_media_search(
             data["semantic_score"] = round(score, 6)
             data["match_reasons"] = reasons
             rows_out.append(data)
+    if not rows_out and must_tags and _relax_must_on_empty:
+        relaxed_intent = dict(intent or {})
+        relaxed_intent["must"] = []
+        relaxed = semantic_media_search(
+            q=query,
+            media_type=media_type,
+            tag=tag,
+            author=author,
+            face_group=face_group,
+            favorite=favorite,
+            has_subtitles=has_subtitles,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            resolution=resolution,
+            limit=limit,
+            intent=relaxed_intent,
+            _relax_must_on_empty=False,
+        )
+        relaxed["relaxed_must"] = must_tags
+        return relaxed
     if not rows_out:
         return media_query(q=query, media_type=media_type, tag=tag, author=author, face_group=face_group, favorite=favorite, has_subtitles=has_subtitles, min_duration=min_duration, max_duration=max_duration, resolution=resolution, limit=limit)
     return {"total": len(rows_out), "limit": limit, "offset": 0, "semantic": True, "query": query, "understanding": intent or {}, "items": rows_out}

@@ -46,6 +46,49 @@ class TemporaryDatabaseTestCase(unittest.TestCase):
 
 
 class SemanticBackendTests(TemporaryDatabaseTestCase):
+    def test_short_explicit_multi_facet_query_becomes_strict_and(self) -> None:
+        with patch.object(metadata, "bge_intent_matches", return_value=[]):
+            understood = metadata.understand_search_query("白丝学生口交")
+            alternatives = metadata.understand_search_query("白丝学生或者口交")
+        self.assertEqual(understood["provider"], "local-ontology-v2")
+        self.assertEqual(understood["intent"]["must"], ["JK学生", "黑丝白丝", "口交"])
+        self.assertEqual(alternatives["intent"]["must"], [])
+
+    def test_strict_intent_matches_earliest_filename_not_only_existing_tags(self) -> None:
+        root = self.base / "intent-search"
+        root.mkdir()
+        exact = root / "exact.mp4"
+        partial = root / "partial.mp4"
+        exact.write_bytes(b"exact")
+        partial.write_bytes(b"partial")
+        exact_id = self.insert_media(root, exact, "video")
+        partial_id = self.insert_media(root, partial, "video")
+        vector = metadata.hashed_text_vector("白丝学生口交")
+        with db.connect() as conn:
+            conn.execute("UPDATE media_items SET original_name='白丝学生口交.mp4' WHERE id=?", (exact_id,))
+            conn.execute("UPDATE media_items SET original_name='白丝学生.mp4' WHERE id=?", (partial_id,))
+            conn.executemany(
+                "INSERT INTO media_embeddings (media_id, kind, model, dim, vector, text) VALUES (?, 'text', 'local-hash-128', ?, ?, '')",
+                [
+                    (exact_id, len(vector), metadata.pack_vector(vector)),
+                    (partial_id, len(vector), metadata.pack_vector(vector)),
+                ],
+            )
+        with patch.object(metadata, "bge_intent_matches", return_value=[]), patch.object(
+            metadata, "bge_text_vector", return_value=[]
+        ), patch.object(metadata, "openclip_text_vector", return_value=([], "")):
+            understood = metadata.understand_search_query("白丝学生口交")
+            result = metadata.semantic_media_search(
+                understood["parsed"]["semantic_query"], intent=understood["intent"], limit=10
+            )
+        self.assertFalse(result.get("relaxed_must"))
+        self.assertEqual([item["id"] for item in result["items"]], [exact_id])
+
+    def test_filename_classifier_persists_content_ontology(self) -> None:
+        parsed = {"platform": "", "quality": "", "risk_state": "normal"}
+        tags = metadata.tags_for("白丝学生口交骑乘.mp4", "videos/file.mp4", parsed)
+        self.assertTrue({"JK学生", "黑丝白丝", "口交", "骑乘"}.issubset({item["tag"] for item in tags}))
+
     def test_bge_snapshot_uses_quantized_model_and_root_tokenizer(self) -> None:
         snapshot = self.base / "models" / "embeddings" / "bge-small"
         (snapshot / "onnx").mkdir(parents=True)
