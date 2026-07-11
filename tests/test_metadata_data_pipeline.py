@@ -54,6 +54,14 @@ class SemanticBackendTests(TemporaryDatabaseTestCase):
         self.assertEqual(understood["intent"]["must"], ["JK学生", "黑丝白丝", "口交"])
         self.assertEqual(alternatives["intent"]["must"], [])
 
+    def test_colloquial_content_and_clothing_phrases_map_to_strict_intent(self) -> None:
+        with patch.object(metadata, "bge_intent_matches", return_value=[]):
+            understood = metadata.understand_search_query("教室里穿白色长袜的女学生帮男友用嘴服务")
+        self.assertEqual(
+            understood["intent"]["must"],
+            ["JK学生", "黑丝白丝", "室内居家", "口交"],
+        )
+
     def test_strict_intent_matches_earliest_filename_not_only_existing_tags(self) -> None:
         root = self.base / "intent-search"
         root.mkdir()
