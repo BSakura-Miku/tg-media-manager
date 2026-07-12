@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     ports:
-      - "8787:8787"
+      - "127.0.0.1:8787:8787"
     environment:
       MEDIA_ROOT: /media
       MEDIA_OUTPUT_ROOT: /media
@@ -21,6 +21,7 @@ services:
       SENSEVOICE_GGUF_URL: ${SENSEVOICE_GGUF_URL:-}
       CUSTOM_DETECTOR_ONNX_URL: ${CUSTOM_DETECTOR_ONNX_URL:-}
       APP_PASSWORD: ${APP_PASSWORD:-}
+      APP_LOCAL_ONLY: "true"
     volumes:
       - /tmp/bssecondary_mount/BS-Media2/BS-Lsp/Tgdownloads/LSP:/media
       - ./data:/data

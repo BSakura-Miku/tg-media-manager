@@ -2209,7 +2209,7 @@ def parse_natural_search(query: str) -> dict:
     normalized_text = normalize_nl_search_text(text)
     lowered = text.lower()
     normalized_lowered = normalized_text.lower()
-    haystack = f"{lowered} {normalized_lowered}"
+    haystack = normalized_lowered or lowered
     parsed = {
         "q": text,
         "semantic_query": text,
@@ -2224,30 +2224,40 @@ def parse_natural_search(query: str) -> dict:
         "resolution": "",
         "explain": [],
     }
-    if re.search(r"(视频|影片|片子|片|video|mp4|mov)", haystack):
+    if re.search(r"(视频|影片|短片|片子|video|mp4|mov|mkv|webm)", haystack):
         parsed["media_type"] = "video"
         parsed["explain"].append("媒体类型: 视频")
-    elif re.search(r"(图片|照片|图|photo|image|jpg|png)", haystack):
+    elif re.search(r"(图片|照片|图像|相片|图集|photo|image|jpg|jpeg|png|webp)", haystack):
         parsed["media_type"] = "photo"
         parsed["explain"].append("媒体类型: 图片")
-    if re.search(r"(收藏|喜欢|标星|favorite|fav)", haystack):
+    if re.search(r"(不要|不看|排除|非|未|没有|没)过?(收藏|标星)|unfavorite|not\s+fav", haystack):
+        parsed["favorite"] = "false"
+        parsed["explain"].append("排除收藏")
+    elif re.search(r"(收藏|喜欢|标星|favorite|fav)", haystack):
         parsed["favorite"] = "true"
         parsed["explain"].append("只看收藏")
-    if re.search(r"(有字幕|有转写|字幕|台词|语音|对白|说话|有声)", haystack):
+    if re.search(r"(不要|不看|排除|无|没有|没)(字幕|转写|台词|对白|语音|声音)|无声|静音", haystack):
+        parsed["has_subtitles"] = "false"
+        parsed["explain"].append("排除字幕/转写")
+    elif re.search(r"(有字幕|有转写|字幕|台词|语音|对白|说话|有声)", haystack):
         parsed["has_subtitles"] = "true"
         parsed["explain"].append("需要字幕/转写")
-    duration_min = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|min|minute).*?(?:以上|大于|超过|\+|起)", haystack)
-    duration_max = re.search(r"(\d+(?:\.\d+)?)\s*(?:分钟|min|minute).*?(?:以下|小于|以内)", haystack)
-    if duration_min:
+    duration_min = re.search(r"(?:至少|不少于|大于|超过)?\s*(\d+(?:\.\d+)?)\s*(?:分钟|min|minutes?)(?:以上|起|\+)?", haystack)
+    duration_max = re.search(r"(?:不超过|至多|小于)?\s*(\d+(?:\.\d+)?)\s*(?:分钟|min|minutes?)(?:以下|以内)?", haystack)
+    min_signal = re.search(r"(?:至少|不少于|大于|超过)|(?:以上|起|\+)\b", haystack)
+    max_signal = re.search(r"(?:不超过|至多|小于)|(?:以下|以内)", haystack)
+    if duration_min and min_signal and not max_signal:
         parsed["min_duration"] = float(duration_min.group(1)) * 60
         parsed["explain"].append(f"时长 >= {duration_min.group(1)} 分钟")
-    elif re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|sec|second).*?(?:以上|大于|超过|\+|起)", haystack):
-        value = re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|sec|second).*?(?:以上|大于|超过|\+|起)", haystack)
+    elif min_signal and not max_signal and (value := re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|secs?|seconds?)", haystack)):
         parsed["min_duration"] = float(value.group(1))
         parsed["explain"].append(f"时长 >= {value.group(1)} 秒")
-    if duration_max:
+    if duration_max and max_signal:
         parsed["max_duration"] = float(duration_max.group(1)) * 60
         parsed["explain"].append(f"时长 <= {duration_max.group(1)} 分钟")
+    elif max_signal and (value := re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|secs?|seconds?)", haystack)):
+        parsed["max_duration"] = float(value.group(1))
+        parsed["explain"].append(f"时长 <= {value.group(1)} 秒")
     if re.search(r"4k|2160|超清", haystack):
         parsed["resolution"] = "4K"
         parsed["explain"].append("分辨率: 4K")
@@ -2583,7 +2593,7 @@ def rebuild_semantic_index(
             return {"ok": False, "cancelled": True, "processed": 0, "text": 0, "visual": 0, "clip": int(clip_import.get("imported") or 0), "mode": mode, "root": str(root)}
         clip_count = int(clip_import.get("imported") or 0)
     with connect() as conn:
-        rows = [dict(row) for row in conn.execute("SELECT * FROM media_items ORDER BY id").fetchall()]
+        rows = [dict(row) for row in conn.execute("SELECT * FROM media_items WHERE root=? ORDER BY id", (str(root),)).fetchall()]
         if limit:
             rows = rows[:limit]
         total = len(rows)
@@ -2599,16 +2609,27 @@ def rebuild_semantic_index(
                 transcript = str(transcript_row["text"] or "") if transcript_row else ""
                 text = media_semantic_text(row, tags, transcript)
                 if text.strip():
-                    vector, row_text_kind, row_text_model = text_embedding(text)
-                    conn.execute("DELETE FROM media_embeddings WHERE media_id=? AND kind IN ('text', 'bge_text')", (row["id"],))
-                    conn.execute(
-                        """
-                        INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                        """,
-                        (row["id"], row_text_kind, row_text_model, len(vector), pack_vector(vector), text[:4000]),
-                    )
-                    text_kind, text_model = row_text_kind, row_text_model
+                    stored_text = text[:4000]
+                    existing = conn.execute(
+                        "SELECT kind, model, text FROM media_embeddings WHERE media_id=? AND kind IN ('text','bge_text') ORDER BY kind='bge_text' DESC LIMIT 1",
+                        (row["id"],),
+                    ).fetchone()
+                    if (
+                        not existing
+                        or str(existing["text"] or "") != stored_text
+                        or str(existing["kind"] or "") != text_kind
+                        or str(existing["model"] or "") != text_model
+                    ):
+                        vector, row_text_kind, row_text_model = text_embedding(text)
+                        conn.execute("DELETE FROM media_embeddings WHERE media_id=? AND kind IN ('text', 'bge_text')", (row["id"],))
+                        conn.execute(
+                            """
+                            INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                            """,
+                            (row["id"], row_text_kind, row_text_model, len(vector), pack_vector(vector), stored_text),
+                        )
+                        text_kind, text_model = row_text_kind, row_text_model
                     text_count += 1
                 if tags:
                     tag_text = " ".join(tags)
@@ -2674,7 +2695,7 @@ def semantic_media_search(
     resolution: str = "",
     limit: int = 80,
     intent: dict | None = None,
-    _relax_must_on_empty: bool = True,
+    _relax_must_on_empty: bool = False,
 ) -> dict:
     query = q.strip()
     if not query:
@@ -2717,25 +2738,16 @@ def semantic_media_search(
         params.extend([f"%{resolution}%", f"%{resolution}%"])
     where = f"WHERE {' AND '.join(clauses)}"
     with connect() as conn:
-        candidate_limit = max(limit, min(50000, int(os.environ.get("SEMANTIC_SEARCH_CANDIDATE_LIMIT", "20000"))))
         cursor = conn.execute(
             f"""
-            WITH candidates AS (
-                SELECT m.id
-                FROM media_items m
-                {where}
-                ORDER BY m.id DESC
-                LIMIT ?
-            )
             SELECT e.media_id, e.kind, e.model, e.dim, e.vector, m.*,
                    (SELECT GROUP_CONCAT(t.tag, ',') FROM media_tags t WHERE t.media_id=m.id AND t.state != 'rejected') AS tags
-            FROM candidates c
-            JOIN media_items m ON m.id=c.id
+            FROM media_items m
             JOIN media_embeddings e ON e.media_id=m.id
-            WHERE e.kind IN ('text', 'subtitle', 'tag', 'bge_text', 'clip_image')
+            {where} AND e.kind IN ('text', 'subtitle', 'tag', 'bge_text', 'clip_image')
             ORDER BY m.id DESC, e.kind
             """,
-            [*params, candidate_limit],
+            params,
         )
         scores: dict[int, tuple[float, dict, list[str]]] = {}
         weights = {"bge_text": 1.15, "text": 1.0, "subtitle": 0.9, "tag": 1.05, "clip_image": 1.1}
@@ -2751,7 +2763,7 @@ def semantic_media_search(
                 data = dict(row)
                 kind = str(data.get("kind") or "")
                 item_tags = [part.strip() for part in str(data.get("tags") or "").split(",") if part.strip()]
-                if excluded_tags and any(any(excluded.lower() in item.lower() for item in item_tags) for excluded in excluded_tags):
+                if excluded_tags and any(intent_tag_matches(excluded, data) for excluded in excluded_tags):
                     continue
                 item_search_text = " ".join([
                     str(data.get("filename") or ""),
@@ -2795,10 +2807,15 @@ def semantic_media_search(
                     reasons.append("强意图命中: " + ",".join(must_hits[:3]))
                 if score > scores.get(media_id, (-2.0, {}, []))[0]:
                     scores[media_id] = (score, data, reasons[:5])
-        for score, data, reasons in sorted(scores.values(), key=lambda item: item[0], reverse=True)[:limit]:
+        minimum_score = float(os.environ.get("SEMANTIC_SEARCH_MIN_SCORE", "0.16"))
+        for score, data, reasons in sorted(scores.values(), key=lambda item: item[0], reverse=True):
+            if score < minimum_score:
+                continue
             data["semantic_score"] = round(score, 6)
             data["match_reasons"] = reasons
             rows_out.append(data)
+            if len(rows_out) >= limit:
+                break
     if not rows_out and must_tags and _relax_must_on_empty:
         relaxed_intent = dict(intent or {})
         relaxed_intent["must"] = []
@@ -3768,9 +3785,15 @@ def rebuild_similarity_index(root: Path | None = None) -> dict:
     perceptual: defaultdict[str, list[dict]] = defaultdict(list)
     video_fingerprints: defaultdict[str, list[dict]] = defaultdict(list)
     with connect() as conn:
-        rows = [dict(row) for row in conn.execute("SELECT id, path, relative_path, media_type, size_bytes, sha256, hash8 FROM media_items").fetchall()]
-        conn.execute("DELETE FROM similarity_members")
-        conn.execute("DELETE FROM similarity_groups")
+        rows = [dict(row) for row in conn.execute(
+            "SELECT id, path, relative_path, media_type, size_bytes, sha256, hash8 FROM media_items WHERE root=?",
+            (str(root),),
+        ).fetchall()]
+        conn.execute(
+            "DELETE FROM similarity_members WHERE media_id IN (SELECT id FROM media_items WHERE root=?)",
+            (str(root),),
+        )
+        conn.execute("DELETE FROM similarity_groups WHERE id NOT IN (SELECT DISTINCT group_id FROM similarity_members)")
         for row in rows:
             path = Path(row["path"])
             if not path.exists():

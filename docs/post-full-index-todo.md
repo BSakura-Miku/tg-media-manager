@@ -42,3 +42,26 @@ Do not restart or update the NAS container while the long-running index job is a
 - After the NAS job finishes, audit sample media for original filename preservation, generated thumbnails, vision tags, face groups, transcripts, subtitle files, and timeline rows.
 - Check whether corrupted thumbnails are source-file corruption or generated-cache corruption before deleting any cache.
 - Rebuild only affected caches first, then run a small UI validation pass before deploying a new image.
+
+## v1.3 Audit Follow-ups
+
+Completed in v1.3.0:
+
+- Persisted PBKDF2 password credentials, current-password verification, login throttling, and session-version invalidation.
+- Atomic job enqueue, terminal-job cancel rejection, merged stdout/stderr consumption, and cancel-file cleanup.
+- Frame, vision, and face checkpoints now merge with prior full indexes and use atomic file replacement.
+- Semantic and similarity rebuilds are scoped to the selected media root; unchanged semantic text vectors are reused.
+- Natural-language parser fixes for photo/video ambiguity, negative favorite/subtitle filters, and duration direction.
+- Full semantic candidate recall, minimum relevance threshold, strict intent preservation, and metadata-wide exclusions.
+- Media-library refresh, job-detail terminal synchronization, login error feedback, modal focus restoration, and mobile action target sizing.
+- Thumbnail invalidation when the source media is newer than the cached thumbnail.
+
+Still planned after measuring v1.3.0 on the NAS:
+
+- Move semantic vectors from Python full scans to sqlite-vec/HNSW once the library approaches 50k media.
+- Split long subtitle text into timestamped BGE chunks and aggregate top chunks per media.
+- Add a versioned input/model fingerprint to frame, face, vision, and thumbnail caches.
+- Batch OpenCLIP inference; Intel iGPU acceleration requires an OpenVINO-exported vision encoder rather than PyTorch OpenCLIP.
+- Persist transcription failure fingerprints, retry backoff, and atomic VTT/database commits.
+- Replace the in-process monitor loop with a database lease if the service is ever run with multiple web workers.
+- Add a fixed, privacy-safe semantic quality set and track Recall@10, Precision@10, MRR, and p95 latency.

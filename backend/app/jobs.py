@@ -129,6 +129,7 @@ def create_job(command: str) -> int:
     if command not in ALLOWED_COMMANDS:
         raise ValueError(f"Unsupported command: {command}")
     with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         active = conn.execute("SELECT id, command, status FROM jobs WHERE status IN ('queued', 'running') ORDER BY id DESC LIMIT 1").fetchone()
         if active is not None:
             raise RuntimeError(f"Job #{active['id']} ({active['command']}) is still {active['status']}")
@@ -170,7 +171,12 @@ def request_job_cancel(job_id: int) -> None:
         row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
         if row is None:
             raise ValueError("Job not found")
-        conn.execute("UPDATE jobs SET cancel_requested=1, message='cancel requested', heartbeat_at=CURRENT_TIMESTAMP WHERE id=?", (job_id,))
+        if row["status"] not in {"queued", "running"}:
+            raise RuntimeError(f"Job is already {row['status']}")
+        conn.execute(
+            "UPDATE jobs SET cancel_requested=1, message='cancel requested', heartbeat_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('queued','running')",
+            (job_id,),
+        )
     path = cancel_file(job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("cancel requested\n", encoding="utf-8")
@@ -309,7 +315,7 @@ def run_external_step(job_id: int, step_args: list[str], env: dict, stage: str) 
         step_args,
         text=True,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         env={**env, "TGMM_CANCEL_FILE": str(cancel_file(job_id))},
         start_new_session=True,
     )
@@ -349,9 +355,10 @@ def run_external_step(job_id: int, step_args: list[str], env: dict, stage: str) 
             update_job_progress(job_id, stage=stage, message=f"{stage} running", stdout="\n".join(stdout_lines)[-20000:])
             last_heartbeat = time.time()
         time.sleep(0.05)
-    if proc.stderr is not None:
-        stderr_text = proc.stderr.read()
-    return proc.wait(), "\n".join(stdout_lines), stderr_text
+    returncode = proc.wait()
+    if returncode:
+        stderr_text = "\n".join(stdout_lines)[-20000:]
+    return returncode, "\n".join(stdout_lines), stderr_text
 
 
 class ProgressCapture:
@@ -493,8 +500,7 @@ def run_job(job_id: int, command: str) -> None:
         cancel.unlink()
     except OSError:
         pass
-    os.environ["TGMM_CANCEL_FILE"] = str(cancel)
-    os.environ.update({
+    managed_env = {
         key: value for key, value in env.items()
         if key in {
             "COMPUTE_DEVICE", "FFMPEG_HWACCEL", "FACE_PROVIDERS", "OPENVINO_DEVICE",
@@ -503,7 +509,10 @@ def run_job(job_id: int, command: str) -> None:
             "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE", "ASR_ENGINE", "TRANSCRIPT_ENGINE", "AUDIO_TAG_MODE", "AUDIO_TAG_SAMPLE_SECONDS", "SENSEVOICE_GGUF_BIN",
             "SENSEVOICE_GGUF_MODEL", "SENSEVOICE_GGUF_COMMAND", "TRANSCRIBE_MAX_SECONDS", "GENERATE_TIMED_SUBTITLES",
         }
-    })
+    }
+    managed_env["TGMM_CANCEL_FILE"] = str(cancel)
+    previous_env = {key: os.environ.get(key) for key in managed_env}
+    os.environ.update(managed_env)
     if source_dirs:
         base_args.extend(["--source-dirs", source_dirs])
     with connect() as conn:
@@ -708,3 +717,13 @@ def run_job(job_id: int, command: str) -> None:
                 "UPDATE jobs SET status='failed', finished_at=CURRENT_TIMESTAMP, stderr=?, message=? WHERE id=?",
                 (repr(exc), "exception", job_id),
             )
+    finally:
+        try:
+            cancel.unlink()
+        except OSError:
+            pass
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value

@@ -1356,10 +1356,19 @@ def extract_image_thumb(src: Path, out_dir: Path) -> list[Path]:
 
 def write_frame_index(config: Config, rows: list[dict]) -> None:
     out = config.manifests / "frame_index.csv"
-    with out.open("w", newline="", encoding="utf-8-sig") as handle:
+    existing_rows = dict_rows_from_csv(out) if out.exists() else []
+    merged = {
+        row.get("media_path", ""): row
+        for row in existing_rows
+        if row.get("media_path") and (config.library_root / row["media_path"]).exists()
+    }
+    merged.update({row.get("media_path", ""): row for row in rows if row.get("media_path")})
+    tmp = out.with_suffix(".csv.tmp")
+    with tmp.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=["media_path", "cache_key", "kind", "frames", "frame_times", "contact_sheet", "error"])
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(merged[key] for key in sorted(merged))
+    tmp.replace(out)
 
 
 def extract_one_media_frame_job(config: Config, path: Path, frames: int) -> dict:
@@ -1540,34 +1549,36 @@ def vision_scan(config: Config, limit: int | None) -> None:
     except ValueError:
         low_confidence_threshold = 0.62
     existing_labels = {}
-    preserved_rows = []
-    preserved_embedding_rows = []
+    labels_path = config.manifests / "vision_labels.csv"
+    existing_rows = {
+        row.get("media_path", ""): row
+        for row in (dict_rows_from_csv(labels_path) if labels_path.exists() else [])
+        if row.get("media_path") and (config.library_root / row["media_path"]).exists()
+    }
+    existing_embedding_rows = {}
+    embeddings_path = config.manifests / "vision_embeddings.jsonl"
+    if embeddings_path.exists():
+        with embeddings_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("media_path") and (config.library_root / row["media_path"]).exists():
+                    existing_embedding_rows[row["media_path"]] = row
     if low_confidence_only:
-        for row in dict_rows_from_csv(config.manifests / "vision_labels.csv"):
+        for row in existing_rows.values():
             try:
                 score = float(row.get("score") or 0)
             except ValueError:
                 score = 0.0
             existing_labels[row.get("media_path", "")] = score
-            if score >= low_confidence_threshold:
-                preserved_rows.append(row)
-        preserved_paths = {row.get("media_path", "") for row in preserved_rows}
-        embeddings_path = config.manifests / "vision_embeddings.jsonl"
-        if embeddings_path.exists():
-            with embeddings_path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if row.get("media_path") in preserved_paths:
-                        preserved_embedding_rows.append(row)
     try:
         torch, PILImage, model, preprocess, labels, text_features, model_info = load_open_clip_backend(strong=strong_mode)
     except RuntimeError as exc:
         raise SystemExit(str(exc))
-    rows = list(preserved_rows)
-    embedding_rows = list(preserved_embedding_rows)
+    rows_by_path = dict(existing_rows)
+    embeddings_by_path = dict(existing_embedding_rows)
     scanned = 0
     for frame_row in frame_rows:
         if cancel_requested():
@@ -1607,21 +1618,21 @@ def vision_scan(config: Config, limit: int | None) -> None:
             if score > best[1] and category in label_best:
                 frame_score, frame_rel, vector = label_best[category]
                 best = (category, float(score), frame_rel, vector)
-        rows.append({
+        rows_by_path[frame_row["media_path"]] = {
             "media_path": frame_row["media_path"],
             "category": best[0],
             "score": f"{best[1]:.6f}",
             "representative_frame": best[2],
-        })
+        }
         if best[3]:
-            embedding_rows.append({
+            embeddings_by_path[frame_row["media_path"]] = {
                 "media_path": frame_row["media_path"],
                 "representative_frame": best[2],
                 "model": model_info["model"],
                 "pretrained": model_info["pretrained"],
                 "mode": "strong" if strong_mode else "default",
                 "embedding": best[3],
-            })
+            }
         scanned += 1
         if scanned % 25 == 0 or scanned == total:
             progress_event("vision-scan", scanned, total, current=frame_row.get("media_path", ""), label=best[0], score=round(best[1], 4), message=f"vision scanned {scanned}/{total}")
@@ -1630,16 +1641,21 @@ def vision_scan(config: Config, limit: int | None) -> None:
         if limit and scanned >= limit:
             break
     out = config.manifests / "vision_labels.csv"
-    with out.open("w", newline="", encoding="utf-8-sig") as handle:
+    tmp = out.with_suffix(".csv.tmp")
+    with tmp.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=["media_path", "category", "score", "representative_frame"])
         writer.writeheader()
-        writer.writerows(rows)
-    print(f"vision_labels {len(rows)} rows")
+        writer.writerows(rows_by_path[key] for key in sorted(rows_by_path))
+    tmp.replace(out)
+    print(f"vision_labels {len(rows_by_path)} rows")
     embeddings_out = config.manifests / "vision_embeddings.jsonl"
-    with embeddings_out.open("w", encoding="utf-8") as handle:
-        for row in embedding_rows:
+    embeddings_tmp = embeddings_out.with_suffix(".jsonl.tmp")
+    with embeddings_tmp.open("w", encoding="utf-8") as handle:
+        for key in sorted(embeddings_by_path):
+            row = embeddings_by_path[key]
             handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
-    print(f"vision_embeddings {len(embedding_rows)} rows")
+    embeddings_tmp.replace(embeddings_out)
+    print(f"vision_embeddings {len(embeddings_by_path)} rows")
 
 
 def load_face_backend():
@@ -1739,7 +1755,11 @@ def face_scan(config: Config, limit: int | None) -> None:
     total_frames = sum(len([p for p in row.get("frames", "").split("|") if p]) for row in frame_rows)
     total = min(limit or total_frames, total_frames)
     progress_event("face-scan", 0, total, backend=backend_name, message="starting")
-    rows = []
+    out = config.manifests / "face_index.csv"
+    rows_by_frame: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in (dict_rows_from_csv(out) if out.exists() else []):
+        if row.get("media_path") and row.get("frame_path") and (config.library_root / row["media_path"]).exists():
+            rows_by_frame[(row["media_path"], row["frame_path"])].append(row)
     scanned = 0
     for frame_row in frame_rows:
         frame_paths = [p for p in frame_row.get("frames", "").split("|") if p]
@@ -1750,10 +1770,12 @@ def face_scan(config: Config, limit: int | None) -> None:
             frame_path = config.library_root / frame_rel
             if not frame_path.exists():
                 continue
+            frame_key = (frame_row["media_path"], frame_rel)
+            rows_by_frame[frame_key] = []
             try:
                 faces = detect_faces(frame_path, backend_name, backend)
             except Exception as exc:
-                rows.append({
+                rows_by_frame[frame_key].append({
                     "media_path": frame_row["media_path"],
                     "frame_path": frame_rel,
                     "face_index": "",
@@ -1766,7 +1788,7 @@ def face_scan(config: Config, limit: int | None) -> None:
                 })
                 continue
             for face in faces:
-                rows.append({
+                rows_by_frame[frame_key].append({
                     "media_path": frame_row["media_path"],
                     "frame_path": frame_rel,
                     "face_index": face["face_index"],
@@ -1788,13 +1810,16 @@ def face_scan(config: Config, limit: int | None) -> None:
             break
         if limit and scanned >= limit:
             break
-    out = config.manifests / "face_index.csv"
-    with out.open("w", newline="", encoding="utf-8-sig") as handle:
+    tmp = out.with_suffix(".csv.tmp")
+    with tmp.open("w", newline="", encoding="utf-8-sig") as handle:
         fields = ["media_path", "frame_path", "face_index", "bbox", "area", "det_score", "embedding", "backend", "error"]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
-        writer.writerows(rows)
-    print(f"face_index {len(rows)} rows")
+        for key in sorted(rows_by_frame):
+            writer.writerows(rows_by_frame[key])
+    tmp.replace(out)
+    row_count = sum(len(items) for items in rows_by_frame.values())
+    print(f"face_index {row_count} rows")
 
 
 def normalize_vector(vec: list[float]) -> list[float]:

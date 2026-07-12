@@ -6,17 +6,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.app import main, model_manager
+from fastapi import Response
+
+from backend.app import db, main, model_manager
 
 
 class AuthSessionTests(unittest.TestCase):
     def test_signed_session_expires_and_rejects_tampering(self) -> None:
-        env = {
+        with tempfile.TemporaryDirectory() as tempdir, patch.dict(main.os.environ, {
+            "APP_DB": str(Path(tempdir) / "auth.sqlite3"),
             "APP_PASSWORD": "test-password",
             "APP_SECRET": "test-signing-secret",
             "APP_SESSION_TTL_SECONDS": "600",
-        }
-        with patch.dict(main.os.environ, env, clear=False):
+        }, clear=False):
+            db.init_db()
             token = main.issue_auth_token(now=1_000)
             self.assertTrue(main.auth_session_valid(token, now=1_300))
             self.assertFalse(main.auth_session_valid(token, now=1_601))
@@ -24,12 +27,41 @@ class AuthSessionTests(unittest.TestCase):
             self.assertFalse(main.auth_session_valid("\u2603.invalid", now=1_300))
 
     def test_disabled_auth_reports_exposure_risk(self) -> None:
-        with patch.dict(main.os.environ, {"APP_PASSWORD": "", "APP_LOCAL_ONLY": "false"}, clear=False):
+        with tempfile.TemporaryDirectory() as tempdir, patch.dict(
+            main.os.environ,
+            {"APP_DB": str(Path(tempdir) / "auth.sqlite3"), "APP_PASSWORD": "", "APP_LOCAL_ONLY": "false"},
+            clear=False,
+        ):
+            db.init_db()
             status = main.auth_security_status()
         self.assertFalse(status["enabled"])
         self.assertFalse(status["local_only"])
         self.assertTrue(status["exposed_without_auth"])
         self.assertTrue(status["security_warnings"])
+
+    def test_password_change_persists_and_invalidates_previous_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir, patch.dict(
+            main.os.environ,
+            {
+                "APP_DB": str(Path(tempdir) / "auth.sqlite3"),
+                "APP_PASSWORD": "original-password",
+                "APP_SECRET": "fixed-session-secret",
+            },
+            clear=False,
+        ):
+            db.init_db()
+            old_token = main.issue_auth_token(now=1_000)
+            self.assertTrue(main.verify_auth_password("original-password"))
+            response = Response()
+            result = main.api_auth_change_password(
+                main.PasswordChangeRequest(current_password="original-password", new_password="replacement-password"),
+                response,
+            )
+            self.assertTrue(result["sessions_invalidated"])
+            self.assertFalse(main.auth_session_valid(old_token, now=1_001))
+            self.assertFalse(main.verify_auth_password("original-password"))
+            self.assertTrue(main.verify_auth_password("replacement-password"))
+            self.assertTrue(main.auth_session_valid(main.issue_auth_token(now=1_001), now=1_002))
 
     def test_rebuild_endpoint_only_enqueues_job(self) -> None:
         with patch.object(main, "create_job", return_value=42) as create_job:

@@ -46,6 +46,17 @@ class TemporaryDatabaseTestCase(unittest.TestCase):
 
 
 class SemanticBackendTests(TemporaryDatabaseTestCase):
+    def test_natural_parser_handles_media_negation_and_duration_direction(self) -> None:
+        photos = metadata.parse_natural_search("不要收藏的图片")
+        silent = metadata.parse_natural_search("不要字幕的视频")
+        duration = metadata.parse_natural_search("不超过30秒的视频")
+        self.assertEqual(photos["media_type"], "photo")
+        self.assertEqual(photos["favorite"], "false")
+        self.assertEqual(silent["media_type"], "video")
+        self.assertEqual(silent["has_subtitles"], "false")
+        self.assertIsNone(duration["min_duration"])
+        self.assertEqual(duration["max_duration"], 30.0)
+
     def test_short_explicit_multi_facet_query_becomes_strict_and(self) -> None:
         with patch.object(metadata, "bge_intent_matches", return_value=[]):
             understood = metadata.understand_search_query("白丝学生口交")

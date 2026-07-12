@@ -198,7 +198,11 @@ def repair_thumbnail_cache(
         media_id = int(row["id"])
         src = Path(row["path"])
         thumb = thumbnail_path(root, media_id)
-        if thumb.exists() and thumbnail_is_healthy(thumb):
+        try:
+            source_is_newer = src.exists() and thumb.exists() and src.stat().st_mtime_ns > thumb.stat().st_mtime_ns
+        except OSError:
+            source_is_newer = False
+        if thumb.exists() and not source_is_newer and thumbnail_is_healthy(thumb):
             healthy += 1
         elif not src.exists():
             missing += 1

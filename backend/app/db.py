@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 TABLE_COLUMN_MIGRATIONS: dict[str, Mapping[str, str]] = {
@@ -227,6 +227,21 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS auth_credentials (
+                id INTEGER PRIMARY KEY CHECK (id=1),
+                password_hash TEXT NOT NULL,
+                session_version INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS auth_login_attempts (
+                client_key TEXT PRIMARY KEY,
+                failures INTEGER NOT NULL DEFAULT 0,
+                window_started INTEGER NOT NULL DEFAULT 0,
+                locked_until INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS media_items (

@@ -3505,8 +3505,13 @@ input[type="checkbox"] {
 }
 
 .panelActions > *,
-.viewerActions > * {
+.viewerActions > *:not(.iconButton) {
   min-width: 0;
+}
+
+.viewerActions > .iconButton {
+  min-width: 44px;
+  width: 44px;
 }
 
 .miniButton {

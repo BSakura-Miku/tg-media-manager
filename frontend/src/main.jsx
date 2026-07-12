@@ -92,6 +92,14 @@ const i18n = {
     settings: 'Settings',
     login: 'Login',
     password: 'Password',
+    security: 'Security',
+    currentPassword: 'Current password',
+    newPassword: 'New password',
+    confirmPassword: 'Confirm new password',
+    changePassword: 'Change password',
+    passwordChanged: 'Password changed. Other sessions were signed out.',
+    passwordMismatch: 'The new passwords do not match.',
+    passwordHint: 'Use at least 10 characters. Changing it invalidates every previous login session.',
     unlock: 'Unlock',
     privacyTitle: 'Privacy first',
     privacyCopy: 'Local-only processing. Media, frames, face embeddings, tags, and indexes stay on this machine/NAS.',
@@ -620,6 +628,14 @@ const i18n = {
     settings: '设置',
     login: '登录',
     password: '密码',
+    security: '安全',
+    currentPassword: '当前密码',
+    newPassword: '新密码',
+    confirmPassword: '确认新密码',
+    changePassword: '修改密码',
+    passwordChanged: '密码已修改，其他已登录会话已失效。',
+    passwordMismatch: '两次输入的新密码不一致。',
+    passwordHint: '至少 10 个字符；修改后所有旧登录会话立即失效。',
     unlock: '解锁',
     privacyTitle: '隐私优先',
     privacyCopy: '全流程本地处理。媒体、抽帧、人脸特征、标签和索引都保存在这台机器/NAS。',
@@ -1469,16 +1485,17 @@ function MediaThumbImage({ item, className = 'mediaThumb', label = '', priority 
 
 function LoginScreen({ login, error, theme, setTheme, t, version }) {
   const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   return (
     <main className="loginShell">
       <section className="loginPanel">
         <Brand version={version} t={t} showBuild />
         <h1>{t.login}</h1>
         <p>{t.privacyCopy}</p>
-        {error && <div className="alert">{error}</div>}
-        <form className="loginForm" onSubmit={event => { event.preventDefault(); login(password); }}>
+        {error && <div className="alert" role="alert">{error}</div>}
+        <form className="loginForm" onSubmit={async event => { event.preventDefault(); setSubmitting(true); try { await login(password); } catch {} finally { setSubmitting(false); } }}>
           <label>{t.password}<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoFocus /></label>
-          <button type="submit"><Save size={16} />{t.unlock}</button>
+          <button type="submit" disabled={submitting || !password}><Save size={16} />{submitting ? t.loading : t.unlock}</button>
         </form>
         <button className="iconButton" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Theme">{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
       </section>
@@ -1541,7 +1558,7 @@ function App() {
   const settingsDirtyRef = useRef(false);
   const requestControllersRef = useRef(new Map());
   const requestSequenceRef = useRef(new Map());
-  const [auth, setAuth] = useState({ enabled: false, authenticated: true, local_only: true });
+  const [auth, setAuth] = useState({ enabled: false, authenticated: false, local_only: true, checking: true });
   const [version, setVersion] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
   const [language, setLanguage] = useState(() => localStorage.getItem('language') || 'zh-CN');
@@ -1575,7 +1592,14 @@ function App() {
   }
 
   function loadJobs() {
-    return runLatestRequest('jobs', signal => api('/api/jobs?limit=120', { signal }), data => setJobs(data || []));
+    return runLatestRequest('jobs', signal => api('/api/jobs?limit=120', { signal }), data => {
+      const rows = data || [];
+      setJobs(rows);
+      if (selectedJob?.id) {
+        const latest = rows.find(job => job.id === selectedJob.id);
+        if (latest && latest.status !== selectedJob.status) openJob(latest.id).catch(() => {});
+      }
+    });
   }
 
   function loadSavedSearches() {
@@ -1654,7 +1678,7 @@ function App() {
     if (active === 'dashboard') tasks.push(loadSummary(), loadJobs(), loadTagGraph(), loadMedia({ limit: 12, offset: 0 }));
     else if (active === 'jobs' || active === 'logs') tasks.push(loadJobs());
     else if (active === 'quickFind') tasks.push(loadSavedSearches(), loadMedia({ limit: 80, offset: 0 }));
-    else if (active === 'library') tasks.push(loadSimilarity());
+    else if (active === 'library') tasks.push(loadMedia({ ...mediaFilters, limit: 80, offset: 0 }), loadSimilarity());
     else if (active === 'tagGraph') tasks.push(loadTagGraph());
     else if (active === 'randomFlow') tasks.push(loadRandomMedia({ limit: 80, offset: 0, seed: Date.now() }));
     else if (active === 'models') tasks.push(loadModels());
@@ -1681,7 +1705,7 @@ function App() {
   useEffect(() => {
     const controller = new AbortController();
     api('/api/auth/status', { signal: controller.signal }).then(status => {
-      setAuth(status);
+      setAuth({ ...status, checking: false });
       loadVersion().catch(() => {});
       if (status.authenticated) {
         loadSummary().catch(exc => setError(exc.message));
@@ -1724,10 +1748,26 @@ function App() {
 
   async function login(password) {
     setError('');
-    await api('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+    try {
+      await api('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+      const status = await api('/api/auth/status');
+      setAuth({ ...status, checking: false });
+      await Promise.all([loadVersion(), loadSummary(), loadSavedSearches(), loadMedia()]);
+    } catch (exc) {
+      setError(exc.message);
+      throw exc;
+    }
+  }
+
+  async function changePassword(currentPassword, newPassword) {
+    setError('');
+    await api('/api/auth/change-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+    setMessage(t.passwordChanged);
     const status = await api('/api/auth/status');
-    setAuth(status);
-    await Promise.all([loadVersion(), loadSummary(), loadSavedSearches(), loadMedia()]);
+    setAuth({ ...status, checking: false });
   }
 
   async function lockPrivacy() {
@@ -2139,6 +2179,7 @@ function App() {
   const analysis = summary?.analysis || {};
   const hasRunning = useMemo(() => jobs.some(job => job.status === 'running' || job.status === 'queued'), [jobs]);
 
+  if (auth.checking) return <main className="loginShell"><section className="loginPanel"><Brand version={version} t={t} /><p>{t.loading}</p></section></main>;
   if (auth.enabled && !auth.authenticated) {
     return <LoginScreen login={login} error={error} theme={theme} setTheme={setTheme} t={t} version={version} />;
   }
@@ -2170,8 +2211,8 @@ function App() {
           </div>
         </header>
 
-        {error && <div className="alert">{error}</div>}
-        {message && <div className="notice">{message}</div>}
+        {error && <div className="alert" role="alert">{error}</div>}
+        {message && <div className="notice" aria-live="polite">{message}</div>}
 
         {active === 'dashboard' && (
           <>
@@ -2206,7 +2247,7 @@ function App() {
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
-        {active === 'settings' && <SettingsPanel settings={settings} setSettings={updateSettings} saveSettings={saveSettings} browse={browse} directories={directories} browsePath={browsePath} monitor={monitor} checkMonitorNow={checkMonitorNow} t={t} />}
+        {active === 'settings' && <SettingsPanel settings={settings} setSettings={updateSettings} saveSettings={saveSettings} changePassword={changePassword} browse={browse} directories={directories} browsePath={browsePath} monitor={monitor} checkMonitorNow={checkMonitorNow} t={t} />}
       </section>
     </main>
   );
@@ -2499,8 +2540,8 @@ function JobsPanel({ jobs, selectedJobId, openJob, t }) {
     ['other', filtered.filter(job => !['running', 'warning', 'error', 'completed'].includes(jobKind(job)))],
   ].filter(([, rows]) => rows.length);
   return <div className="panel"><div className="panelHead"><h2>{t.jobs}</h2><span>{jobs.length}</span></div>
-    <div className="statusTabs" role="tablist" aria-label={t.jobs}>
-      {filters.map(key => <button key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{jobKindLabel(key, t)}<span>{counts[key] || 0}</span></button>)}
+    <div className="statusTabs" role="group" aria-label={t.jobs}>
+      {filters.map(key => <button key={key} aria-pressed={filter === key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{jobKindLabel(key, t)}<span>{counts[key] || 0}</span></button>)}
     </div>
     <div className="hintBox compact"><span>{t.jobHistoryHint}</span></div>
     <div className="jobGroups">{groups.map(([kind, rows]) => (
@@ -3369,12 +3410,30 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
   const [contactSheetMissing, setContactSheetMissing] = useState(false);
   const videoRef = useRef(null);
   const videoShellRef = useRef(null);
+  const closeButtonRef = useRef(null);
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [videoMuted, setVideoMuted] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
   const [videoError, setVideoError] = useState('');
   const [subtitleMode, setSubtitleMode] = useState(hasPlayableSubtitles ? 'original' : 'off');
   const isFavorite = tags.some(tag => tag.tag === 'Favorite' && tag.state !== 'rejected');
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    closeButtonRef.current?.focus();
+    const onKeyDown = event => {
+      if (event.key === 'Escape') close();
+      if (event.key !== 'Tab') return;
+      const panel = closeButtonRef.current?.closest('.viewerPanel');
+      const focusable = [...(panel?.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), video, [tabindex]:not([tabindex="-1"])') || [])];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => { document.removeEventListener('keydown', onKeyDown); previousFocus?.focus?.(); };
+  }, []);
   useEffect(() => setAuthorDraft(data.author || ''), [data.id, data.author]);
   useEffect(() => setContactSheetMissing(false), [data.id]);
   useEffect(() => {
@@ -3588,16 +3647,16 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
   }
   return (
     <ModalPortal>
-    <div className="viewerBackdrop" role="dialog" aria-modal="true" aria-label={t.mediaDetail} onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
+    <div className="viewerBackdrop" role="dialog" aria-modal="true" aria-labelledby="media-viewer-title" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
       <div className="viewerPanel" onMouseDown={event => event.stopPropagation()}>
         <div className="viewerHead">
-          <h2>{t.mediaDetail}</h2>
+          <h2 id="media-viewer-title">{t.mediaDetail}</h2>
           <div className="viewerActions">
             <button className={`iconButton ${isFavorite ? 'isFavorite' : ''}`} onClick={toggleFavorite} disabled={!!busyAction || loading} title={isFavorite ? t.unfavorite : t.favorite} aria-label={isFavorite ? t.unfavorite : t.favorite}><Heart size={18} /></button>
             <button className="iconButton" onClick={rebuildThumbnail} disabled={!!busyAction || loading} title={t.rebuildThumbnail} aria-label={t.rebuildThumbnail}><RefreshCw size={18} /></button>
             {data.media_type === 'video' && <button className="iconButton" onClick={rebuildVideoOverview} disabled={!!busyAction || loading} title={t.rebuildVideoOverview} aria-label={t.rebuildVideoOverview}><Film size={18} /></button>}
             <button className="iconButton dangerIcon" onClick={deleteMedia} disabled={!!busyAction || loading} title={t.deleteMedia} aria-label={t.deleteMedia}><Trash2 size={18} /></button>
-            <button type="button" className="iconButton" onClick={close} title={t.close} aria-label={t.close}><XCircle size={18} /></button>
+            <button ref={closeButtonRef} type="button" className="iconButton" onClick={close} title={t.close} aria-label={t.close}><XCircle size={18} /></button>
           </div>
         </div>
         {loading && <div className="hintBox compact"><span>{t.loadingDetail}</span></div>}
@@ -4002,8 +4061,8 @@ function LogsPanel({ jobs, applied, openJob, setActive, t }) {
   }, {});
   const visible = filter === 'all' ? sorted : sorted.filter(job => jobKind(job) === filter);
   return <section className="panel"><div className="panelHead"><h2>{t.recentLogs}</h2><span>{t.latestFirst} · {applied.rows} {t.moveLogRows}</span></div>
-    <div className="statusTabs" role="tablist" aria-label={t.recentLogs}>
-      {filters.map(key => <button key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{jobKindLabel(key, t)}<span>{counts[key] || 0}</span></button>)}
+    <div className="statusTabs" role="group" aria-label={t.recentLogs}>
+      {filters.map(key => <button key={key} aria-pressed={filter === key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{jobKindLabel(key, t)}<span>{counts[key] || 0}</span></button>)}
     </div>
     <div className="jobs">{visible.map(job => {
     const kind = jobKind(job);
@@ -4148,7 +4207,10 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
   );
 }
 
-function SettingsPanel({ settings, setSettings, saveSettings, browse, directories, browsePath, monitor, checkMonitorNow, t }) {
+function SettingsPanel({ settings, setSettings, saveSettings, changePassword, browse, directories, browsePath, monitor, checkMonitorNow, t }) {
+  const [passwords, setPasswords] = useState({ current: '', next: '', confirm: '' });
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
   const cfg = settings || {
     media_root: '/media',
     output_root: '/media',
@@ -4246,6 +4308,27 @@ function SettingsPanel({ settings, setSettings, saveSettings, browse, directorie
           <div className="row"><span>Risk queue</span><strong>_QUARANTINE / review</strong></div>
           <div className="row"><span>Audit log</span><strong>jobs + media_operations</strong></div>
         </div>
+      </div>
+      <div className="panel">
+        <div className="panelHead"><h2>{t.security}</h2><span>{t.password}</span></div>
+        <form className="formGrid" onSubmit={async event => {
+          event.preventDefault();
+          setPasswordError('');
+          if (passwords.next !== passwords.confirm) { setPasswordError(t.passwordMismatch); return; }
+          setPasswordBusy(true);
+          try {
+            await changePassword(passwords.current, passwords.next);
+            setPasswords({ current: '', next: '', confirm: '' });
+          } catch (exc) { setPasswordError(exc.message); }
+          finally { setPasswordBusy(false); }
+        }}>
+          <label>{t.currentPassword}<input type="password" autoComplete="current-password" value={passwords.current} onChange={event => setPasswords({ ...passwords, current: event.target.value })} /></label>
+          <label>{t.newPassword}<input type="password" minLength="10" autoComplete="new-password" value={passwords.next} onChange={event => setPasswords({ ...passwords, next: event.target.value })} /></label>
+          <label>{t.confirmPassword}<input type="password" minLength="10" autoComplete="new-password" value={passwords.confirm} onChange={event => setPasswords({ ...passwords, confirm: event.target.value })} /></label>
+          <small>{t.passwordHint}</small>
+          {passwordError && <div className="alert" role="alert">{passwordError}</div>}
+          <button type="submit" disabled={passwordBusy || !passwords.current || passwords.next.length < 10}><LockKeyhole size={16} />{passwordBusy ? t.loading : t.changePassword}</button>
+        </form>
       </div>
     </section>
   );

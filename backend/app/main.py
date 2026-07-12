@@ -212,8 +212,60 @@ class AuthRequest(BaseModel):
     password: str
 
 
-def auth_password() -> str:
-    return os.environ.get("APP_PASSWORD", "")
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+def _password_hash(password: str, salt: bytes | None = None) -> str:
+    salt = salt or os.urandom(16)
+    iterations = 600_000
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations, dklen=32)
+    return f"pbkdf2_sha256${iterations}${_b64url_encode(salt)}${_b64url_encode(digest)}"
+
+
+def _password_hash_valid(password: str, encoded: str) -> bool:
+    try:
+        algorithm, iterations, salt, expected = encoded.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), _b64url_decode(salt), int(iterations), dklen=32
+        )
+        return hmac.compare_digest(_b64url_encode(digest), expected)
+    except (ValueError, TypeError):
+        return False
+
+
+def auth_credential() -> dict:
+    """Return the persisted credential, bootstrapping once from APP_PASSWORD."""
+    try:
+        with connect() as conn:
+            row = conn.execute("SELECT password_hash, session_version FROM auth_credentials WHERE id=1").fetchone()
+            if row:
+                return {"password_hash": str(row["password_hash"]), "session_version": int(row["session_version"]), "source": "database"}
+            bootstrap = os.environ.get("APP_PASSWORD", "")
+            if not bootstrap:
+                return {"password_hash": "", "session_version": 0, "source": "disabled"}
+            encoded = _password_hash(bootstrap)
+            conn.execute(
+                "INSERT OR IGNORE INTO auth_credentials(id, password_hash, session_version) VALUES (1, ?, 1)",
+                (encoded,),
+            )
+            row = conn.execute("SELECT password_hash, session_version FROM auth_credentials WHERE id=1").fetchone()
+            return {"password_hash": str(row["password_hash"]), "session_version": int(row["session_version"]), "source": "database"}
+    except Exception:
+        bootstrap = os.environ.get("APP_PASSWORD", "")
+        return {"password_hash": _password_hash(bootstrap, b"tgmm-env-fallback") if bootstrap else "", "session_version": 1 if bootstrap else 0, "source": "environment"}
+
+
+def verify_auth_password(password: str) -> bool:
+    credential = auth_credential()
+    return bool(credential["password_hash"]) and _password_hash_valid(password, credential["password_hash"])
+
+
+def auth_enabled() -> bool:
+    return bool(auth_credential()["password_hash"])
 
 
 def auth_session_ttl() -> int:
@@ -229,7 +281,7 @@ def auth_signing_key() -> bytes:
         return secret.encode("utf-8")
     # Keep password-only installations compatible while ensuring that a password
     # change invalidates all existing sessions. APP_SECRET is still recommended.
-    return hashlib.sha256(f"tgmm-session:{auth_password()}".encode("utf-8")).digest()
+    return hashlib.sha256(f"tgmm-session:{auth_credential()['password_hash']}".encode("utf-8")).digest()
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -241,12 +293,13 @@ def _b64url_decode(value: str) -> bytes:
 
 
 def issue_auth_token(now: int | None = None) -> str:
-    if not auth_password():
+    credential = auth_credential()
+    if not credential["password_hash"]:
         return ""
     issued_at = int(time.time() if now is None else now)
     payload = _b64url_encode(
         json.dumps(
-            {"v": 1, "iat": issued_at, "exp": issued_at + auth_session_ttl()},
+            {"v": 1, "sv": credential["session_version"], "iat": issued_at, "exp": issued_at + auth_session_ttl()},
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
@@ -256,7 +309,8 @@ def issue_auth_token(now: int | None = None) -> str:
 
 
 def auth_session_valid(token: str, now: int | None = None) -> bool:
-    if not auth_password() or not token or "." not in token:
+    credential = auth_credential()
+    if not credential["password_hash"] or not token or "." not in token:
         return False
     try:
         payload, supplied_signature = token.rsplit(".", 1)
@@ -265,13 +319,18 @@ def auth_session_valid(token: str, now: int | None = None) -> bool:
             return False
         data = json.loads(_b64url_decode(payload))
         current = int(time.time() if now is None else now)
-        return data.get("v") == 1 and int(data["iat"]) <= current <= int(data["exp"])
+        return (
+            data.get("v") == 1
+            and int(data.get("sv", 0)) == credential["session_version"]
+            and int(data["iat"]) <= current <= int(data["exp"])
+        )
     except (ValueError, TypeError, KeyError, UnicodeError):
         return False
 
 
 def auth_security_status() -> dict:
-    enabled = bool(auth_password())
+    credential = auth_credential()
+    enabled = bool(credential["password_hash"])
     local_only = env_bool("APP_LOCAL_ONLY", False)
     warnings = []
     if not enabled:
@@ -282,6 +341,7 @@ def auth_security_status() -> dict:
         warnings.append("The service is not declared local-only and has no password protection.")
     return {
         "enabled": enabled,
+        "credential_source": credential["source"],
         "local_only": local_only,
         "cookie_secure": env_bool("APP_COOKIE_SECURE", False),
         "session_ttl_seconds": auth_session_ttl(),
@@ -292,11 +352,10 @@ def auth_security_status() -> dict:
 
 @app.middleware("http")
 async def optional_password_gate(request: Request, call_next):
-    password = auth_password()
-    if not password:
+    if not auth_enabled():
         return await call_next(request)
     path = request.url.path
-    if path.startswith("/api/auth") or path.startswith("/assets") or path in {"/api/health", "/api/version"}:
+    if path.startswith("/assets") or path in {"/api/auth/login", "/api/auth/status", "/api/health", "/api/version"}:
         return await call_next(request)
     cookie = request.cookies.get("tgmm_auth", "")
     if auth_session_valid(cookie):
@@ -314,24 +373,84 @@ def api_auth_status(request: Request) -> dict:
     return status
 
 
-@app.post("/api/auth/login")
-def api_auth_login(req: AuthRequest, response: Response) -> dict:
-    if not auth_password():
-        return {"ok": True, "enabled": False}
-    if not hmac.compare_digest(req.password, auth_password()):
-        raise HTTPException(status_code=401, detail="Invalid password")
+def _login_client_key(request: Request) -> str:
+    return str(request.client.host if request.client else "unknown")[:120]
+
+
+def _login_rate_limit(client_key: str, success: bool | None = None) -> int:
+    now = int(time.time())
+    window = 300
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT failures, window_started, locked_until FROM auth_login_attempts WHERE client_key=?", (client_key,)
+        ).fetchone()
+        failures = int(row["failures"]) if row else 0
+        started = int(row["window_started"]) if row else now
+        locked_until = int(row["locked_until"]) if row else 0
+        if success is None:
+            return max(0, locked_until - now)
+        if success:
+            conn.execute("DELETE FROM auth_login_attempts WHERE client_key=?", (client_key,))
+            return 0
+        if now - started > window:
+            failures, started = 0, now
+        failures += 1
+        locked_until = now + min(900, 30 * (2 ** max(0, failures - 5))) if failures >= 5 else 0
+        conn.execute(
+            """
+            INSERT INTO auth_login_attempts(client_key, failures, window_started, locked_until, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(client_key) DO UPDATE SET failures=excluded.failures,
+                window_started=excluded.window_started, locked_until=excluded.locked_until, updated_at=CURRENT_TIMESTAMP
+            """,
+            (client_key, failures, started, locked_until),
+        )
+        return max(0, locked_until - now)
+
+
+def _set_auth_cookie(response: Response) -> None:
     ttl = auth_session_ttl()
     response.set_cookie(
-        "tgmm_auth",
-        issue_auth_token(),
-        max_age=ttl,
-        expires=ttl,
-        httponly=True,
-        secure=env_bool("APP_COOKIE_SECURE", False),
-        samesite="strict",
-        path="/",
+        "tgmm_auth", issue_auth_token(), max_age=ttl, expires=ttl, httponly=True,
+        secure=env_bool("APP_COOKIE_SECURE", False), samesite="strict", path="/",
     )
+
+
+@app.post("/api/auth/login")
+def api_auth_login(req: AuthRequest, request: Request, response: Response) -> dict:
+    if not auth_enabled():
+        return {"ok": True, "enabled": False}
+    client_key = _login_client_key(request)
+    retry_after = _login_rate_limit(client_key)
+    if retry_after:
+        raise HTTPException(status_code=429, detail=f"Too many attempts; retry in {retry_after} seconds")
+    if not verify_auth_password(req.password):
+        _login_rate_limit(client_key, False)
+        raise HTTPException(status_code=401, detail="Invalid password")
+    _login_rate_limit(client_key, True)
+    _set_auth_cookie(response)
     return {"ok": True, "enabled": True}
+
+
+@app.post("/api/auth/change-password")
+def api_auth_change_password(req: PasswordChangeRequest, response: Response) -> dict:
+    if not verify_auth_password(req.current_password):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if len(req.new_password) < 10 or len(req.new_password) > 256:
+        raise HTTPException(status_code=400, detail="New password must contain 10 to 256 characters")
+    if hmac.compare_digest(req.current_password, req.new_password):
+        raise HTTPException(status_code=400, detail="New password must be different")
+    encoded = _password_hash(req.new_password)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE auth_credentials SET password_hash=?, session_version=session_version+1, updated_at=CURRENT_TIMESTAMP WHERE id=1",
+            (encoded,),
+        )
+        conn.execute(
+            "INSERT INTO media_operations(operation, detail) VALUES ('auth_password_changed', 'all previous sessions invalidated')"
+        )
+    _set_auth_cookie(response)
+    return {"ok": True, "sessions_invalidated": True}
 
 
 @app.post("/api/auth/logout")
@@ -459,6 +578,8 @@ def api_cancel_job(job_id: int) -> dict:
         request_job_cancel(job_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True, "id": job_id}
 
 
@@ -1570,7 +1691,11 @@ def api_media_thumbnail(media_id: int):
     thumb_dir = root / "_MANIFESTS" / MEDIA_THUMB_CACHE
     thumb = thumb_dir / f"{media_id}.jpg"
     if thumb.exists():
-        if cached_thumbnail_is_healthy(thumb):
+        try:
+            source_is_newer = path.exists() and path.stat().st_mtime_ns > thumb.stat().st_mtime_ns
+        except OSError:
+            source_is_newer = False
+        if not source_is_newer and cached_thumbnail_is_healthy(thumb):
             return FileResponse(thumb, media_type="image/jpeg", headers=THUMB_CACHE_HEADERS)
         try:
             thumb.unlink()
