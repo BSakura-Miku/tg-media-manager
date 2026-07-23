@@ -3,7 +3,7 @@
 IMAGE ?= tg-media-manager
 TAG ?= latest
 DOCKERHUB_REPO ?= bsakuramiku/tg-media-manager
-APP_SEMVER ?= 1.3.0
+APP_SEMVER ?= 1.4.0
 APP_VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 APP_BUILT_AT ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)

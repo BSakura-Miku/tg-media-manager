@@ -106,6 +106,8 @@ Back up `./data/tg_media_manager.sqlite3` before changing the image. Schema upgr
 - Existing OpenCLIP JSONL caches and face-group CSV manifests are imported into SQLite, avoiding a full inference rerun after an upgrade.
 - Full workflows repair missing thumbnails, preserve the earliest original filename, backfill hashes incrementally, and finish with a quality gate. Partial coverage is reported as `warning`, not a false success.
 - Timed subtitles use Faster-Whisper when SenseVoice output lacks usable timestamps. Confirmed no-speech results are not repeatedly reprocessed.
+- The recommended subtitle engine is `stable-faster-whisper`: it keeps word timestamps, compensates for audio-stream offsets, suppresses silence, and regroups Chinese/Japanese cues to readable lengths. The NAS profile defaults to `medium` + `int8`; use `small` for faster previews.
+- Subtitle tuning is available in Settings (`WHISPER_MODEL`, beam size, optional language/prompt, cue length, duration, and silence gap). Raw word timestamps remain in `segments_json`, so cue formatting can be improved without losing recognition timing.
 
 Run the local quality gate before deployment:
 

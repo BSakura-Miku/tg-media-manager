@@ -241,6 +241,15 @@ const i18n = {
     asrFunAsrNano: 'Fun-ASR-Nano ONNX',
     asrSenseVoice: 'SenseVoice GGUF',
     asrWhisper: 'faster-whisper',
+    asrStableWhisper: 'Stable faster-whisper (recommended)',
+    whisperModel: 'Whisper model',
+    whisperComputeType: 'Whisper precision',
+    whisperBeamSize: 'Whisper beam size',
+    whisperLanguage: 'Forced language',
+    whisperPrompt: 'Vocabulary prompt',
+    subtitleMaxChars: 'Subtitle max characters',
+    subtitleMaxSeconds: 'Subtitle max seconds',
+    subtitleMaxGap: 'Split on silence (seconds)',
     senseVoiceModel: 'SenseVoice GGUF model',
     senseVoiceBin: 'SenseVoice runner',
     senseVoiceCommand: 'Custom SenseVoice command',
@@ -777,6 +786,15 @@ const i18n = {
     asrFunAsrNano: 'Fun-ASR-Nano ONNX',
     asrSenseVoice: 'SenseVoice GGUF',
     asrWhisper: 'faster-whisper',
+    asrStableWhisper: '稳定版 faster-whisper（推荐）',
+    whisperModel: 'Whisper 模型',
+    whisperComputeType: 'Whisper 精度',
+    whisperBeamSize: 'Whisper 搜索宽度',
+    whisperLanguage: '强制语言',
+    whisperPrompt: '专有词提示',
+    subtitleMaxChars: '单条字幕最大字数',
+    subtitleMaxSeconds: '单条字幕最长秒数',
+    subtitleMaxGap: '静音切句秒数',
     senseVoiceModel: 'SenseVoice GGUF 模型',
     senseVoiceBin: 'SenseVoice 运行器',
     senseVoiceCommand: '自定义 SenseVoice 命令',
@@ -4227,8 +4245,16 @@ function SettingsPanel({ settings, setSettings, saveSettings, changePassword, br
     openclip_strong_low_conf_only: true,
     face_providers: 'OpenVINOExecutionProvider,CPUExecutionProvider',
     whisper_device: 'cpu',
+    whisper_model: 'medium',
+    whisper_compute_type: 'int8',
+    whisper_beam_size: 5,
+    whisper_language: '',
+    whisper_initial_prompt: '',
     asr_engine: 'auto',
     transcript_engine: 'auto',
+    subtitle_max_chars: 24,
+    subtitle_max_seconds: 7,
+    subtitle_max_gap: 0.8,
     audio_tag_mode: 'sensevoice-sample',
     audio_tag_sample_seconds: 30,
     sensevoice_gguf_bin: 'llama-sensevoice',
@@ -4268,7 +4294,7 @@ function SettingsPanel({ settings, setSettings, saveSettings, changePassword, br
           <label><FieldLabel label={t.openclipStrongThreshold} help={t.settingHelp?.openclipStrongThreshold} /><input type="number" min="0.01" max="0.99" step="0.01" value={cfg.openclip_strong_threshold ?? 0.62} onChange={event => update('openclip_strong_threshold', event.target.value)} /></label>
           <label className="checkLine"><input type="checkbox" checked={cfg.openclip_strong_low_conf_only !== false} onChange={event => update('openclip_strong_low_conf_only', event.target.checked)} />{t.openclipStrongLowOnly}</label>
           <label><FieldLabel label={t.faceProviders} help={t.settingHelp?.faceProviders} /><select value={cfg.face_providers || 'OpenVINOExecutionProvider,CPUExecutionProvider'} onChange={event => update('face_providers', event.target.value)}><option value="OpenVINOExecutionProvider,CPUExecutionProvider">OpenVINO + CPU fallback</option><option value="CPUExecutionProvider">CPUExecutionProvider</option></select></label>
-          <label><FieldLabel label={t.transcriptEngine} help={t.settingHelp?.transcriptEngine} /><select value={cfg.transcript_engine || cfg.asr_engine || 'auto'} onChange={event => update('transcript_engine', event.target.value)}><option value="auto">{t.transcriptAuto}</option><option value="funasr-nano-onnx">{t.asrFunAsrNano}</option><option value="sensevoice-gguf">{t.asrSenseVoice}</option><option value="faster-whisper">{t.asrWhisper}</option></select></label>
+          <label><FieldLabel label={t.transcriptEngine} help={t.settingHelp?.transcriptEngine} /><select value={cfg.transcript_engine || cfg.asr_engine || 'auto'} onChange={event => update('transcript_engine', event.target.value)}><option value="stable-faster-whisper">{t.asrStableWhisper}</option><option value="auto">{t.transcriptAuto}</option><option value="funasr-nano-onnx">{t.asrFunAsrNano}</option><option value="sensevoice-gguf">{t.asrSenseVoice}</option><option value="faster-whisper">{t.asrWhisper}</option></select></label>
           <label><FieldLabel label={t.audioTagMode} help={t.settingHelp?.audioTagMode} /><select value={cfg.audio_tag_mode || 'sensevoice-sample'} onChange={event => update('audio_tag_mode', event.target.value)}><option value="sensevoice-sample">{t.audioTagSenseVoiceSample}</option><option value="sensevoice-full">{t.audioTagSenseVoiceFull}</option><option value="off">{t.audioTagOff}</option></select></label>
           <label><FieldLabel label={t.audioTagSampleSeconds} help={t.settingHelp?.audioTagSampleSeconds} /><input type="number" min="0" max="3600" value={cfg.audio_tag_sample_seconds ?? 30} onChange={event => update('audio_tag_sample_seconds', event.target.value)} /></label>
           <label><FieldLabel label={t.asrEngine} help={t.settingHelp?.asrEngine} /><select value={cfg.asr_engine || 'auto'} onChange={event => update('asr_engine', event.target.value)}><option value="auto">{t.asrAuto}</option><option value="sensevoice-gguf">{t.asrSenseVoice}</option><option value="faster-whisper">{t.asrWhisper}</option></select></label>
@@ -4276,6 +4302,14 @@ function SettingsPanel({ settings, setSettings, saveSettings, changePassword, br
           <label>{t.senseVoiceBin}<input value={cfg.sensevoice_gguf_bin || 'llama-sensevoice'} onChange={event => update('sensevoice_gguf_bin', event.target.value)} /></label>
           <label>{t.senseVoiceCommand}<input value={cfg.sensevoice_gguf_command || ''} onChange={event => update('sensevoice_gguf_command', event.target.value)} placeholder="{bin} -m {model} -f {audio} --language auto" /><small>{t.senseVoiceCommandHint}</small></label>
           <label><FieldLabel label={t.whisperDevice} help={t.settingHelp?.whisperDevice} /><select value={cfg.whisper_device || 'cpu'} onChange={event => update('whisper_device', event.target.value)}><option value="cpu">{t.cpu}</option><option value="cuda">CUDA</option></select></label>
+          <label>{t.whisperModel}<select value={cfg.whisper_model || 'medium'} onChange={event => update('whisper_model', event.target.value)}><option value="small">small</option><option value="medium">medium</option><option value="large-v3-turbo">large-v3-turbo</option><option value="large-v3">large-v3</option><option value="base">base</option></select></label>
+          <label>{t.whisperComputeType}<select value={cfg.whisper_compute_type || 'int8'} onChange={event => update('whisper_compute_type', event.target.value)}><option value="int8">int8</option><option value="int8_float16">int8_float16</option><option value="float16">float16</option><option value="float32">float32</option></select></label>
+          <label>{t.whisperBeamSize}<input type="number" min="1" max="10" value={cfg.whisper_beam_size ?? 5} onChange={event => update('whisper_beam_size', event.target.value)} /></label>
+          <label>{t.whisperLanguage}<input value={cfg.whisper_language || ''} onChange={event => update('whisper_language', event.target.value)} placeholder="auto / zh / ja / en" /></label>
+          <label>{t.whisperPrompt}<input value={cfg.whisper_initial_prompt || ''} onChange={event => update('whisper_initial_prompt', event.target.value)} placeholder="人名、频道名、常见专有词" /></label>
+          <label>{t.subtitleMaxChars}<input type="number" min="8" max="80" value={cfg.subtitle_max_chars ?? 24} onChange={event => update('subtitle_max_chars', event.target.value)} /></label>
+          <label>{t.subtitleMaxSeconds}<input type="number" min="1" max="20" step="0.5" value={cfg.subtitle_max_seconds ?? 7} onChange={event => update('subtitle_max_seconds', event.target.value)} /></label>
+          <label>{t.subtitleMaxGap}<input type="number" min="0.1" max="5" step="0.1" value={cfg.subtitle_max_gap ?? 0.8} onChange={event => update('subtitle_max_gap', event.target.value)} /></label>
           <label><FieldLabel label={t.transcribeMaxSeconds} help={t.settingHelp?.transcribeMaxSeconds} /><input type="number" min="0" max="86400" value={cfg.transcribe_max_seconds ?? 0} onChange={event => update('transcribe_max_seconds', event.target.value)} /><small>{t.transcribeFullHint}</small></label>
           <div className="formSectionTitle">{t.monitor}</div>
           <label className="checkLine"><input type="checkbox" checked={!!cfg.monitor_enabled} onChange={event => update('monitor_enabled', event.target.checked)} />{t.monitorEnabled}</label>

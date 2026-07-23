@@ -29,6 +29,7 @@ services:
       BROWSE_ROOTS: /media,/library,/incoming
       APP_DB: /data/tg_media_manager.sqlite3
       MODEL_ROOT: /models
+      WHISPER_MODEL_ROOT: /models/whisper
       HF_HOME: /models/huggingface
       TORCH_HOME: /models/torch
       XDG_CACHE_HOME: /models/cache
@@ -51,6 +52,15 @@ services:
       FFMPEG_HW_DEVICE: ${FFMPEG_HW_DEVICE:-/dev/dri/renderD128}
       FACE_PROVIDERS: ${FACE_PROVIDERS:-OpenVINOExecutionProvider,CPUExecutionProvider}
       OPENVINO_DEVICE: ${OPENVINO_DEVICE:-GPU}
+      TRANSCRIPT_ENGINE: ${TRANSCRIPT_ENGINE:-stable-faster-whisper}
+      WHISPER_MODEL: ${WHISPER_MODEL:-medium}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_BEAM_SIZE: ${WHISPER_BEAM_SIZE:-5}
+      WHISPER_STABLE_TIMESTAMPS: ${WHISPER_STABLE_TIMESTAMPS:-true}
+      SUBTITLE_MAX_CHARS: ${SUBTITLE_MAX_CHARS:-24}
+      SUBTITLE_MAX_SECONDS: ${SUBTITLE_MAX_SECONDS:-7}
+      SUBTITLE_MAX_GAP: ${SUBTITLE_MAX_GAP:-0.8}
       GENERATE_TIMED_SUBTITLES: ${GENERATE_TIMED_SUBTITLES:-true}
     devices:
       - /dev/dri:/dev/dri

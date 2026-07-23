@@ -21,6 +21,7 @@ from tempfile import TemporaryDirectory
 from typing import Callable
 
 from .db import connect, get_settings, init_db
+from .subtitles import contains_translation, normalize_language_code, regroup_word_segments
 
 try:
     from PIL import Image
@@ -3178,6 +3179,27 @@ def configured_seconds(env_name: str, default: int = 0) -> int:
         return default
 
 
+def configured_int(env_name: str, default: int, low: int, high: int) -> int:
+    value = (os.environ.get(env_name, str(default)) or str(default)).strip()
+    try:
+        return max(low, min(high, int(value)))
+    except ValueError:
+        return default
+
+
+def configured_float(env_name: str, default: float, low: float, high: float) -> float:
+    value = (os.environ.get(env_name, str(default)) or str(default)).strip()
+    try:
+        return max(low, min(high, float(value)))
+    except ValueError:
+        return default
+
+
+def configured_bool(env_name: str, default: bool = False) -> bool:
+    fallback = "true" if default else "false"
+    return (os.environ.get(env_name, fallback) or fallback).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def cancel_requested() -> bool:
     cancel_file = os.environ.get("TGMM_CANCEL_FILE", "")
     return bool(cancel_file and Path(cancel_file).exists())
@@ -3221,6 +3243,29 @@ def extract_audio_wav(video: Path, wav: Path, max_seconds: int | None = None) ->
     cmd.append(str(wav))
     returncode, _stdout, stderr = run_cancelable_command(cmd)
     return returncode == 0 and wav.exists() and wav.stat().st_size > 0, stderr[-1000:]
+
+
+def audio_stream_start_offset(video: Path) -> float:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=start_time",
+        "-of",
+        "json",
+        str(video),
+    ]
+    try:
+        result = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=12)
+        if result.returncode != 0:
+            return 0.0
+        streams = json.loads(result.stdout or "{}").get("streams") or []
+        return float(streams[0].get("start_time") or 0) if streams else 0.0
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, subprocess.TimeoutExpired):
+        return 0.0
 
 
 def sensevoice_command(wav: Path) -> list[str] | None:
@@ -3371,22 +3416,92 @@ def transcribe_with_funasr_nano_onnx(wav: Path) -> dict | None:
     }
 
 
-def transcribe_with_faster_whisper(wav: Path, model, model_name: str) -> dict:
-    segments_iter, info = model.transcribe(str(wav), vad_filter=True)
-    segments = [
-        {"start": round(float(seg.start), 2), "end": round(float(seg.end), 2), "text": seg.text.strip()}
-        for seg in segments_iter
-        if seg.text.strip()
-    ]
+def load_faster_whisper_model(model_name: str, stable_timestamps: bool = False):
+    device = os.environ.get("WHISPER_DEVICE", "cpu")
+    compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+    model_root = os.environ.get(
+        "WHISPER_MODEL_ROOT",
+        str(Path(os.environ.get("MODEL_ROOT", "/models")) / "whisper"),
+    )
+    options = {
+        "device": device,
+        "compute_type": compute_type,
+        "download_root": model_root,
+    }
+    if stable_timestamps:
+        import stable_whisper  # type: ignore
+
+        return stable_whisper.load_faster_whisper(model_name, **options)
+    from faster_whisper import WhisperModel  # type: ignore
+
+    return WhisperModel(model_name, **options)
+
+
+def transcribe_with_faster_whisper(
+    wav: Path,
+    model,
+    model_name: str,
+    *,
+    stable_timestamps: bool = False,
+    offset_seconds: float = 0.0,
+) -> dict:
+    beam_size = configured_int("WHISPER_BEAM_SIZE", 5, 1, 10)
+    language = (os.environ.get("WHISPER_LANGUAGE", "") or "").strip() or None
+    initial_prompt = (os.environ.get("WHISPER_INITIAL_PROMPT", "") or "").strip()
+    options: dict = {
+        "beam_size": beam_size,
+        "word_timestamps": True,
+        "vad_filter": True,
+        "condition_on_previous_text": configured_bool("WHISPER_CONDITION_ON_PREVIOUS_TEXT", True),
+    }
+    if language:
+        options["language"] = language
+    if initial_prompt:
+        options["initial_prompt"] = initial_prompt
+
+    if stable_timestamps:
+        stable_result = model.transcribe(
+            str(wav),
+            verbose=None,
+            regroup=False,
+            suppress_silence=True,
+            **options,
+        )
+        data = stable_result.to_dict() if hasattr(stable_result, "to_dict") else {}
+        raw_segments = data.get("segments") or getattr(stable_result, "segments", []) or []
+        detected_language = normalize_language_code(
+            data.get("language") or getattr(stable_result, "language", "") or language
+        )
+        engine = "stable-faster-whisper"
+    else:
+        segments_iter, info = model.transcribe(str(wav), **options)
+        raw_segments = list(segments_iter)
+        detected_language = normalize_language_code(getattr(info, "language", "") or language)
+        engine = "faster-whisper"
+
+    segments = regroup_word_segments(
+        raw_segments,
+        detected_language,
+        max_chars=configured_int("SUBTITLE_MAX_CHARS", 24, 8, 80),
+        max_seconds=configured_float("SUBTITLE_MAX_SECONDS", 7.0, 1.0, 20.0),
+        max_gap=configured_float("SUBTITLE_MAX_GAP", 0.8, 0.1, 5.0),
+        offset_seconds=offset_seconds,
+    )
     text = "\n".join(item["text"] for item in segments)
     return {
         "ok": True,
         "text": text,
         "tag_text": text,
-        "language": getattr(info, "language", "") or "",
+        "language": detected_language,
         "segments": segments,
-        "engine": "faster-whisper",
+        "engine": engine,
         "model": model_name,
+        "parameters": {
+            "beam_size": beam_size,
+            "word_timestamps": True,
+            "stable_timestamps": stable_timestamps,
+            "offset_seconds": round(offset_seconds, 3),
+        },
     }
 
 
@@ -3451,7 +3566,11 @@ def write_subtitle_files(conn, media_id: int, segments: list[dict], text: str) -
     out_dir = subtitle_dir(root)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{media_id}.vtt").write_text(transcript_to_vtt(timed, text, "original"), encoding="utf-8")
-    (out_dir / f"{media_id}.bilingual.vtt").write_text(transcript_to_vtt(timed, text, "bilingual"), encoding="utf-8")
+    bilingual_path = out_dir / f"{media_id}.bilingual.vtt"
+    if contains_translation(timed):
+        bilingual_path.write_text(transcript_to_vtt(timed, text, "bilingual"), encoding="utf-8")
+    else:
+        bilingual_path.unlink(missing_ok=True)
     return True
 
 
@@ -3520,14 +3639,18 @@ def save_transcript(conn, media_id: int, result: dict, model_name: str, include_
         """,
         (media_id, language, text, json.dumps(segments, ensure_ascii=False), model_name, engine),
     )
-    conn.execute("DELETE FROM media_tags WHERE media_id=? AND source IN ('audio', 'sensevoice-gguf', 'faster-whisper', 'transcript', 'sensevoice-audio', 'funasr-nano-onnx')", (media_id,))
+    conn.execute("DELETE FROM media_tags WHERE media_id=? AND source IN ('audio', 'sensevoice-gguf', 'faster-whisper', 'stable-faster-whisper', 'transcript', 'sensevoice-audio', 'funasr-nano-onnx')", (media_id,))
     if include_text_tags:
         tag_text = str(result.get("tag_text") or text)
         tag_source = "sensevoice-audio" if engine == "sensevoice-gguf" else "transcript"
         save_audio_tags(conn, media_id, tag_text, language, tag_source, replace=False)
     conn.execute(
         "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'transcribe', ?)",
-        (media_id, f"segments={len(segments)} model={model_name} engine={engine}"),
+        (
+            media_id,
+            f"segments={len(segments)} model={model_name} engine={engine} "
+            f"parameters={json.dumps(result.get('parameters') or {}, ensure_ascii=False, separators=(',', ':'))}",
+        ),
     )
     try:
         if not write_subtitle_files(conn, media_id, segments, text):
@@ -3541,7 +3664,7 @@ def transcript_needs_timed_rerun(segments_json: str | None, text: str | None = "
         segments = json.loads(segments_json or "[]")
     except (TypeError, json.JSONDecodeError):
         return True
-    if not str(text or "").strip() and str(source or "").lower() == "faster-whisper":
+    if not str(text or "").strip() and str(source or "").lower() in {"faster-whisper", "stable-faster-whisper"}:
         return False
     return not bool(timed_transcript_segments(segments if isinstance(segments, list) else []))
 
@@ -3567,7 +3690,7 @@ def transcription_candidates(root: Path, limit: int | None = None) -> list:
     return rows
 
 
-def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "base") -> dict:
+def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "medium") -> dict:
     rows = transcription_candidates(root, limit)
     if not rows:
         return {"ok": True, "processed": 0, "segments": 0, "timed_subtitles": 0, "failed": 0, "errors": []}
@@ -3580,30 +3703,54 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
     generate_timed_subtitles = os.environ.get("GENERATE_TIMED_SUBTITLES", "true").strip().lower() in {"1", "true", "yes", "on"}
     if transcript_engine == "whisper":
         transcript_engine = "faster-whisper"
+    if transcript_engine in {"stable-whisper", "stable-ts"}:
+        transcript_engine = "stable-faster-whisper"
     if transcript_engine == "sensevoice":
         transcript_engine = "sensevoice-gguf"
     sensevoice_available = sensevoice_command(Path("__probe__.wav")) is not None
     funasr_available = funasr_nano_command(Path("__probe__.wav")) is not None
     model = None
     model_name = os.environ.get("WHISPER_MODEL", model_size)
-    should_load_whisper = transcript_engine in {"faster-whisper", "whisper"} or (transcript_engine == "auto" and not funasr_available and not sensevoice_available)
-    if should_load_whisper:
+    model_is_stable = False
+    warnings = []
+
+    def ensure_whisper_model(prefer_stable: bool) -> Exception | None:
+        nonlocal model, model_is_stable
+        if model is not None and (model_is_stable or not prefer_stable):
+            return None
         try:
-            from faster_whisper import WhisperModel  # type: ignore
-            device = os.environ.get("WHISPER_DEVICE", "cpu")
-            compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
-            model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=os.environ.get("MODEL_ROOT", "/models"))
+            model = load_faster_whisper_model(model_name, stable_timestamps=prefer_stable)
+            model_is_stable = prefer_stable
+            return None
         except Exception as exc:
+            if prefer_stable and transcript_engine == "auto":
+                try:
+                    model = load_faster_whisper_model(model_name, stable_timestamps=False)
+                    model_is_stable = False
+                    warnings.append({"warning": "stable timestamp wrapper unavailable; using faster-whisper", "detail": repr(exc)})
+                    return None
+                except Exception as fallback_exc:
+                    return fallback_exc
+            return exc
+
+    should_load_whisper = transcript_engine in {"faster-whisper", "stable-faster-whisper"} or (
+        transcript_engine == "auto" and not funasr_available and not sensevoice_available
+    )
+    if should_load_whisper:
+        prefer_stable = transcript_engine == "stable-faster-whisper" or (
+            transcript_engine == "auto" and configured_bool("WHISPER_STABLE_TIMESTAMPS", True)
+        )
+        load_error = ensure_whisper_model(prefer_stable)
+        if load_error is not None:
             if transcript_engine != "auto":
                 return {
                     "ok": False,
-                    "error": "faster-whisper is not installed in this image. Install the transcribe extra or build a transcribe-enabled image.",
-                    "detail": repr(exc),
+                    "error": "The selected Whisper subtitle engine is unavailable in this image.",
+                    "detail": repr(load_error),
                 }
     processed = 0
     segment_count = 0
     errors = []
-    warnings = []
     timed_count = 0
     with TemporaryDirectory(prefix="tgmm_audio_") as tmpdir:
         tmp_root = Path(tmpdir)
@@ -3621,6 +3768,7 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                 if not ok:
                     errors.append({"id": row["id"], "error": audio_error})
                     continue
+                audio_offset = audio_stream_start_offset(path)
                 try:
                     result = None
                     if transcript_engine in {"auto", "funasr-nano-onnx", "funasr-nano"} and funasr_available:
@@ -3641,28 +3789,32 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "bas
                             result = None
                     if result is None:
                         if transcript_engine == "auto" and model is None:
-                            try:
-                                from faster_whisper import WhisperModel  # type: ignore
-                                device = os.environ.get("WHISPER_DEVICE", "cpu")
-                                compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
-                                model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=os.environ.get("MODEL_ROOT", "/models"))
-                            except Exception as exc:
-                                errors.append({"id": row["id"], "error": f"fallback faster-whisper unavailable: {exc!r}"})
+                            load_error = ensure_whisper_model(configured_bool("WHISPER_STABLE_TIMESTAMPS", True))
+                            if load_error is not None:
+                                errors.append({"id": row["id"], "error": f"fallback faster-whisper unavailable: {load_error!r}"})
                         if model is None:
                             errors.append({"id": row["id"], "error": "no ASR engine available"})
                             continue
-                        result = transcribe_with_faster_whisper(wav, model, model_name)
+                        result = transcribe_with_faster_whisper(
+                            wav,
+                            model,
+                            model_name,
+                            stable_timestamps=model_is_stable,
+                            offset_seconds=audio_offset,
+                        )
                     if result and not timed_transcript_segments(result.get("segments") or []) and generate_timed_subtitles:
                         if model is None:
-                            try:
-                                from faster_whisper import WhisperModel  # type: ignore
-                                device = os.environ.get("WHISPER_DEVICE", "cpu")
-                                compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
-                                model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=os.environ.get("MODEL_ROOT", "/models"))
-                            except Exception as exc:
-                                warnings.append({"id": row["id"], "warning": "timed subtitle fallback unavailable", "detail": repr(exc)})
+                            load_error = ensure_whisper_model(configured_bool("WHISPER_STABLE_TIMESTAMPS", True))
+                            if load_error is not None:
+                                warnings.append({"id": row["id"], "warning": "timed subtitle fallback unavailable", "detail": repr(load_error)})
                         if model is not None:
-                            timed_result = transcribe_with_faster_whisper(wav, model, model_name)
+                            timed_result = transcribe_with_faster_whisper(
+                                wav,
+                                model,
+                                model_name,
+                                stable_timestamps=model_is_stable,
+                                offset_seconds=audio_offset,
+                            )
                             if timed_transcript_segments(timed_result.get("segments") or []):
                                 result = timed_result
                             else:

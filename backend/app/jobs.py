@@ -29,13 +29,14 @@ ALLOWED_COMMANDS = {
     "model-pull-openclip-vit-h": [["__model_pull__", "openclip-vit-h"]],
     "model-pull-insightface-buffalo-l": [["__model_pull__", "insightface-buffalo-l"]],
     "model-pull-faster-whisper-small": [["__model_pull__", "faster-whisper-small"]],
+    "model-pull-faster-whisper-medium": [["__model_pull__", "faster-whisper-medium"]],
     "model-pull-funasr-nano-onnx": [["__model_pull__", "funasr-nano-onnx"]],
     "model-pull-bge-small-text": [["__model_pull__", "bge-small-text"]],
     "model-pull-sensevoice-small-gguf": [["__model_pull__", "sensevoice-small-gguf"]],
     "model-pull-sensevoice-fsmn-vad-gguf": [["__model_pull__", "sensevoice-fsmn-vad-gguf"]],
     "model-pull-sensevoice-llamacpp-runtime": [["__model_pull__", "sensevoice-llamacpp-runtime"]],
     "model-pull-custom-detector-onnx": [["__model_pull__", "custom-detector-onnx"]],
-    "model-pull-recommended": [["__model_pull__", "openclip-vit-l"], ["__model_pull__", "insightface-buffalo-l"], ["__model_pull__", "sensevoice-small-gguf"], ["__model_pull__", "sensevoice-fsmn-vad-gguf"], ["__model_pull__", "sensevoice-llamacpp-runtime"]],
+    "model-pull-recommended": [["__model_pull__", "openclip-vit-l"], ["__model_pull__", "insightface-buffalo-l"], ["__model_pull__", "faster-whisper-medium"], ["__model_pull__", "sensevoice-small-gguf"], ["__model_pull__", "sensevoice-fsmn-vad-gguf"], ["__model_pull__", "sensevoice-llamacpp-runtime"]],
     "scan": ["scan"],
     "analyze-filenames": ["analyze-filenames"],
     "classify-keywords": ["classify-keywords"],
@@ -221,9 +222,18 @@ def hardware_env(settings: dict) -> dict[str, str]:
     env["OPENCLIP_STRONG_THRESHOLD"] = str(settings.get("openclip_strong_threshold") or os.environ.get("OPENCLIP_STRONG_THRESHOLD", "0.62"))
     env["OPENCLIP_STRONG_LOW_CONF_ONLY"] = str(settings.get("openclip_strong_low_conf_only") or os.environ.get("OPENCLIP_STRONG_LOW_CONF_ONLY", "true"))
     env["WHISPER_DEVICE"] = whisper
-    env.setdefault("WHISPER_COMPUTE_TYPE", "int8")
+    env["WHISPER_MODEL"] = settings.get("whisper_model") or os.environ.get("WHISPER_MODEL", "medium")
+    env["WHISPER_MODEL_ROOT"] = os.environ.get("WHISPER_MODEL_ROOT", str(Path(os.environ.get("MODEL_ROOT", "/models")) / "whisper"))
+    env["WHISPER_COMPUTE_TYPE"] = settings.get("whisper_compute_type") or os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+    env["WHISPER_BEAM_SIZE"] = str(settings.get("whisper_beam_size") or os.environ.get("WHISPER_BEAM_SIZE", "5"))
+    env["WHISPER_LANGUAGE"] = settings.get("whisper_language") or os.environ.get("WHISPER_LANGUAGE", "")
+    env["WHISPER_INITIAL_PROMPT"] = settings.get("whisper_initial_prompt") or os.environ.get("WHISPER_INITIAL_PROMPT", "")
+    env["WHISPER_STABLE_TIMESTAMPS"] = os.environ.get("WHISPER_STABLE_TIMESTAMPS", "true")
     env["ASR_ENGINE"] = asr_engine
     env["TRANSCRIPT_ENGINE"] = transcript_engine
+    env["SUBTITLE_MAX_CHARS"] = str(settings.get("subtitle_max_chars") or os.environ.get("SUBTITLE_MAX_CHARS", "24"))
+    env["SUBTITLE_MAX_SECONDS"] = str(settings.get("subtitle_max_seconds") or os.environ.get("SUBTITLE_MAX_SECONDS", "7.0"))
+    env["SUBTITLE_MAX_GAP"] = str(settings.get("subtitle_max_gap") or os.environ.get("SUBTITLE_MAX_GAP", "0.8"))
     env["AUDIO_TAG_MODE"] = audio_tag_mode
     env["AUDIO_TAG_SAMPLE_SECONDS"] = str(settings.get("audio_tag_sample_seconds") or os.environ.get("AUDIO_TAG_SAMPLE_SECONDS", "30"))
     env["GENERATE_TIMED_SUBTITLES"] = str(settings.get("generate_timed_subtitles") or os.environ.get("GENERATE_TIMED_SUBTITLES", "true"))
@@ -506,7 +516,10 @@ def run_job(job_id: int, command: str) -> None:
             "COMPUTE_DEVICE", "FFMPEG_HWACCEL", "FACE_PROVIDERS", "OPENVINO_DEVICE",
             "OPENCLIP_MODEL", "OPENCLIP_PRETRAINED", "OPENCLIP_STRONG_MODEL",
             "OPENCLIP_STRONG_PRETRAINED", "OPENCLIP_STRONG_THRESHOLD", "OPENCLIP_STRONG_LOW_CONF_ONLY",
-            "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE", "ASR_ENGINE", "TRANSCRIPT_ENGINE", "AUDIO_TAG_MODE", "AUDIO_TAG_SAMPLE_SECONDS", "SENSEVOICE_GGUF_BIN",
+            "WHISPER_DEVICE", "WHISPER_MODEL", "WHISPER_MODEL_ROOT", "WHISPER_COMPUTE_TYPE", "WHISPER_BEAM_SIZE",
+            "WHISPER_LANGUAGE", "WHISPER_INITIAL_PROMPT", "WHISPER_STABLE_TIMESTAMPS",
+            "ASR_ENGINE", "TRANSCRIPT_ENGINE", "SUBTITLE_MAX_CHARS", "SUBTITLE_MAX_SECONDS", "SUBTITLE_MAX_GAP",
+            "AUDIO_TAG_MODE", "AUDIO_TAG_SAMPLE_SECONDS", "SENSEVOICE_GGUF_BIN",
             "SENSEVOICE_GGUF_MODEL", "SENSEVOICE_GGUF_COMMAND", "TRANSCRIBE_MAX_SECONDS", "GENERATE_TIMED_SUBTITLES",
         }
     }

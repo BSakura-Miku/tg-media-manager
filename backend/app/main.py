@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import subprocess
 import threading
 import time
@@ -182,8 +183,16 @@ class SettingsRequest(BaseModel):
     openclip_strong_low_conf_only: bool = True
     face_providers: str = "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device: str = "cpu"
+    whisper_model: str = "medium"
+    whisper_compute_type: str = "int8"
+    whisper_beam_size: int = 5
+    whisper_language: str = ""
+    whisper_initial_prompt: str = ""
     asr_engine: str = "auto"
     transcript_engine: str = "auto"
+    subtitle_max_chars: int = 24
+    subtitle_max_seconds: float = 7.0
+    subtitle_max_gap: float = 0.8
     audio_tag_mode: str = "sensevoice-sample"
     audio_tag_sample_seconds: int = 30
     sensevoice_gguf_bin: str = "llama-sensevoice"
@@ -1066,6 +1075,12 @@ def default_settings() -> dict:
         except (TypeError, ValueError):
             value = default
         return max(low, min(high, value))
+    def setting_float(key: str, env_key: str, default: float, low: float, high: float) -> float:
+        try:
+            value = float(settings.get(key) or os.environ.get(env_key, str(default)))
+        except (TypeError, ValueError):
+            value = default
+        return max(low, min(high, value))
     return {
         "media_root": media,
         "output_root": output,
@@ -1082,8 +1097,16 @@ def default_settings() -> dict:
         "openclip_strong_low_conf_only": (settings.get("openclip_strong_low_conf_only") or os.environ.get("OPENCLIP_STRONG_LOW_CONF_ONLY", "true")).lower() in {"1", "true", "yes", "on"},
         "face_providers": settings.get("face_providers") or os.environ.get("FACE_PROVIDERS", "OpenVINOExecutionProvider,CPUExecutionProvider"),
         "whisper_device": settings.get("whisper_device") or os.environ.get("WHISPER_DEVICE", "cpu"),
+        "whisper_model": settings.get("whisper_model") or os.environ.get("WHISPER_MODEL", "medium"),
+        "whisper_compute_type": settings.get("whisper_compute_type") or os.environ.get("WHISPER_COMPUTE_TYPE", "int8"),
+        "whisper_beam_size": setting_int("whisper_beam_size", "WHISPER_BEAM_SIZE", 5, 1, 10),
+        "whisper_language": settings.get("whisper_language") or os.environ.get("WHISPER_LANGUAGE", ""),
+        "whisper_initial_prompt": settings.get("whisper_initial_prompt") or os.environ.get("WHISPER_INITIAL_PROMPT", ""),
         "asr_engine": settings.get("asr_engine") or os.environ.get("ASR_ENGINE", "auto"),
         "transcript_engine": settings.get("transcript_engine") or os.environ.get("TRANSCRIPT_ENGINE", settings.get("asr_engine") or os.environ.get("ASR_ENGINE", "auto")),
+        "subtitle_max_chars": setting_int("subtitle_max_chars", "SUBTITLE_MAX_CHARS", 24, 8, 80),
+        "subtitle_max_seconds": setting_float("subtitle_max_seconds", "SUBTITLE_MAX_SECONDS", 7.0, 1.0, 20.0),
+        "subtitle_max_gap": setting_float("subtitle_max_gap", "SUBTITLE_MAX_GAP", 0.8, 0.1, 5.0),
         "audio_tag_mode": settings.get("audio_tag_mode") or os.environ.get("AUDIO_TAG_MODE", "sensevoice-sample"),
         "audio_tag_sample_seconds": setting_int("audio_tag_sample_seconds", "AUDIO_TAG_SAMPLE_SECONDS", 30, 0, 3600),
         "sensevoice_gguf_bin": settings.get("sensevoice_gguf_bin") or os.environ.get("SENSEVOICE_GGUF_BIN", "llama-sensevoice"),
@@ -1151,16 +1174,25 @@ def api_save_settings(req: SettingsRequest) -> dict:
         openclip_strong_threshold = 0.62
     face_providers = req.face_providers if req.face_providers in {"OpenVINOExecutionProvider,CPUExecutionProvider", "CPUExecutionProvider"} else "OpenVINOExecutionProvider,CPUExecutionProvider"
     whisper_device = req.whisper_device if req.whisper_device in {"cpu", "cuda"} else "cpu"
+    whisper_model = req.whisper_model if req.whisper_model in {"tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"} else "medium"
+    whisper_compute_type = req.whisper_compute_type if req.whisper_compute_type in {"int8", "int8_float16", "float16", "float32"} else "int8"
+    whisper_beam_size = str(max(1, min(10, int(req.whisper_beam_size or 5))))
+    whisper_language = (req.whisper_language or "").strip().lower()
+    if whisper_language and not re.fullmatch(r"[a-z]{2,3}", whisper_language):
+        raise HTTPException(status_code=400, detail="Whisper language must be an ISO language code or empty")
+    whisper_initial_prompt = (req.whisper_initial_prompt or "").strip()[:500]
     asr_engine = req.asr_engine if req.asr_engine in {"auto", "sensevoice-gguf", "sensevoice", "faster-whisper", "whisper"} else "auto"
     if asr_engine == "sensevoice":
         asr_engine = "sensevoice-gguf"
     if asr_engine == "whisper":
         asr_engine = "faster-whisper"
-    transcript_engine = req.transcript_engine if req.transcript_engine in {"auto", "funasr-nano-onnx", "funasr-nano", "sensevoice-gguf", "sensevoice", "faster-whisper", "whisper"} else asr_engine
+    transcript_engine = req.transcript_engine if req.transcript_engine in {"auto", "funasr-nano-onnx", "funasr-nano", "sensevoice-gguf", "sensevoice", "faster-whisper", "stable-faster-whisper", "stable-whisper", "stable-ts", "whisper"} else asr_engine
     if transcript_engine == "sensevoice":
         transcript_engine = "sensevoice-gguf"
     if transcript_engine == "whisper":
         transcript_engine = "faster-whisper"
+    if transcript_engine in {"stable-whisper", "stable-ts"}:
+        transcript_engine = "stable-faster-whisper"
     if transcript_engine == "funasr-nano":
         transcript_engine = "funasr-nano-onnx"
     audio_tag_mode = req.audio_tag_mode if req.audio_tag_mode in {"off", "sensevoice-sample", "sensevoice-full"} else "sensevoice-sample"
@@ -1180,6 +1212,9 @@ def api_save_settings(req: SettingsRequest) -> dict:
     frame_checkpoint_every = clamp_int(req.frame_checkpoint_every, 100, 10, 1000)
     transcribe_max_seconds = clamp_int(req.transcribe_max_seconds, 0, 0, 86400)
     audio_tag_sample_seconds = clamp_int(req.audio_tag_sample_seconds, 30, 0, 3600)
+    subtitle_max_chars = clamp_int(req.subtitle_max_chars, 24, 8, 80)
+    subtitle_max_seconds = f"{max(1.0, min(20.0, float(req.subtitle_max_seconds or 7.0))):.2f}"
+    subtitle_max_gap = f"{max(0.1, min(5.0, float(req.subtitle_max_gap or 0.8))):.2f}"
     source_dirs = ",".join(part.strip().strip("/") for part in req.source_dirs.split(",") if part.strip())
     monitor_dirs = ",".join(part.strip().strip("/") for part in req.monitor_dirs.split(",") if part.strip())
     try:
@@ -1204,8 +1239,16 @@ def api_save_settings(req: SettingsRequest) -> dict:
         "openclip_strong_low_conf_only": "true" if req.openclip_strong_low_conf_only else "false",
         "face_providers": face_providers,
         "whisper_device": whisper_device,
+        "whisper_model": whisper_model,
+        "whisper_compute_type": whisper_compute_type,
+        "whisper_beam_size": whisper_beam_size,
+        "whisper_language": whisper_language,
+        "whisper_initial_prompt": whisper_initial_prompt,
         "asr_engine": asr_engine,
         "transcript_engine": transcript_engine,
+        "subtitle_max_chars": subtitle_max_chars,
+        "subtitle_max_seconds": subtitle_max_seconds,
+        "subtitle_max_gap": subtitle_max_gap,
         "audio_tag_mode": audio_tag_mode,
         "audio_tag_sample_seconds": audio_tag_sample_seconds,
         "sensevoice_gguf_bin": sensevoice_gguf_bin,
