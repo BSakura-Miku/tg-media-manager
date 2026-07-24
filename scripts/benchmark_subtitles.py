@@ -5,6 +5,7 @@ import argparse
 import gc
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -43,12 +44,41 @@ def media_duration(path: Path) -> float:
         return 0.0
 
 
+def normalized_transcript(text: object) -> str:
+    return re.sub(r"[\W_]+", "", str(text or "").lower(), flags=re.UNICODE)
+
+
+def character_error_rate(reference: object, hypothesis: object) -> float | None:
+    expected = normalized_transcript(reference)
+    actual = normalized_transcript(hypothesis)
+    if not expected:
+        return None
+    previous = list(range(len(actual) + 1))
+    for row_index, expected_char in enumerate(expected, start=1):
+        current = [row_index]
+        for column_index, actual_char in enumerate(actual, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[column_index] + 1,
+                    previous[column_index - 1] + (expected_char != actual_char),
+                )
+            )
+        previous = current
+    return round(previous[-1] / len(expected), 4)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark TGMM subtitle models on local media samples.")
     parser.add_argument("sample_dir", type=Path)
     parser.add_argument("--models", nargs="+", default=["base", "medium"])
     parser.add_argument("--output-dir", type=Path, default=Path(".local/benchmarks/subtitle-results"))
     parser.add_argument("--model-root", type=Path, default=Path(".local/models/whisper"))
+    parser.add_argument(
+        "--references",
+        type=Path,
+        help="Optional private JSON mapping sample filenames to reference transcripts.",
+    )
     parser.add_argument("--limit", type=int, default=0)
     args = parser.parse_args()
 
@@ -59,6 +89,9 @@ def main() -> int:
         samples = samples[: args.limit]
     if not samples:
         raise SystemExit("No media samples found")
+    references: dict[str, object] = {}
+    if args.references:
+        references = json.loads(args.references.read_text(encoding="utf-8"))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     wav_dir = args.output_dir / "wav"
@@ -123,7 +156,13 @@ def main() -> int:
                 "cues": len(result["segments"]),
                 "characters": len(result["text"].replace("\n", "")),
                 "load_seconds": round(load_seconds, 2),
+                "quality": result.get("quality") or {},
             }
+            reference = references.get(sample.name)
+            if isinstance(reference, dict):
+                reference = reference.get("text")
+            if reference:
+                row["character_error_rate"] = character_error_rate(reference, result["text"])
             summary.append(row)
             print(json.dumps(row, ensure_ascii=False), flush=True)
         del model

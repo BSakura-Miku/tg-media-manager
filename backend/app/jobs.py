@@ -81,6 +81,16 @@ ALLOWED_COMMANDS = {
     "transcribe": ["__transcribe__"],
 }
 
+JOB_STATUSES = frozenset({
+    "queued",
+    "running",
+    "interrupted",
+    "done",
+    "warning",
+    "cancelled",
+    "failed",
+})
+
 
 PIPELINE_STAGES = {
     "scan": "scan",
@@ -126,9 +136,27 @@ def core_script() -> Path:
     return Path(__file__).resolve().parents[1] / "core" / "tg_media_library.py"
 
 
-def create_job(command: str) -> int:
+def normalize_job_options(command: str, options: dict | None = None) -> dict:
+    normalized = dict(options or {})
+    allowed_keys = {"limit"} if command == "metadata-backfill" else set()
+    unknown = set(normalized) - allowed_keys
+    if unknown:
+        raise ValueError(f"Unsupported options for {command}: {', '.join(sorted(unknown))}")
+    if "limit" in normalized:
+        try:
+            limit = int(normalized["limit"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("metadata-backfill limit must be an integer") from exc
+        if not 1 <= limit <= 5000:
+            raise ValueError("metadata-backfill limit must be between 1 and 5000")
+        normalized["limit"] = limit
+    return normalized
+
+
+def create_job(command: str, options: dict | None = None) -> int:
     if command not in ALLOWED_COMMANDS:
         raise ValueError(f"Unsupported command: {command}")
+    job_options = normalize_job_options(command, options)
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         active = conn.execute("SELECT id, command, status FROM jobs WHERE status IN ('queued', 'running') ORDER BY id DESC LIMIT 1").fetchone()
@@ -136,7 +164,7 @@ def create_job(command: str) -> int:
             raise RuntimeError(f"Job #{active['id']} ({active['command']}) is still {active['status']}")
         cur = conn.execute("INSERT INTO jobs (command, status, message, progress) VALUES (?, 'queued', '', 0)", (command,))
         job_id = int(cur.lastrowid)
-    thread = threading.Thread(target=run_job, args=(job_id, command), daemon=True)
+    thread = threading.Thread(target=run_job, args=(job_id, command, job_options), daemon=True)
     thread.start()
     return job_id
 
@@ -233,7 +261,13 @@ def hardware_env(settings: dict) -> dict[str, str]:
     env["TRANSCRIPT_ENGINE"] = transcript_engine
     env["SUBTITLE_MAX_CHARS"] = str(settings.get("subtitle_max_chars") or os.environ.get("SUBTITLE_MAX_CHARS", "24"))
     env["SUBTITLE_MAX_SECONDS"] = str(settings.get("subtitle_max_seconds") or os.environ.get("SUBTITLE_MAX_SECONDS", "7.0"))
+    env["SUBTITLE_MIN_SECONDS"] = str(settings.get("subtitle_min_seconds") or os.environ.get("SUBTITLE_MIN_SECONDS", "0.8"))
     env["SUBTITLE_MAX_GAP"] = str(settings.get("subtitle_max_gap") or os.environ.get("SUBTITLE_MAX_GAP", "0.8"))
+    env["WHISPER_VAD_THRESHOLD"] = os.environ.get("WHISPER_VAD_THRESHOLD", "0.5")
+    env["WHISPER_MIN_SILENCE_MS"] = os.environ.get("WHISPER_MIN_SILENCE_MS", "500")
+    env["WHISPER_NO_SPEECH_THRESHOLD"] = os.environ.get("WHISPER_NO_SPEECH_THRESHOLD", "0.6")
+    env["WHISPER_LOG_PROB_THRESHOLD"] = os.environ.get("WHISPER_LOG_PROB_THRESHOLD", "-1.0")
+    env["WHISPER_COMPRESSION_RATIO_THRESHOLD"] = os.environ.get("WHISPER_COMPRESSION_RATIO_THRESHOLD", "2.4")
     env["AUDIO_TAG_MODE"] = audio_tag_mode
     env["AUDIO_TAG_SAMPLE_SECONDS"] = str(settings.get("audio_tag_sample_seconds") or os.environ.get("AUDIO_TAG_SAMPLE_SECONDS", "30"))
     env["GENERATE_TIMED_SUBTITLES"] = str(settings.get("generate_timed_subtitles") or os.environ.get("GENERATE_TIMED_SUBTITLES", "true"))
@@ -495,7 +529,8 @@ def assess_quality_gate(diagnostics: dict) -> dict:
     }
 
 
-def run_job(job_id: int, command: str) -> None:
+def run_job(job_id: int, command: str, options: dict | None = None) -> None:
+    job_options = normalize_job_options(command, options)
     settings = get_settings()
     media_root = settings.get("media_root") or os.environ.get("MEDIA_ROOT", "/media")
     output_root = settings.get("output_root") or os.environ.get("MEDIA_OUTPUT_ROOT") or media_root
@@ -518,7 +553,10 @@ def run_job(job_id: int, command: str) -> None:
             "OPENCLIP_STRONG_PRETRAINED", "OPENCLIP_STRONG_THRESHOLD", "OPENCLIP_STRONG_LOW_CONF_ONLY",
             "WHISPER_DEVICE", "WHISPER_MODEL", "WHISPER_MODEL_ROOT", "WHISPER_COMPUTE_TYPE", "WHISPER_BEAM_SIZE",
             "WHISPER_LANGUAGE", "WHISPER_INITIAL_PROMPT", "WHISPER_STABLE_TIMESTAMPS",
-            "ASR_ENGINE", "TRANSCRIPT_ENGINE", "SUBTITLE_MAX_CHARS", "SUBTITLE_MAX_SECONDS", "SUBTITLE_MAX_GAP",
+            "WHISPER_VAD_THRESHOLD", "WHISPER_MIN_SILENCE_MS", "WHISPER_NO_SPEECH_THRESHOLD",
+            "WHISPER_LOG_PROB_THRESHOLD", "WHISPER_COMPRESSION_RATIO_THRESHOLD",
+            "ASR_ENGINE", "TRANSCRIPT_ENGINE", "SUBTITLE_MAX_CHARS", "SUBTITLE_MAX_SECONDS",
+            "SUBTITLE_MIN_SECONDS", "SUBTITLE_MAX_GAP",
             "AUDIO_TAG_MODE", "AUDIO_TAG_SAMPLE_SECONDS", "SENSEVOICE_GGUF_BIN",
             "SENSEVOICE_GGUF_MODEL", "SENSEVOICE_GGUF_COMMAND", "TRANSCRIBE_MAX_SECONDS", "GENERATE_TIMED_SUBTITLES",
         }
@@ -531,7 +569,11 @@ def run_job(job_id: int, command: str) -> None:
     with connect() as conn:
         message = " && ".join(
             "index-metadata" if step == ["__metadata_index__"] else
-            "metadata-backfill" if step == ["__metadata_backfill__"] else
+            (
+                f"metadata-backfill --limit {job_options['limit']}"
+                if step == ["__metadata_backfill__"] and job_options.get("limit")
+                else "metadata-backfill"
+            ) if step == ["__metadata_backfill__"] else
             "hash-backfill" if step == ["__hash_backfill__"] else
             "repair-thumbnails" if step == ["__thumbnail_repair__"] else
             "index-vision" if step == ["__vision_index__"] else
@@ -570,7 +612,12 @@ def run_job(job_id: int, command: str) -> None:
                 result, captured = run_internal_with_progress(
                     job_id,
                     "metadata-backfill",
-                    lambda: backfill_media_metadata(Path(output_root), progress=metadata_progress_printer, cancel_check=lambda: is_cancel_requested(job_id)),
+                    lambda: backfill_media_metadata(
+                        Path(output_root),
+                        limit=job_options.get("limit"),
+                        progress=metadata_progress_printer,
+                        cancel_check=lambda: is_cancel_requested(job_id),
+                    ),
                     "metadata backfill running",
                 )
                 stdout_parts.append(f"$ metadata-backfill\n{captured}\n{result}")

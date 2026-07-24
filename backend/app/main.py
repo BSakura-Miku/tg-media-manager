@@ -5,11 +5,13 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import re
 import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
+from io import BytesIO
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
@@ -20,11 +22,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .db import connect, get_settings, init_db, rows_to_dicts, save_settings
-from .jobs import ALLOWED_COMMANDS, create_job, mark_interrupted_jobs, request_job_cancel
+from .jobs import ALLOWED_COMMANDS, JOB_STATUSES, create_job, mark_interrupted_jobs, request_job_cancel
 from .media_stats import summary
 from .metadata import (
     add_manual_media_tag,
-    backfill_media_metadata,
     media_by_relative_paths,
     media_detail,
     media_index_diagnostics,
@@ -42,7 +43,6 @@ from .metadata import (
     similarity_groups,
     subtitle_for_media,
     tag_graph,
-    train_vision_calibrators,
     understand_search_query,
     vision_calibrator_status,
 )
@@ -192,6 +192,7 @@ class SettingsRequest(BaseModel):
     transcript_engine: str = "auto"
     subtitle_max_chars: int = 24
     subtitle_max_seconds: float = 7.0
+    subtitle_min_seconds: float = 0.8
     subtitle_max_gap: float = 0.8
     audio_tag_mode: str = "sensevoice-sample"
     audio_tag_sample_seconds: int = 30
@@ -529,9 +530,17 @@ def api_diagnostics() -> dict:
     return media_index_diagnostics(output_root())
 
 
-@app.post("/api/media/metadata-backfill")
+def enqueue_job(command: str, options: dict | None = None) -> dict:
+    try:
+        job_id = create_job(command, options=options) if options is not None else create_job(command)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, "queued": True, "id": job_id, "command": command}
+
+
+@app.post("/api/media/metadata-backfill", status_code=202)
 def api_metadata_backfill(limit: int = Query(200, ge=1, le=5000)) -> dict:
-    return backfill_media_metadata(output_root(), limit=limit)
+    return enqueue_job("metadata-backfill", {"limit": limit})
 
 
 JOB_SUMMARY_COLUMNS = """
@@ -543,9 +552,8 @@ JOB_SUMMARY_COLUMNS = """
 
 @app.get("/api/jobs")
 def api_jobs(limit: int = Query(120, ge=1, le=300), status: str = Query("", max_length=40)) -> list[dict]:
-    allowed = {"queued", "running", "done", "failed", "cancelled"}
     with connect() as conn:
-        if status in allowed:
+        if status in JOB_STATUSES:
             rows = conn.execute(
                 f"SELECT {JOB_SUMMARY_COLUMNS} FROM jobs WHERE status=? ORDER BY id DESC LIMIT ?",
                 (status, limit),
@@ -665,6 +673,63 @@ def read_csv(path: Path) -> list[dict]:
         return []
     text = path.read_text(encoding="utf-8-sig", errors="replace").replace("\x00", "")
     return list(csv.DictReader(StringIO(text)))
+
+
+def parse_face_area(value) -> float:
+    try:
+        parsed = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if math.isfinite(parsed) and parsed > 0 else 0.0
+
+
+def parse_face_bbox(value) -> tuple[float, float, float, float] | None:
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+        coords = [float(item) for item in parsed]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if len(coords) != 4 or any(not math.isfinite(coord) for coord in coords):
+        return None
+    left, top, right, bottom = coords
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
+
+
+def render_face_thumbnail(image_path: Path, bbox_value) -> bytes | None:
+    if Image is None or ImageOps is None:
+        return None
+    bbox = parse_face_bbox(bbox_value)
+    if bbox is None:
+        return None
+    try:
+        with Image.open(image_path) as opened:
+            image = ImageOps.exif_transpose(opened).convert("RGB")
+            width, height = image.size
+            left, top, right, bottom = bbox
+            if right <= 0 or bottom <= 0 or left >= width or top >= height:
+                return None
+            face_width = right - left
+            face_height = bottom - top
+            side = max(face_width, face_height) * 1.55
+            side_pixels = max(1, int(math.ceil(side)))
+            center_x = (left + right) / 2
+            center_y = (top + bottom) / 2 - face_height * 0.05
+            crop_left = int(math.floor(center_x - side_pixels / 2))
+            crop_top = int(math.floor(center_y - side_pixels / 2))
+            crop_right = crop_left + side_pixels
+            crop_bottom = crop_top + side_pixels
+            if crop_right <= crop_left or crop_bottom <= crop_top:
+                return None
+            image = image.crop((crop_left, crop_top, crop_right, crop_bottom))
+            resampling = getattr(Image, "Resampling", Image).LANCZOS
+            image.thumbnail((512, 512), resampling)
+            output = BytesIO()
+            image.save(output, "JPEG", quality=88, optimize=True)
+            return output.getvalue()
+    except Exception:
+        return None
 
 
 def media_root() -> Path:
@@ -1106,6 +1171,7 @@ def default_settings() -> dict:
         "transcript_engine": settings.get("transcript_engine") or os.environ.get("TRANSCRIPT_ENGINE", settings.get("asr_engine") or os.environ.get("ASR_ENGINE", "auto")),
         "subtitle_max_chars": setting_int("subtitle_max_chars", "SUBTITLE_MAX_CHARS", 24, 8, 80),
         "subtitle_max_seconds": setting_float("subtitle_max_seconds", "SUBTITLE_MAX_SECONDS", 7.0, 1.0, 20.0),
+        "subtitle_min_seconds": setting_float("subtitle_min_seconds", "SUBTITLE_MIN_SECONDS", 0.8, 0.4, 4.0),
         "subtitle_max_gap": setting_float("subtitle_max_gap", "SUBTITLE_MAX_GAP", 0.8, 0.1, 5.0),
         "audio_tag_mode": settings.get("audio_tag_mode") or os.environ.get("AUDIO_TAG_MODE", "sensevoice-sample"),
         "audio_tag_sample_seconds": setting_int("audio_tag_sample_seconds", "AUDIO_TAG_SAMPLE_SECONDS", 30, 0, 3600),
@@ -1214,6 +1280,7 @@ def api_save_settings(req: SettingsRequest) -> dict:
     audio_tag_sample_seconds = clamp_int(req.audio_tag_sample_seconds, 30, 0, 3600)
     subtitle_max_chars = clamp_int(req.subtitle_max_chars, 24, 8, 80)
     subtitle_max_seconds = f"{max(1.0, min(20.0, float(req.subtitle_max_seconds or 7.0))):.2f}"
+    subtitle_min_seconds = f"{max(0.4, min(4.0, float(req.subtitle_min_seconds or 0.8))):.2f}"
     subtitle_max_gap = f"{max(0.1, min(5.0, float(req.subtitle_max_gap or 0.8))):.2f}"
     source_dirs = ",".join(part.strip().strip("/") for part in req.source_dirs.split(",") if part.strip())
     monitor_dirs = ",".join(part.strip().strip("/") for part in req.monitor_dirs.split(",") if part.strip())
@@ -1248,6 +1315,7 @@ def api_save_settings(req: SettingsRequest) -> dict:
         "transcript_engine": transcript_engine,
         "subtitle_max_chars": subtitle_max_chars,
         "subtitle_max_seconds": subtitle_max_seconds,
+        "subtitle_min_seconds": subtitle_min_seconds,
         "subtitle_max_gap": subtitle_max_gap,
         "audio_tag_mode": audio_tag_mode,
         "audio_tag_sample_seconds": audio_tag_sample_seconds,
@@ -1576,9 +1644,9 @@ def api_vision_calibrator_status() -> dict:
     return vision_calibrator_status(output_root())
 
 
-@app.post("/api/vision/calibrator/train")
+@app.post("/api/vision/calibrator/train", status_code=202)
 def api_train_vision_calibrator() -> dict:
-    return train_vision_calibrators(output_root())
+    return enqueue_job("train-vision-calibrator")
 
 
 @app.get("/api/risk")
@@ -1586,22 +1654,14 @@ def api_risk(limit: int = Query(100, ge=1, le=300)) -> dict:
     return risk_queue(limit=limit)
 
 
-def enqueue_rebuild_job(command: str) -> dict:
-    try:
-        job_id = create_job(command)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"ok": True, "queued": True, "id": job_id, "command": command}
-
-
 @app.post("/api/media/rebuild-index", status_code=202)
 def api_rebuild_media_index() -> dict:
-    return enqueue_rebuild_job("index-metadata")
+    return enqueue_job("index-metadata")
 
 
 @app.post("/api/media/rebuild-similarity", status_code=202)
 def api_rebuild_similarity() -> dict:
-    return enqueue_rebuild_job("index-similarity")
+    return enqueue_job("index-similarity")
 
 
 @app.get("/api/media/similarity-groups")
@@ -1611,7 +1671,7 @@ def api_similarity_groups(limit: int = Query(100, ge=1, le=300)) -> dict:
 
 @app.post("/api/media/rebuild-semantic", status_code=202)
 def api_rebuild_semantic() -> dict:
-    return enqueue_rebuild_job("index-semantic")
+    return enqueue_job("index-semantic")
 
 
 @app.get("/api/media/semantic-search")
@@ -2043,19 +2103,33 @@ def api_face_group_thumbnail(face_group: str):
         raise HTTPException(status_code=400, detail="Invalid face group")
     root = output_root()
     groups = root / "_MANIFESTS" / "face_groups.csv"
-    for row in read_csv(groups):
-        if row.get("face_group") != face_group:
-            continue
-        rel_frame = row.get("representative_frame") or row.get("frame_path")
-        if not rel_frame:
-            continue
-        image_path = (root / rel_frame).resolve()
-        try:
-            image_path.relative_to(root.resolve())
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid thumbnail path") from exc
-        if image_path.exists():
-            return FileResponse(image_path, media_type="image/jpeg")
+    members = [row for row in read_csv(groups) if row.get("face_group") == face_group]
+    if members:
+        representative_frame = next(
+            (row.get("representative_frame") for row in members if row.get("representative_frame")),
+            "",
+        )
+        representative_rows = [
+            row for row in members if row.get("frame_path") == representative_frame
+        ]
+        candidates = representative_rows or members
+        row = max(candidates, key=lambda item: parse_face_area(item.get("area")))
+        rel_frame = row.get("frame_path") or representative_frame
+        if rel_frame:
+            image_path = (root / rel_frame).resolve()
+            try:
+                image_path.relative_to(root.resolve())
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid thumbnail path") from exc
+            if image_path.exists():
+                cropped = render_face_thumbnail(image_path, row.get("bbox"))
+                if cropped is not None:
+                    return Response(
+                        content=cropped,
+                        media_type="image/jpeg",
+                        headers={"Cache-Control": "private, max-age=86400"},
+                    )
+                return FileResponse(image_path, media_type="image/jpeg")
     raise HTTPException(status_code=404, detail="Thumbnail not found")
 
 

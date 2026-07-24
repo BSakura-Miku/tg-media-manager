@@ -97,7 +97,20 @@ docker buildx build --platform linux/amd64 \
 docker save tg-media-manager:nas-1.2.0-amd64 -o /tmp/tg-media-manager-1.2.0.tar
 ```
 
-Back up `./data/tg_media_manager.sqlite3` before changing the image. Schema upgrades are additive and idempotent, but a database backup remains the rollback boundary.
+Back up the database before changing the image. Because SQLite runs in WAL
+mode, do not copy only the live `.sqlite3` file. Create an online, checksummed
+backup and verify a temporary restore:
+
+```bash
+python3 scripts/sqlite_backup.py create \
+  --source data/tg_media_manager.sqlite3 \
+  --output-dir data/backups
+```
+
+Keep the generated `.sqlite3` and `.manifest.json` files together. See
+[`docs/backup-recovery.md`](docs/backup-recovery.md) for verification,
+retention, and restore instructions. Schema upgrades are additive and
+idempotent, but a verified database backup remains the rollback boundary.
 
 ## Search And Indexing
 
@@ -114,6 +127,19 @@ Run the local quality gate before deployment:
 ```bash
 make check
 ```
+
+Release builds have a stricter clean-source and exact-tag gate:
+
+```bash
+make release-gate
+make release-build
+```
+
+Use the isolated staging profile and promote the exact image that passed the
+browser route matrix. See
+[`docs/release-process.md`](docs/release-process.md); do not use the normal
+development Compose file as release staging because it mounts the configured
+media library.
 
 ## Vision Builds
 

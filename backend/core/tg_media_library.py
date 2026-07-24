@@ -8,6 +8,7 @@ from pathlib import Path
 import argparse
 import csv
 import hashlib
+import heapq
 import json
 import math
 import os
@@ -1751,6 +1752,7 @@ def face_scan(config: Config, limit: int | None) -> None:
         backend_name, backend = load_face_backend()
     except RuntimeError as exc:
         raise SystemExit(str(exc))
+    embedding_model = face_backend_model_name(backend_name)
     frame_rows = list(dict_rows_from_csv(frame_index))
     total_frames = sum(len([p for p in row.get("frames", "").split("|") if p]) for row in frame_rows)
     total = min(limit or total_frames, total_frames)
@@ -1784,10 +1786,14 @@ def face_scan(config: Config, limit: int | None) -> None:
                     "det_score": "",
                     "embedding": "",
                     "backend": backend_name,
+                    "embedding_model": embedding_model,
+                    "embedding_space": "",
+                    "embedding_hash": "",
                     "error": type(exc).__name__,
                 })
                 continue
             for face in faces:
+                embedding = normalized_face_embedding(face["embedding"])
                 rows_by_frame[frame_key].append({
                     "media_path": frame_row["media_path"],
                     "frame_path": frame_rel,
@@ -1797,6 +1803,13 @@ def face_scan(config: Config, limit: int | None) -> None:
                     "det_score": face["det_score"],
                     "embedding": json.dumps(face["embedding"]),
                     "backend": backend_name,
+                    "embedding_model": embedding_model,
+                    "embedding_space": face_embedding_space_fingerprint(
+                        backend_name,
+                        embedding_model,
+                        len(face["embedding"]),
+                    ),
+                    "embedding_hash": face_embedding_hash(embedding) if embedding else "",
                     "error": "",
                 })
             scanned += 1
@@ -1812,7 +1825,20 @@ def face_scan(config: Config, limit: int | None) -> None:
             break
     tmp = out.with_suffix(".csv.tmp")
     with tmp.open("w", newline="", encoding="utf-8-sig") as handle:
-        fields = ["media_path", "frame_path", "face_index", "bbox", "area", "det_score", "embedding", "backend", "error"]
+        fields = [
+            "media_path",
+            "frame_path",
+            "face_index",
+            "bbox",
+            "area",
+            "det_score",
+            "embedding",
+            "backend",
+            "embedding_model",
+            "embedding_space",
+            "embedding_hash",
+            "error",
+        ]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for key in sorted(rows_by_frame):
@@ -1830,7 +1856,128 @@ def normalize_vector(vec: list[float]) -> list[float]:
 
 
 def vector_distance(a: list[float], b: list[float]) -> float:
+    if not a or len(a) != len(b):
+        return math.inf
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+
+
+def normalized_face_embedding(value) -> list[float] | None:
+    try:
+        vec = [float(x) for x in value]
+    except (TypeError, ValueError):
+        return None
+    if not vec or any(not math.isfinite(x) for x in vec):
+        return None
+    norm = math.sqrt(sum(x * x for x in vec))
+    if not math.isfinite(norm) or norm <= 1e-12:
+        return None
+    return [x / norm for x in vec]
+
+
+def face_embedding_from_row(row: dict) -> list[float] | None:
+    value = row.get("embedding")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return None
+    return normalized_face_embedding(value)
+
+
+def face_embedding_hash(embedding: list[float] | None) -> str:
+    if not embedding:
+        return ""
+    payload = "|".join(float(value).hex() for value in embedding)
+    return hashlib.sha256(payload.encode("ascii")).hexdigest()
+
+
+def face_backend_model_name(backend: str) -> str:
+    backend = (backend or "").strip().lower()
+    if backend == "insightface":
+        return os.environ.get("INSIGHTFACE_MODEL", "buffalo_l").strip() or "buffalo_l"
+    if backend == "face_recognition":
+        return "dlib_resnet_v1"
+    return backend or "unknown"
+
+
+def face_embedding_space_fingerprint(backend: str, model: str, dimension: int) -> str:
+    payload = json.dumps(
+        {
+            "version": 1,
+            "backend": (backend or "unknown").strip().lower(),
+            "model": (model or "unknown").strip().lower(),
+            "dimension": int(dimension),
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "face-space-v1:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def face_embedding_space_key(row: dict, dimension: int) -> tuple[str, ...]:
+    backend = (row.get("backend") or "unknown").strip().lower()
+    fingerprint = (row.get("embedding_space") or "").strip()
+    model = (row.get("embedding_model") or "").strip()
+    if model:
+        derived = face_embedding_space_fingerprint(backend, model, dimension)
+        if fingerprint and fingerprint != derived:
+            return ("fingerprint-mismatch", backend, fingerprint, derived, str(dimension))
+        return (
+            "fingerprinted",
+            backend,
+            derived,
+            str(dimension),
+        )
+    if fingerprint:
+        return ("fingerprinted", backend, fingerprint, str(dimension))
+    # Old face_index.csv files did not record a model fingerprint. Keeping
+    # legacy rows comparable with one another preserves report-only rebuilds,
+    # while never assuming that they share a space with newly scanned rows.
+    return ("legacy", backend, str(dimension))
+
+
+def canonical_face_bbox(value) -> str:
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return ""
+        try:
+            value = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return ""
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return ""
+    coordinates = []
+    for item in value:
+        if isinstance(item, bool):
+            return ""
+        try:
+            number = float(item)
+        except (TypeError, ValueError):
+            return ""
+        if not math.isfinite(number):
+            return ""
+        coordinates.append(format(number, ".12g"))
+    return ",".join(coordinates)
+
+
+def face_identity_token(row: dict, embedding_hash: str) -> tuple[str, str]:
+    face_index = str(row.get("face_index") or "").strip()
+    if face_index:
+        return ("index", face_index)
+    bbox = canonical_face_bbox(row.get("bbox"))
+    if bbox:
+        return ("bbox", bbox)
+    return ("embedding", embedding_hash)
+
+
+def face_area(row: dict) -> float:
+    try:
+        value = float(row.get("area") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if math.isfinite(value) else 0.0
 
 
 def union_face_pairs_vectorized(items: list[dict], parent: list[int], threshold: float, union) -> bool:
@@ -1878,14 +2025,27 @@ def face_cluster(config: Config, threshold: float) -> None:
     if not face_index.exists():
         raise SystemExit("face_index.csv not found. Run face-scan first.")
     items = []
+    seen_faces = set()
     for row in dict_rows_from_csv(face_index):
         if row.get("error") or not row.get("embedding"):
             continue
-        try:
-            emb = [float(x) for x in json.loads(row["embedding"])]
-        except Exception:
+        emb = face_embedding_from_row(row)
+        if emb is None:
             continue
-        items.append({**row, "embedding_vec": normalize_vector(emb)})
+        embedding_hash = face_embedding_hash(emb)
+        face_key = (
+            row.get("media_path", ""),
+            row.get("frame_path", ""),
+            face_identity_token(row, embedding_hash),
+        )
+        if face_key in seen_faces:
+            continue
+        seen_faces.add(face_key)
+        items.append({
+            **row,
+            "embedding_vec": emb,
+            "embedding_space_key": face_embedding_space_key(row, len(emb)),
+        })
     parent = list(range(len(items)))
 
     def find(idx: int) -> int:
@@ -1899,9 +2059,21 @@ def face_cluster(config: Config, threshold: float) -> None:
         if ra != rb:
             parent[rb] = ra
 
-    if not union_face_pairs_vectorized(items, parent, threshold, union):
-        for i in range(len(items)):
-            for j in range(i + 1, len(items)):
+    spaces: dict[tuple[str, ...], list[int]] = defaultdict(list)
+    for idx, item in enumerate(items):
+        spaces[item["embedding_space_key"]].append(idx)
+    for indices in spaces.values():
+        subset = [items[idx] for idx in indices]
+        vectorized = union_face_pairs_vectorized(
+            subset,
+            list(range(len(subset))),
+            threshold,
+            lambda a, b: union(indices[a], indices[b]),
+        )
+        if vectorized:
+            continue
+        for local_i, i in enumerate(indices):
+            for j in indices[local_i + 1:]:
                 if vector_distance(items[i]["embedding_vec"], items[j]["embedding_vec"]) <= threshold:
                     union(i, j)
     buckets: dict[int, list[dict]] = defaultdict(list)
@@ -1912,7 +2084,7 @@ def face_cluster(config: Config, threshold: float) -> None:
     for idx, group in enumerate(groups, start=1):
         gid = f"FaceGroup_{idx:06d}"
         media = sorted({g["media_path"] for g in group})
-        representative = max(group, key=lambda g: int(float(g.get("area") or 0)))
+        representative = max(group, key=face_area)
         for g in group:
             rows.append({
                 "face_group": gid,
@@ -1932,6 +2104,22 @@ def face_cluster(config: Config, threshold: float) -> None:
         writer.writeheader()
         writer.writerows(rows)
     print(f"face_groups {len(groups)} groups {len(rows)} rows")
+
+
+def refresh_face_group_metadata(rows: list[dict]) -> list[dict]:
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        group = row.get("face_group", "")
+        if group:
+            groups[group].append(row)
+    for group_rows in groups.values():
+        representative = max(group_rows, key=face_area)
+        media_count = len({row.get("media_path", "") for row in group_rows if row.get("media_path")})
+        for row in group_rows:
+            row["representative_frame"] = representative.get("frame_path", "")
+            row["group_face_count"] = len(group_rows)
+            row["group_media_count"] = media_count
+    return rows
 
 
 def read_face_aliases(config: Config) -> dict[str, str]:
@@ -2024,6 +2212,7 @@ def merge_face_groups(config: Config, source_group: str, target_group: str) -> N
     for row in rows:
         if row.get("face_group") == source_group:
             row["face_group"] = target_group
+    rows = refresh_face_group_metadata(rows)
     with groups_path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=["face_group", "media_path", "frame_path", "bbox", "area", "det_score", "representative_frame", "group_face_count", "group_media_count"])
         writer.writeheader()
@@ -2095,6 +2284,7 @@ def merge_named_face_groups(config: Config, actor_name: str | None = None) -> No
         group = row.get("face_group", "")
         if group in remap:
             row["face_group"] = remap[group]
+    group_rows = refresh_face_group_metadata(group_rows)
     with groups_path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=["face_group", "media_path", "frame_path", "bbox", "area", "det_score", "representative_frame", "group_face_count", "group_media_count"])
         writer.writeheader()
@@ -2227,56 +2417,270 @@ def face_cluster_report(config: Config) -> None:
     print(json.dumps({"groups": len(rows), "top": rows[:10]}, ensure_ascii=False))
 
 
+def offer_face_merge_pair(
+    heap: list[tuple],
+    left_index: int,
+    right_index: int,
+    distance: float,
+    limit: int,
+) -> None:
+    if limit <= 0 or not math.isfinite(distance):
+        return
+    item = (
+        -distance,
+        -left_index,
+        -right_index,
+        distance,
+        left_index,
+        right_index,
+    )
+    if len(heap) < limit:
+        heapq.heappush(heap, item)
+        return
+    worst_key = (-heap[0][0], -heap[0][1], -heap[0][2])
+    if (distance, left_index, right_index) < worst_key:
+        heapq.heapreplace(heap, item)
+
+
+def scalar_face_merge_pairs(
+    records: list[dict],
+    indices: list[int],
+    threshold: float,
+    limit: int,
+    block_size: int,
+    heap: list[tuple],
+) -> None:
+    total = len(indices)
+    for start in range(0, total, block_size):
+        end = min(total, start + block_size)
+        for local_i in range(start, end):
+            left_index = indices[local_i]
+            left_vec = records[left_index]["_embedding_vec"]
+            for local_j in range(local_i + 1, total):
+                right_index = indices[local_j]
+                distance = vector_distance(left_vec, records[right_index]["_embedding_vec"])
+                if distance <= threshold + 1e-12:
+                    offer_face_merge_pair(heap, left_index, right_index, distance, limit)
+
+
+def stable_numpy_top_indices(distances, limit: int, np_module) -> list[int]:
+    flat = distances.reshape(-1)
+    finite_count = int(np_module.count_nonzero(np_module.isfinite(flat)))
+    take = min(limit, finite_count)
+    if take <= 0:
+        return []
+    if finite_count <= take:
+        return np_module.flatnonzero(np_module.isfinite(flat)).tolist()
+    kth_value = float(np_module.partition(flat, take - 1)[take - 1])
+    selected = np_module.flatnonzero(flat < kth_value).tolist()
+    remaining = take - len(selected)
+    if remaining <= 0:
+        return selected[:take]
+    width = int(distances.shape[1])
+    for row_index in range(int(distances.shape[0])):
+        equal_columns = np_module.flatnonzero(distances[row_index] == kth_value)
+        if not equal_columns.size:
+            continue
+        chosen = equal_columns[:remaining]
+        selected.extend((row_index * width + int(column)) for column in chosen.tolist())
+        remaining -= int(chosen.size)
+        if remaining <= 0:
+            break
+    return selected
+
+
+def numpy_face_merge_pairs(
+    records: list[dict],
+    indices: list[int],
+    threshold: float,
+    limit: int,
+    block_size: int,
+    heap: list[tuple],
+    np_module,
+) -> bool:
+    if len(indices) < 2:
+        return True
+    try:
+        vectors = np_module.asarray(
+            [records[index]["_embedding_vec"] for index in indices],
+            dtype=np_module.float64,
+        )
+    except Exception:
+        return False
+    if vectors.ndim != 2 or vectors.shape[0] != len(indices):
+        return False
+    threshold_squared = threshold * threshold
+    total = len(indices)
+    for start in range(0, total, block_size):
+        end = min(total, start + block_size)
+        right_vectors = vectors[start:]
+        distances = vectors[start:end] @ right_vectors.T
+        distances *= -2.0
+        distances += 2.0
+        np_module.maximum(distances, 0.0, out=distances)
+        for local_row in range(end - start):
+            distances[local_row, :local_row + 1] = np_module.inf
+        distances[distances > threshold_squared + 1e-12] = np_module.inf
+        selected = stable_numpy_top_indices(distances, limit, np_module)
+        width = int(distances.shape[1])
+        for flat_index in selected:
+            local_i, local_j = divmod(int(flat_index), width)
+            left_local_index = start + local_i
+            right_local_index = start + local_j
+            left_index = indices[left_local_index]
+            right_index = indices[right_local_index]
+            distance = vector_distance(
+                records[left_index]["_embedding_vec"],
+                records[right_index]["_embedding_vec"],
+            )
+            if distance <= threshold + 1e-12:
+                offer_face_merge_pair(heap, left_index, right_index, distance, limit)
+    return True
+
+
+def top_face_merge_pairs(
+    records: list[dict],
+    threshold: float = 0.95,
+    limit: int = 300,
+    block_size: int | None = None,
+) -> list[tuple[float, dict, dict]]:
+    if limit <= 0 or len(records) < 2:
+        return []
+    if block_size is None:
+        try:
+            block_size = int(os.environ.get("FACE_MERGE_BLOCK_SIZE", "256") or 256)
+        except ValueError:
+            block_size = 256
+    block_size = max(16, min(2048, int(block_size)))
+    spaces: dict[tuple[str, ...], list[int]] = defaultdict(list)
+    for index, record in enumerate(records):
+        spaces[record["_embedding_space_key"]].append(index)
+    try:
+        import numpy as np
+    except Exception:
+        np = None
+    heap: list[tuple] = []
+    for indices in spaces.values():
+        if len(indices) < 2:
+            continue
+        used_numpy = bool(np) and numpy_face_merge_pairs(
+            records,
+            indices,
+            threshold,
+            limit,
+            block_size,
+            heap,
+            np,
+        )
+        if not used_numpy:
+            scalar_face_merge_pairs(records, indices, threshold, limit, block_size, heap)
+    pairs = [
+        (item[3], records[item[4]], records[item[5]])
+        for item in heap
+    ]
+    pairs.sort(key=lambda item: (item[0], item[1]["_group"], item[2]["_group"]))
+    return pairs
+
+
 def write_face_merge_suggestions(config: Config, limit: int = 300) -> None:
     groups_path = config.manifests / "face_groups.csv"
     if not groups_path.exists():
         return
-    representatives = {}
+    group_members: dict[str, list[dict]] = defaultdict(list)
     for row in dict_rows_from_csv(groups_path):
         group = row.get("face_group", "")
-        if not group or group in representatives or not row.get("representative_frame"):
-            continue
-        representatives[group] = row
-    face_index = {}
-    face_index_by_frame = {}
+        if group:
+            group_members[group].append(row)
+    representatives = {}
+    for group, members in group_members.items():
+        representatives[group] = max(members, key=face_area)
+
+    face_index: dict[tuple[str, str, str], dict | None] = {}
+    faces_by_media_frame: dict[tuple[str, str], dict[tuple[str, str], dict | None]] = defaultdict(dict)
     index_path = config.manifests / "face_index.csv"
     if index_path.exists():
         for row in dict_rows_from_csv(index_path):
-            if row.get("embedding"):
-                face_index[(row.get("media_path", ""), row.get("frame_path", ""))] = row
-                face_index_by_frame.setdefault(row.get("frame_path", ""), row)
-    rows = []
-    keys = sorted(representatives)
-    for i, left in enumerate(keys):
-        left_row = representatives[left]
-        left_idx = face_index.get((left_row.get("media_path", ""), left_row.get("representative_frame", ""))) or face_index_by_frame.get(left_row.get("representative_frame", ""))
-        if not left_idx:
-            continue
-        left_vec = normalize_vector([float(x) for x in json.loads(left_idx["embedding"])])
-        for right in keys[i + 1:]:
-            right_row = representatives[right]
-            right_idx = face_index.get((right_row.get("media_path", ""), right_row.get("representative_frame", ""))) or face_index_by_frame.get(right_row.get("representative_frame", ""))
-            if not right_idx:
+            embedding = face_embedding_from_row(row)
+            if embedding is None:
                 continue
-            right_vec = normalize_vector([float(x) for x in json.loads(right_idx["embedding"])])
-            dist = vector_distance(left_vec, right_vec)
-            if dist <= 0.95:
-                rows.append({
-                    "left_group": left,
-                    "right_group": right,
-                    "distance": f"{dist:.6f}",
-                    "left_media": left_row.get("media_path", ""),
-                    "right_media": right_row.get("media_path", ""),
-                    "left_frame": left_row.get("representative_frame", ""),
-                    "right_frame": right_row.get("representative_frame", ""),
-                })
-    rows.sort(key=lambda row: float(row["distance"]))
+            embedding_hash = face_embedding_hash(embedding)
+            record = {
+                **row,
+                "_embedding_vec": embedding,
+                "_embedding_hash": embedding_hash,
+                "_embedding_space_key": face_embedding_space_key(row, len(embedding)),
+            }
+            media_frame = (row.get("media_path", ""), row.get("frame_path", ""))
+            bbox = canonical_face_bbox(row.get("bbox"))
+            identity = face_identity_token(row, embedding_hash)
+            bucket = faces_by_media_frame[media_frame]
+            if identity not in bucket:
+                bucket[identity] = record
+            else:
+                existing = bucket[identity]
+                if existing and (
+                    existing["_embedding_hash"] != embedding_hash
+                    or existing["_embedding_space_key"] != record["_embedding_space_key"]
+                ):
+                    bucket[identity] = None
+            if bbox:
+                exact_key = (media_frame[0], media_frame[1], bbox)
+                if exact_key not in face_index:
+                    face_index[exact_key] = record
+                else:
+                    existing = face_index[exact_key]
+                    if existing and (
+                        existing["_embedding_hash"] != embedding_hash
+                        or existing["_embedding_space_key"] != record["_embedding_space_key"]
+                    ):
+                        face_index[exact_key] = None
+
+    def representative_index(row: dict) -> dict | None:
+        media_frame = (row.get("media_path", ""), row.get("frame_path", ""))
+        bbox = canonical_face_bbox(row.get("bbox"))
+        if bbox:
+            exact_key = (media_frame[0], media_frame[1], bbox)
+            if exact_key in face_index:
+                return face_index[exact_key]
+        candidates = [
+            candidate
+            for candidate in faces_by_media_frame.get(media_frame, {}).values()
+            if candidate is not None
+        ]
+        return candidates[0] if len(candidates) == 1 else None
+
+    records = []
+    keys = sorted(representatives)
+    for group in keys:
+        group_row = representatives[group]
+        index_row = representative_index(group_row)
+        if not index_row:
+            continue
+        records.append({
+            "_group": group,
+            "_group_row": group_row,
+            "_embedding_vec": index_row["_embedding_vec"],
+            "_embedding_space_key": index_row["_embedding_space_key"],
+        })
+    rows = []
+    for distance, left_record, right_record in top_face_merge_pairs(records, threshold=0.95, limit=limit):
+        left_row = left_record["_group_row"]
+        right_row = right_record["_group_row"]
+        rows.append({
+            "left_group": left_record["_group"],
+            "right_group": right_record["_group"],
+            "distance": f"{distance:.6f}",
+            "left_media": left_row.get("media_path", ""),
+            "right_media": right_row.get("media_path", ""),
+            "left_frame": left_row.get("frame_path", ""),
+            "right_frame": right_row.get("frame_path", ""),
+        })
     out = config.manifests / "face_merge_suggestions.csv"
     with out.open("w", newline="", encoding="utf-8-sig") as handle:
         fields = ["left_group", "right_group", "distance", "left_media", "right_media", "left_frame", "right_frame"]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
-        writer.writerows(rows[:limit])
+        writer.writerows(rows)
 
 
 def apply_vision_labels(config: Config, min_score: float, apply: bool) -> None:

@@ -1,0 +1,59 @@
+services:
+  tg-media-manager-staging:
+    image: ${TGMM_STAGING_IMAGE:?Set TGMM_STAGING_IMAGE to the already-built release candidate}
+    pull_policy: never
+    platform: linux/amd64
+    init: true
+    restart: "no"
+    stop_grace_period: 2m
+    user: "${STAGING_PUID:-0}:${STAGING_PGID:-0}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: ${STAGING_PIDS_LIMIT:-512}
+    mem_limit: ${STAGING_MEMORY_LIMIT:-8g}
+    cpus: ${STAGING_CPU_LIMIT:-4}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "127.0.0.1:${STAGING_PORT:-18787}:8787"
+    environment:
+      TZ: Asia/Shanghai
+      MEDIA_ROOT: /media
+      MEDIA_OUTPUT_ROOT: /media
+      BROWSE_ROOTS: /media
+      APP_DB: /data/tg_media_manager.sqlite3
+      MODEL_ROOT: /models
+      WHISPER_MODEL_ROOT: /models/whisper
+      HF_HOME: /models/huggingface
+      TORCH_HOME: /models/torch
+      XDG_CACHE_HOME: /models/cache
+      INSIGHTFACE_HOME: /models/insightface
+      APP_PASSWORD: ${STAGING_APP_PASSWORD:?Set an isolated staging password}
+      APP_SECRET: ${STAGING_APP_SECRET:?Set an isolated staging session secret}
+      APP_LOCAL_ONLY: "true"
+      APP_COOKIE_SECURE: "false"
+      COMPUTE_DEVICE: cpu
+      FFMPEG_HWACCEL: none
+      FACE_PROVIDERS: CPUExecutionProvider
+      OPENVINO_DEVICE: CPU
+      TRANSCRIPT_ENGINE: ${TRANSCRIPT_ENGINE:-stable-faster-whisper}
+      WHISPER_MODEL: ${WHISPER_MODEL:-medium}
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+    volumes:
+      - ${STAGING_MEDIA_DIR:-./.local/staging/media}:/media
+      - ${STAGING_DATA_DIR:-./.local/staging/data}:/data
+      - ${STAGING_MODELS_DIR:-./.local/staging/models}:/models
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s

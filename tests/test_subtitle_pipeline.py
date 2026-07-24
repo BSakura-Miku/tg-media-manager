@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend.app import metadata
-from backend.app.subtitles import contains_translation, normalize_language_code, regroup_word_segments
+from backend.app.subtitles import (
+    contains_translation,
+    normalize_language_code,
+    regroup_word_segments,
+    subtitle_quality_report,
+)
 
 
 class SubtitleGroupingTests(unittest.TestCase):
@@ -41,13 +48,109 @@ class SubtitleGroupingTests(unittest.TestCase):
             offset_seconds=1.5,
         )
         self.assertEqual(cues[0]["start"], 1.7)
-        self.assertEqual(cues[0]["end"], 2.3)
+        self.assertEqual(cues[0]["end"], 2.5)
         self.assertEqual(cues[0]["words"][0]["start"], 1.7)
+        self.assertEqual(cues[0]["words"][0]["end"], 2.3)
+
+    def test_short_cue_receives_reading_time_without_overlapping_next_cue(self) -> None:
+        cues = regroup_word_segments(
+            [
+                {"words": [{"start": 0.0, "end": 0.2, "word": "你好", "probability": 0.9}]},
+                {"words": [{"start": 0.9, "end": 1.2, "word": "世界", "probability": 0.8}]},
+            ],
+            "Chinese",
+            max_gap=0.5,
+            min_seconds=0.8,
+        )
+        self.assertEqual(len(cues), 2)
+        self.assertEqual(cues[0]["end"], 0.8)
+        self.assertAlmostEqual(cues[1]["end"] - cues[1]["start"], 0.8)
+        self.assertEqual(cues[0]["confidence"], 0.9)
+
+    def test_quality_report_flags_overlap_repetition_and_low_confidence(self) -> None:
+        report = subtitle_quality_report(
+            [
+                {
+                    "start": 0.0,
+                    "end": 0.2,
+                    "text": "重复重复重复",
+                    "words": [{"word": "重复重复重复", "probability": 0.2}],
+                },
+                {
+                    "start": 0.1,
+                    "end": 0.3,
+                    "text": "重复重复重复",
+                    "words": [{"word": "重复重复重复", "probability": 0.3}],
+                },
+            ],
+            "zh",
+        )
+        self.assertEqual(report["overlap_count"], 1)
+        self.assertEqual(report["repeated_cue_count"], 1)
+        self.assertIn("reading-speed", report["warnings"])
+        self.assertIn("low-confidence", report["warnings"])
 
     def test_bilingual_file_is_only_needed_for_real_translation(self) -> None:
         self.assertFalse(contains_translation([{"text": "你好"}]))
         self.assertFalse(contains_translation([{"text": "你好", "translation_zh": "你好"}]))
         self.assertTrue(contains_translation([{"text": "hello", "translation_zh": "你好"}]))
+
+    def test_atomic_subtitle_write_preserves_existing_file_on_replace_failure(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "1.vtt"
+            path.write_text("old", encoding="utf-8")
+            with patch.object(metadata.os, "replace", side_effect=OSError("disk unavailable")):
+                with self.assertRaises(OSError):
+                    metadata.atomic_write_text(path, "new")
+            self.assertEqual(path.read_text(encoding="utf-8"), "old")
+            self.assertEqual(list(path.parent.glob(".1.vtt.*.tmp")), [])
+
+    def test_save_transcript_rolls_back_database_when_subtitle_write_fails(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE media_items (id INTEGER PRIMARY KEY, root TEXT NOT NULL DEFAULT '');
+            CREATE TABLE media_transcripts (
+                media_id INTEGER PRIMARY KEY,
+                language TEXT NOT NULL DEFAULT '',
+                text TEXT NOT NULL DEFAULT '',
+                segments_json TEXT NOT NULL DEFAULT '[]',
+                model TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                quality_json TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE media_tags (
+                media_id INTEGER NOT NULL,
+                tag TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '',
+                confidence REAL NOT NULL DEFAULT 1.0,
+                source TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL DEFAULT 'confirmed',
+                PRIMARY KEY (media_id, tag, source)
+            );
+            CREATE TABLE media_operations (
+                id INTEGER PRIMARY KEY,
+                media_id INTEGER,
+                operation TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT ''
+            );
+            INSERT INTO media_items (id, root) VALUES (1, '');
+            """
+        )
+        result = {
+            "text": "hello",
+            "language": "en",
+            "engine": "stable-faster-whisper",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
+        }
+        with patch.object(metadata, "write_subtitle_files", side_effect=OSError("disk unavailable")):
+            with self.assertRaises(OSError):
+                metadata.save_transcript(conn, 1, result, "small", include_text_tags=False)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM media_transcripts").fetchone()[0], 0)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM media_operations").fetchone()[0], 0)
+        conn.close()
 
 
 class WhisperAdapterTests(unittest.TestCase):
@@ -98,6 +201,10 @@ class WhisperAdapterTests(unittest.TestCase):
         self.assertEqual(model.options["beam_size"], 5)
         self.assertTrue(model.options["word_timestamps"])
         self.assertFalse(model.options["regroup"])
+        self.assertEqual(model.options["vad_parameters"]["threshold"], 0.5)
+        self.assertEqual(model.options["vad_parameters"]["min_silence_duration_ms"], 500)
+        self.assertEqual(model.options["no_speech_threshold"], 0.6)
+        self.assertEqual(model.options["compression_ratio_threshold"], 2.4)
 
     def test_plain_adapter_also_requests_word_timestamps(self) -> None:
         segment = SimpleNamespace(

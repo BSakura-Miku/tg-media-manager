@@ -1,12 +1,13 @@
 {
   "name": "tg-media-manager-frontend",
-  "version": "1.4.0",
+  "version": "1.5.6",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.0.2",
@@ -15,5 +16,8 @@
     "react-dom": "19.2.7",
     "typescript": "6.0.3",
     "vite": "8.0.16"
+  },
+  "devDependencies": {
+    "vitest": "4.1.10"
   }
 }

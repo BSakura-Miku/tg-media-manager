@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -150,6 +151,87 @@ class SemanticBackendTests(TemporaryDatabaseTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual((row["kind"], row["model"], row["dim"]), ("text", "local-hash-128", 128))
 
+    def test_semantic_rebuild_removes_stale_optional_embeddings(self) -> None:
+        root = self.base / "semantic-reconcile"
+        root.mkdir()
+        video = root / "plain.mp4"
+        video.write_bytes(b"video")
+        media_id = self.insert_media(root, video, "video")
+        vector = metadata.pack_vector([1.0])
+        with db.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO media_embeddings (media_id, kind, model, dim, vector, text)
+                VALUES (?, ?, 'stale', 1, ?, 'stale')
+                """,
+                [
+                    (media_id, "tag", vector),
+                    (media_id, "subtitle", vector),
+                    (media_id, "image", vector),
+                ],
+            )
+        with patch.object(metadata, "bge_text_vector", return_value=[]), patch.object(
+            metadata, "_load_bge_backend", return_value=None
+        ):
+            result = metadata.rebuild_semantic_index(root)
+        with db.connect() as conn:
+            kinds = {
+                row["kind"]
+                for row in conn.execute(
+                    "SELECT kind FROM media_embeddings WHERE media_id=?",
+                    (media_id,),
+                )
+            }
+        self.assertTrue(result["ok"])
+        self.assertNotIn("tag", kinds)
+        self.assertNotIn("subtitle", kinds)
+        self.assertNotIn("image", kinds)
+
+    def test_semantic_rebuild_replaces_stale_models_for_present_content(self) -> None:
+        root = self.base / "semantic-model-reconcile"
+        root.mkdir()
+        video = root / "tagged.mp4"
+        video.write_bytes(b"video")
+        media_id = self.insert_media(root, video, "video")
+        vector = metadata.pack_vector([1.0])
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT INTO media_tags (media_id, tag, category, source) VALUES (?, 'outdoor', 'scene', 'manual')",
+                (media_id,),
+            )
+            conn.execute(
+                "INSERT INTO media_transcripts (media_id, text) VALUES (?, 'hello world')",
+                (media_id,),
+            )
+            conn.executemany(
+                """
+                INSERT INTO media_embeddings (media_id, kind, model, dim, vector, text)
+                VALUES (?, ?, 'old-model', 1, ?, 'stale')
+                """,
+                [
+                    (media_id, "tag", vector),
+                    (media_id, "subtitle", vector),
+                ],
+            )
+        with patch.object(metadata, "bge_text_vector", return_value=[]), patch.object(
+            metadata, "_load_bge_backend", return_value=None
+        ):
+            metadata.rebuild_semantic_index(root, mode="text")
+        with db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT kind, model
+                FROM media_embeddings
+                WHERE media_id=? AND kind IN ('tag', 'subtitle')
+                ORDER BY kind, model
+                """,
+                (media_id,),
+            ).fetchall()
+        self.assertEqual(
+            [(row["kind"], row["model"]) for row in rows],
+            [("subtitle", "local-hash-128"), ("tag", "local-hash-128")],
+        )
+
 
 class MetadataIndexTests(TemporaryDatabaseTestCase):
     def test_rebuild_cleanup_is_scoped_to_requested_root(self) -> None:
@@ -192,6 +274,44 @@ class MetadataIndexTests(TemporaryDatabaseTestCase):
         self.assertEqual(dict(tag), {"tag": "FaceGroup_000001", "category": "face_group", "source": "face-cluster"})
         self.assertEqual(diagnostics["media"]["face_group_rows"], 1)
         self.assertEqual(diagnostics["media"]["faces"], 1)
+
+    def test_diagnostics_do_not_mix_counts_between_media_roots(self) -> None:
+        root_a = self.base / "diagnostics-a"
+        root_b = self.base / "diagnostics-b"
+        root_a.mkdir()
+        root_b.mkdir()
+        video_a = root_a / "a.mp4"
+        video_b = root_b / "b.mp4"
+        video_a.write_bytes(b"a")
+        video_b.write_bytes(b"b")
+        self.insert_media(root_a, video_a, "video")
+        media_b = self.insert_media(root_b, video_b, "video")
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT INTO media_tags (media_id, tag, category, source) VALUES (?, 'outdoor', 'vision', 'vision')",
+                (media_b,),
+            )
+            conn.execute(
+                "INSERT INTO media_transcripts (media_id, text, segments_json) VALUES (?, 'hello', ?)",
+                (media_b, json.dumps([{"start": 1, "end": 2, "text": "hello"}])),
+            )
+            conn.execute(
+                "INSERT INTO media_embeddings (media_id, kind, model, dim, vector) VALUES (?, 'subtitle', 'test', 1, ?)",
+                (media_b, metadata.pack_vector([1.0])),
+            )
+            conn.execute(
+                "INSERT INTO media_metadata (media_id, probe_status) VALUES (?, 'ok')",
+                (media_b,),
+            )
+
+        diagnostics = metadata.media_index_diagnostics(root_a)
+        coverage = {item["id"]: item["ready"] for item in diagnostics["coverage"]}
+        self.assertEqual(diagnostics["media"]["timed_transcripts"], 0)
+        self.assertEqual(diagnostics["media"]["vision_labels"], 0)
+        self.assertEqual(diagnostics["media"]["metadata_rows"], 0)
+        self.assertEqual(coverage["tags"], 0)
+        self.assertEqual(coverage["transcripts"], 0)
+        self.assertEqual(coverage["subtitle_vectors"], 0)
 
     def test_incremental_hash_backfill_writes_full_and_short_hash(self) -> None:
         root = self.base / "hashes"
@@ -326,6 +446,237 @@ class TranscriptSelectionTests(TemporaryDatabaseTestCase):
         self.assertFalse(metadata.transcript_needs_timed_rerun('[{"start": 0, "end": 1, "text": "x"}]'))
         self.assertFalse(metadata.transcript_needs_timed_rerun('[]', '', 'faster-whisper'))
 
+    def test_failed_transcription_is_deferred_and_new_fingerprint_can_retry(self) -> None:
+        root = self.base / "retry-videos"
+        root.mkdir()
+        video = root / "retry.mp4"
+        video.write_bytes(b"video")
+        media_id = self.insert_media(root, video, "video")
+        row = metadata.transcription_candidates(root)[0]
+        fingerprint = row["transcription_fingerprint"]
+        with db.connect() as conn:
+            metadata.record_transcription_started(conn, media_id, fingerprint, "stable-faster-whisper", "medium")
+            metadata.record_transcription_failure(conn, media_id, fingerprint, "temporary failure")
+
+        self.assertEqual(metadata.transcription_candidates(root), [])
+        with db.connect() as conn:
+            state = conn.execute(
+                "SELECT status, attempt_count, next_retry_at FROM media_transcription_state WHERE media_id=?",
+                (media_id,),
+            ).fetchone()
+            conn.execute(
+                "UPDATE media_transcription_state SET next_retry_at=0 WHERE media_id=?",
+                (media_id,),
+            )
+        self.assertEqual(state["status"], "retry")
+        self.assertEqual(state["attempt_count"], 1)
+        self.assertGreater(state["next_retry_at"], 0)
+        self.assertEqual([item["id"] for item in metadata.transcription_candidates(root)], [media_id])
+
+        with db.connect() as conn:
+            metadata.record_transcription_started(conn, media_id, fingerprint, "stable-faster-whisper", "medium")
+            metadata.record_transcription_failure(conn, media_id, fingerprint, "no audio", permanent=True)
+        self.assertEqual(metadata.transcription_candidates(root), [])
+        with patch.dict(os.environ, {"WHISPER_MODEL": "large-v3-turbo"}, clear=False):
+            self.assertEqual([item["id"] for item in metadata.transcription_candidates(root)], [media_id])
+
+    def test_successful_transcript_is_reselected_after_fingerprint_change(self) -> None:
+        root = self.base / "fingerprint-success"
+        root.mkdir()
+        video = root / "success.mp4"
+        video.write_bytes(b"video")
+        media_id = self.insert_media(root, video, "video")
+        with db.connect() as conn:
+            media = dict(conn.execute("SELECT * FROM media_items WHERE id=?", (media_id,)).fetchone())
+            conn.execute(
+                "INSERT INTO media_transcripts (media_id, text, segments_json, source) VALUES (?, 'hello', ?, 'stable-faster-whisper')",
+                (media_id, json.dumps([{"start": 1, "end": 2, "text": "hello"}])),
+            )
+            with patch.dict(os.environ, {"WHISPER_MODEL": "medium"}, clear=False):
+                fingerprint = metadata.transcription_fingerprint(media)
+            metadata.record_transcription_started(
+                conn,
+                media_id,
+                fingerprint,
+                "stable-faster-whisper",
+                "medium",
+            )
+            metadata.record_transcription_succeeded(conn, media_id, fingerprint)
+
+        with patch.dict(os.environ, {"WHISPER_MODEL": "medium"}, clear=False):
+            self.assertEqual(metadata.transcription_candidates(root), [])
+        with patch.dict(os.environ, {"WHISPER_MODEL": "large-v3-turbo"}, clear=False):
+            self.assertEqual(
+                [item["id"] for item in metadata.transcription_candidates(root)],
+                [media_id],
+            )
+
+    def test_fingerprint_includes_audio_truncation_and_timed_subtitle_mode(self) -> None:
+        row = {
+            "path": "/media/sample.mp4",
+            "size_bytes": 100,
+            "mtime": 123,
+            "sha256": "",
+        }
+        with patch.dict(
+            os.environ,
+            {"TRANSCRIBE_MAX_SECONDS": "30", "GENERATE_TIMED_SUBTITLES": "false"},
+            clear=False,
+        ):
+            preview = metadata.transcription_fingerprint(row)
+        with patch.dict(
+            os.environ,
+            {"TRANSCRIBE_MAX_SECONDS": "0", "GENERATE_TIMED_SUBTITLES": "true"},
+            clear=False,
+        ):
+            full = metadata.transcription_fingerprint(row)
+        self.assertNotEqual(preview, full)
+
+    def test_fingerprint_normalizes_equivalent_configuration_values(self) -> None:
+        row = {
+            "path": "/media/sample.mp4",
+            "size_bytes": 100,
+            "mtime": 123,
+            "sha256": "",
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "TRANSCRIPT_ENGINE": "stable-ts",
+                "WHISPER_BEAM_SIZE": "05",
+                "WHISPER_STABLE_TIMESTAMPS": "1",
+                "SUBTITLE_MAX_SECONDS": "7",
+            },
+            clear=False,
+        ):
+            first = metadata.transcription_fingerprint(row)
+        with patch.dict(
+            os.environ,
+            {
+                "TRANSCRIPT_ENGINE": "stable-faster-whisper",
+                "WHISPER_BEAM_SIZE": "5",
+                "WHISPER_STABLE_TIMESTAMPS": "true",
+                "SUBTITLE_MAX_SECONDS": "7.00",
+            },
+            clear=False,
+        ):
+            second = metadata.transcription_fingerprint(row)
+        self.assertEqual(first, second)
+
+    def test_explicit_whisper_load_failure_records_retry_backoff(self) -> None:
+        root = self.base / "model-load-failure"
+        root.mkdir()
+        video = root / "sample.mp4"
+        video.write_bytes(b"video")
+        media_id = self.insert_media(root, video, "video")
+        with patch.dict(
+            os.environ,
+            {"TRANSCRIPT_ENGINE": "stable-faster-whisper", "WHISPER_MODEL": "medium"},
+            clear=False,
+        ), patch.object(
+            metadata,
+            "load_faster_whisper_model",
+            side_effect=RuntimeError("runtime missing"),
+        ), patch.object(
+            metadata,
+            "sensevoice_command",
+            return_value=None,
+        ), patch.object(
+            metadata,
+            "funasr_nano_command",
+            return_value=None,
+        ):
+            result = metadata.transcribe_videos(root, limit=1)
+
+        with db.connect() as conn:
+            state = conn.execute(
+                """
+                SELECT status, attempt_count, last_error, next_retry_at
+                FROM media_transcription_state
+                WHERE media_id=?
+                """,
+                (media_id,),
+            ).fetchone()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(state["status"], "retry")
+        self.assertEqual(state["attempt_count"], 1)
+        self.assertIn("runtime missing", state["last_error"])
+        self.assertGreater(state["next_retry_at"], int(time.time()))
+
+    def test_text_without_timestamps_is_saved_and_deferred(self) -> None:
+        root = self.base / "untimed-result"
+        root.mkdir()
+        video = root / "sample.mp4"
+        video.write_bytes(b"video")
+        media_id = self.insert_media(root, video, "video")
+        untimed_result = {
+            "ok": True,
+            "text": "recognized text",
+            "tag_text": "recognized text",
+            "language": "en",
+            "segments": [{"start": 0, "end": 0, "text": "recognized text"}],
+            "engine": "funasr-nano-onnx",
+            "model": "/models/funasr-nano",
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "TRANSCRIPT_ENGINE": "funasr-nano-onnx",
+                "GENERATE_TIMED_SUBTITLES": "true",
+            },
+            clear=False,
+        ), patch.object(
+            metadata,
+            "funasr_nano_command",
+            return_value=["funasr"],
+        ), patch.object(
+            metadata,
+            "sensevoice_command",
+            return_value=None,
+        ), patch.object(
+            metadata,
+            "extract_audio_wav",
+            return_value=(True, ""),
+        ), patch.object(
+            metadata,
+            "audio_stream_start_offset",
+            return_value=0.0,
+        ), patch.object(
+            metadata,
+            "transcribe_with_funasr_nano_onnx",
+            return_value=untimed_result,
+        ), patch.object(
+            metadata,
+            "load_faster_whisper_model",
+            side_effect=RuntimeError("timing fallback unavailable"),
+        ):
+            result = metadata.transcribe_videos(root, limit=1)
+            deferred_candidates = metadata.transcription_candidates(root)
+
+        with db.connect() as conn:
+            state = conn.execute(
+                """
+                SELECT status, engine, model, last_error, next_retry_at
+                FROM media_transcription_state
+                WHERE media_id=?
+                """,
+                (media_id,),
+            ).fetchone()
+            transcript = conn.execute(
+                "SELECT text FROM media_transcripts WHERE media_id=?",
+                (media_id,),
+            ).fetchone()
+        self.assertEqual(transcript["text"], "recognized text")
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(state["status"], "retry")
+        self.assertEqual(state["engine"], "funasr-nano-onnx")
+        self.assertEqual(state["model"], "/models/funasr-nano")
+        self.assertIn("no usable timestamps", state["last_error"])
+        self.assertGreater(state["next_retry_at"], int(time.time()))
+        self.assertEqual(deferred_candidates, [])
+
 
 class SchemaMigrationTests(unittest.TestCase):
     def test_old_tables_receive_idempotent_columns_and_schema_version(self) -> None:
@@ -336,6 +687,7 @@ class SchemaMigrationTests(unittest.TestCase):
                 """
                 CREATE TABLE jobs (id INTEGER PRIMARY KEY, command TEXT, status TEXT, progress INTEGER, message TEXT, created_at TEXT, stdout TEXT, stderr TEXT);
                 CREATE TABLE media_items (id INTEGER PRIMARY KEY, path TEXT UNIQUE, filename TEXT);
+                CREATE TABLE media_transcripts (media_id INTEGER PRIMARY KEY, text TEXT);
                 """
             )
             conn.close()
@@ -345,11 +697,21 @@ class SchemaMigrationTests(unittest.TestCase):
                 with db.connect() as migrated:
                     jobs_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(jobs)")}
                     media_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(media_items)")}
+                    transcript_columns = {
+                        row["name"] for row in migrated.execute("PRAGMA table_info(media_transcripts)")
+                    }
+                    transcription_state_columns = {
+                        row["name"]
+                        for row in migrated.execute("PRAGMA table_info(media_transcription_state)")
+                    }
                     version = migrated.execute("SELECT version FROM schema_version WHERE id=1").fetchone()["version"]
             self.assertIn("heartbeat_at", jobs_columns)
             self.assertIn("finished_at", jobs_columns)
             self.assertIn("sha256", media_columns)
             self.assertIn("root", media_columns)
+            self.assertIn("quality_json", transcript_columns)
+            self.assertIn("fingerprint", transcription_state_columns)
+            self.assertIn("next_retry_at", transcription_state_columns)
             self.assertEqual(version, db.SCHEMA_VERSION)
 
 

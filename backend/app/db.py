@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 TABLE_COLUMN_MIGRATIONS: dict[str, Mapping[str, str]] = {
@@ -99,7 +99,21 @@ TABLE_COLUMN_MIGRATIONS: dict[str, Mapping[str, str]] = {
         "segments_json": "TEXT NOT NULL DEFAULT '[]'",
         "model": "TEXT NOT NULL DEFAULT ''",
         "source": "TEXT NOT NULL DEFAULT 'faster-whisper'",
+        "quality_json": "TEXT NOT NULL DEFAULT '{}'",
         "created_at": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "media_transcription_state": {
+        "media_id": "INTEGER NOT NULL DEFAULT 0",
+        "fingerprint": "TEXT NOT NULL DEFAULT ''",
+        "status": "TEXT NOT NULL DEFAULT 'pending'",
+        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+        "engine": "TEXT NOT NULL DEFAULT ''",
+        "model": "TEXT NOT NULL DEFAULT ''",
+        "last_error": "TEXT NOT NULL DEFAULT ''",
+        "next_retry_at": "INTEGER NOT NULL DEFAULT 0",
+        "started_at": "TEXT",
+        "finished_at": "TEXT",
         "updated_at": "TEXT NOT NULL DEFAULT ''",
     },
     "media_metadata": {
@@ -180,7 +194,7 @@ def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Mapping[str, 
             conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {definition}')
 
 
-def migrate_schema(conn: sqlite3.Connection) -> None:
+def migrate_schema(conn: sqlite3.Connection, *, record_version: bool = True) -> None:
     """Apply additive, idempotent migrations to every persisted application table."""
     conn.execute(
         """
@@ -193,14 +207,15 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     )
     for table, columns in TABLE_COLUMN_MIGRATIONS.items():
         _ensure_columns(conn, table, columns)
-    conn.execute(
-        """
-        INSERT INTO schema_version (id, version, updated_at)
-        VALUES (1, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(id) DO UPDATE SET version=excluded.version, updated_at=CURRENT_TIMESTAMP
-        """,
-        (SCHEMA_VERSION,),
-    )
+    if record_version:
+        conn.execute(
+            """
+            INSERT INTO schema_version (id, version, updated_at)
+            VALUES (1, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET version=excluded.version, updated_at=CURRENT_TIMESTAMP
+            """,
+            (SCHEMA_VERSION,),
+        )
 
 
 def init_db() -> None:
@@ -208,7 +223,10 @@ def init_db() -> None:
         # Older installations may be missing columns referenced by indexes below.
         # Run the additive pass before and after table creation so both old and new
         # databases converge on the same schema safely.
-        migrate_schema(conn)
+        # sqlite3.executescript() commits pending work before running the script.
+        # Add legacy columns needed by indexes first, but only publish the new
+        # schema version after the complete creation script succeeds.
+        migrate_schema(conn, record_version=False)
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS jobs (
@@ -280,6 +298,8 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_media_items_source ON media_items(source);
             CREATE INDEX IF NOT EXISTS idx_media_items_quality ON media_items(quality);
             CREATE INDEX IF NOT EXISTS idx_media_items_risk ON media_items(risk_state);
+            CREATE INDEX IF NOT EXISTS idx_media_items_root_type_mtime
+                ON media_items(root, media_type, mtime DESC);
 
             CREATE TABLE IF NOT EXISTS media_tags (
                 media_id INTEGER NOT NULL,
@@ -305,6 +325,9 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE SET NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_media_operations_media_id
+                ON media_operations(media_id, id DESC);
 
             CREATE TABLE IF NOT EXISTS media_timeline_segments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -358,12 +381,31 @@ def init_db() -> None:
                 segments_json TEXT NOT NULL DEFAULT '[]',
                 model TEXT NOT NULL DEFAULT '',
                 source TEXT NOT NULL DEFAULT 'faster-whisper',
+                quality_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_media_transcripts_text ON media_transcripts(text);
+
+            CREATE TABLE IF NOT EXISTS media_transcription_state (
+                media_id INTEGER PRIMARY KEY,
+                fingerprint TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                engine TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT '',
+                next_retry_at INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT,
+                finished_at TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_media_transcription_state_retry
+                ON media_transcription_state(status, next_retry_at);
 
             CREATE TABLE IF NOT EXISTS media_metadata (
                 media_id INTEGER PRIMARY KEY,

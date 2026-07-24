@@ -20,6 +20,7 @@ import {
   Image as ImageIcon,
   Languages,
   LockKeyhole,
+  Menu,
   Moon,
   Maximize2,
   Pause,
@@ -41,23 +42,29 @@ import {
   Volume2,
   VolumeX,
   XCircle,
+  X,
 } from 'lucide-react';
+import {
+  DEFAULT_MEDIA_FILTERS,
+  addRecentSearch,
+  appendUniqueMediaItems,
+  buildFreshQuickFindPreset,
+  buildQuickFindPreset,
+  formatFaceDistance,
+  isCancelledJob,
+  isInterruptedJob,
+  isStaleJob,
+  jobKind,
+  jobNeedsAttention,
+  pageHash,
+  pageWindow,
+  parsePageHash,
+} from './appLogic.js';
 import './styles.css';
 
 const THUMBNAIL_REVISION = 'v8';
-const DEFAULT_MEDIA_FILTERS = {
-  q: '',
-  media_type: 'all',
-  tag: '',
-  author: '',
-  face_group: '',
-  favorite: '',
-  has_subtitles: '',
-  min_duration: '',
-  max_duration: '',
-  resolution: '',
-  semantic: '',
-};
+const MEDIA_PAGE_SIZE = 48;
+const AUTHOR_PAGE_SIZE = 36;
 
 function compactSearchParams(values) {
   const search = new URLSearchParams();
@@ -77,6 +84,11 @@ const i18n = {
     version: 'Version',
     build: 'build',
     title: 'Library Console',
+    navWorkspace: 'Workspace',
+    navOrganize: 'Organize',
+    navSystem: 'System',
+    openMenu: 'Open navigation',
+    closeMenu: 'Close navigation',
     dashboard: 'Dashboard',
     jobs: 'Jobs',
     quickFind: 'Quick Find',
@@ -147,6 +159,8 @@ const i18n = {
     runJobs: 'Run Jobs',
     commandGuide: 'Command Guide',
     advancedCommands: 'Advanced commands',
+    advancedSettings: 'Show advanced settings',
+    hideAdvancedSettings: 'Hide advanced settings',
     commonCommands: 'Common',
     faceCommands: 'Face',
     visionCommands: 'Vision',
@@ -191,6 +205,7 @@ const i18n = {
     runningJobs: 'Running',
     allJobs: 'All',
     warningJobs: 'Warnings',
+    attentionJobs: 'Needs attention',
     errorJobs: 'Errors',
     failedJobs: 'Errors',
     completedJobs: 'Completed',
@@ -209,6 +224,10 @@ const i18n = {
     loadFailed: 'Load failed',
     scrollForMore: 'Scroll to load more',
     noMoreMedia: 'No more media',
+    previousPage: 'Previous',
+    nextPage: 'Next',
+    pageLabel: 'Page',
+    showingRange: 'Showing',
     activeFilters: 'Active filters',
     command: 'Command',
     started: 'Started',
@@ -249,6 +268,7 @@ const i18n = {
     whisperPrompt: 'Vocabulary prompt',
     subtitleMaxChars: 'Subtitle max characters',
     subtitleMaxSeconds: 'Subtitle max seconds',
+    subtitleMinSeconds: 'Subtitle minimum display seconds',
     subtitleMaxGap: 'Split on silence (seconds)',
     senseVoiceModel: 'SenseVoice GGUF model',
     senseVoiceBin: 'SenseVoice runner',
@@ -340,6 +360,7 @@ const i18n = {
     modelPath: 'Path',
     downloadModel: 'Download',
     deleteModel: 'Delete cache',
+    deleteSavedSearch: 'Delete saved search',
     downloadRecommended: 'Download recommended',
     modelReady: 'Ready',
     modelMissing: 'Missing',
@@ -379,7 +400,13 @@ const i18n = {
     relatedTags: 'Related tags',
     transcript: 'Transcript',
     transcriptSegments: 'Timed transcript',
-    textTranscriptOnly: 'Text transcript only; no reliable subtitle timestamps yet.',
+    textTranscriptOnly: 'Transcript text is available, but a playable timed subtitle track has not been generated for this media yet.',
+    subtitleQuality: 'Subtitle quality',
+    subtitleQualityGood: 'Automatic checks passed',
+    subtitleQualityReview: 'Review recommended',
+    lowConfidenceWords: 'low-confidence words',
+    peakReadingSpeed: 'peak reading speed',
+    cueIssues: 'cue issues',
     subtitles: 'Subtitles',
     originalSubtitles: 'Original subtitles',
     bilingualSubtitles: 'Bilingual subtitles',
@@ -490,6 +517,13 @@ const i18n = {
     noIndexHint: 'No indexed media yet. Run Rebuild index after scan/apply.',
     mergeIntoLeft: 'Merge into left',
     mergeIntoRight: 'Merge into right',
+    keepLeftGroup: 'Keep left group',
+    keepRightGroup: 'Keep right group',
+    faceDistance: 'Distance',
+    faceDistanceHelp: 'Smaller means the two face groups are more similar.',
+    shown: 'Shown',
+    showMoreSuggestions: 'Show 12 more suggestions',
+    showMoreFaces: 'Show 60 more groups',
     mergeSameName: 'Merge same-name groups',
     mergeSameNameConfirm: 'Merge all FaceGroups that have the same actor name?',
     mergeSameNameDone: 'Same-name FaceGroups merged',
@@ -622,6 +656,11 @@ const i18n = {
     version: '版本',
     build: '构建',
     title: '影库控制台',
+    navWorkspace: '工作台',
+    navOrganize: '整理',
+    navSystem: '系统',
+    openMenu: '打开导航',
+    closeMenu: '关闭导航',
     dashboard: '概览',
     jobs: '任务',
     quickFind: '快找',
@@ -692,6 +731,8 @@ const i18n = {
     runJobs: '运行任务',
     commandGuide: '功能说明',
     advancedCommands: '高级命令',
+    advancedSettings: '显示高级设置',
+    hideAdvancedSettings: '收起高级设置',
     commonCommands: '常用',
     faceCommands: '人脸',
     visionCommands: '视觉',
@@ -736,6 +777,7 @@ const i18n = {
     runningJobs: '进行中',
     allJobs: '全部',
     warningJobs: '警告',
+    attentionJobs: '待处理',
     errorJobs: '错误',
     failedJobs: '错误',
     completedJobs: '已完成',
@@ -754,6 +796,10 @@ const i18n = {
     loadFailed: '加载失败',
     scrollForMore: '下滑继续加载',
     noMoreMedia: '已经到底了',
+    previousPage: '上一页',
+    nextPage: '下一页',
+    pageLabel: '页码',
+    showingRange: '显示',
     activeFilters: '当前筛选',
     command: '命令',
     started: '开始',
@@ -794,6 +840,7 @@ const i18n = {
     whisperPrompt: '专有词提示',
     subtitleMaxChars: '单条字幕最大字数',
     subtitleMaxSeconds: '单条字幕最长秒数',
+    subtitleMinSeconds: '单条字幕最短显示秒数',
     subtitleMaxGap: '静音切句秒数',
     senseVoiceModel: 'SenseVoice GGUF 模型',
     senseVoiceBin: 'SenseVoice 运行器',
@@ -885,6 +932,7 @@ const i18n = {
     modelPath: '路径',
     downloadModel: '下载',
     deleteModel: '删除缓存',
+    deleteSavedSearch: '删除保存的搜索',
     downloadRecommended: '下载推荐模型',
     modelReady: '已就绪',
     modelMissing: '缺失',
@@ -924,7 +972,13 @@ const i18n = {
     relatedTags: '关联标签',
     transcript: '转写文字',
     transcriptSegments: '分段转写',
-    textTranscriptOnly: '当前只有文本转写，还没有可靠的字幕时间轴。',
+    textTranscriptOnly: '这条媒体已有转写文字，但尚未生成可播放的时间轴字幕。',
+    subtitleQuality: '字幕质量',
+    subtitleQualityGood: '自动检查通过',
+    subtitleQualityReview: '建议人工复核',
+    lowConfidenceWords: '低置信词',
+    peakReadingSpeed: '最高阅读速度',
+    cueIssues: '时轴问题',
     subtitles: '字幕',
     originalSubtitles: '原文字幕',
     bilingualSubtitles: '双语字幕',
@@ -1035,6 +1089,13 @@ const i18n = {
     noIndexHint: '还没有索引媒体。扫描/整理后先点重建索引。',
     mergeIntoLeft: '合并到左边',
     mergeIntoRight: '合并到右边',
+    keepLeftGroup: '保留左侧',
+    keepRightGroup: '保留右侧',
+    faceDistance: '距离',
+    faceDistanceHelp: '数值越小，表示两个人脸组越相似。',
+    shown: '已显示',
+    showMoreSuggestions: '再显示 12 组建议',
+    showMoreFaces: '再显示 60 个人脸组',
     mergeSameName: '合并同名人脸组',
     mergeSameNameConfirm: '把所有已命名为同一个人物的人脸组自动合并？',
     mergeSameNameDone: '同名人脸组已合并',
@@ -1207,18 +1268,31 @@ const commands = [
   ['clean-empty-dirs', 'Clean Dirs', RotateCcw, 'Remove empty organization folders'],
 ];
 
-const nav = [
-  ['quickFind', 'quickFind', Search],
-  ['library', 'library', Folder],
-  ['authors', 'authors', Users],
-  ['faces', 'faces', Users],
-  ['tagGraph', 'tagGraph', Share2],
-  ['models', 'models', HardDrive],
-  ['diagnostics', 'diagnostics', HelpCircle],
-  ['jobs', 'jobs', Activity],
-  ['logs', 'logs', TerminalSquare],
-  ['settings', 'settings', Settings],
+const navGroups = [
+  ['navWorkspace', [
+    ['dashboard', 'dashboard', Grid3X3],
+    ['quickFind', 'quickFind', Search],
+    ['library', 'library', Folder],
+    ['randomFlow', 'randomFlow', Shuffle],
+  ]],
+  ['navOrganize', [
+    ['authors', 'authors', Users],
+    ['faces', 'faces', Users],
+    ['tagGraph', 'tagGraph', Share2],
+  ]],
+  ['navSystem', [
+    ['models', 'models', HardDrive],
+    ['diagnostics', 'diagnostics', HelpCircle],
+    ['jobs', 'jobs', Activity],
+    ['logs', 'logs', TerminalSquare],
+    ['settings', 'settings', Settings],
+  ]],
 ];
+const navPages = new Set(navGroups.flatMap(([, items]) => items.map(([id]) => id)));
+
+function pageFromLocation() {
+  return parsePageHash(window.location.hash, navPages);
+}
 
 const workflowSteps = {
   'workflow-new-downloads': ['scan', 'filename-analysis', 'keyword-classification', 'apply-move-plan', 'refresh-state', 'index-metadata'],
@@ -1280,46 +1354,10 @@ function sortJobsNewest(jobs) {
   return [...(jobs || [])].sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
 }
 
-function parseJobTime(value) {
-  if (!value) return null;
-  const raw = String(value).trim().replace('T', ' ').replace(/\.\d+$/, '');
-  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?$/);
-  if (!match) return null;
-  const [, year, month, day, hour, minute, second = '00'] = match;
-  return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second));
-}
-
-function jobTextBlob(job) {
-  return [job?.message, job?.stdout, job?.stderr].filter(Boolean).join('\n').toLowerCase();
-}
-
-function isInterruptedJob(job) {
-  return job?.status === 'interrupted' || (job?.status === 'failed' && jobTextBlob(job).includes('interrupted by service restart'));
-}
-
-function isCancelledJob(job) {
-  return job?.status === 'cancelled' || jobTextBlob(job).includes('cancel');
-}
-
-function isStaleJob(job) {
-  if (!['queued', 'running'].includes(job?.status)) return false;
-  const stamp = parseJobTime(job.heartbeat_at || job.started_at || job.created_at);
-  if (!stamp) return false;
-  return Date.now() - stamp > 10 * 60 * 1000;
-}
-
-function jobKind(job) {
-  if (job?.status === 'done') return 'completed';
-  if (['warning', 'interrupted'].includes(job?.status)) return 'warning';
-  if (['queued', 'running'].includes(job?.status)) return isStaleJob(job) ? 'warning' : 'running';
-  if (isCancelledJob(job) || isInterruptedJob(job)) return 'warning';
-  if (job?.status === 'failed') return 'error';
-  return 'warning';
-}
-
 function jobKindLabel(kind, t) {
   return {
     all: t.allJobs,
+    attention: t.attentionJobs,
     running: t.normalJobs || t.runningJobs,
     warning: t.warningJobs,
     error: t.errorJobs,
@@ -1462,8 +1500,8 @@ function initialAspect(item) {
   return item?.media_type === 'video' ? 16 / 9 : 4 / 5;
 }
 
-function MediaThumbImage({ item, className = 'mediaThumb', label = '', priority = false }) {
-  const [aspect, setAspect] = useState(initialAspect(item));
+const MediaThumbImage = React.memo(function MediaThumbImage({ item, className = 'mediaThumb', label = '', priority = false }) {
+  const aspect = initialAspect(item);
   const [failed, setFailed] = useState(false);
   const badge = label || (item.media_type === 'video' ? 'VID' : 'IMG');
   const revision = encodeURIComponent(item.updated_at || item.hash8 || item.mtime || '');
@@ -1480,12 +1518,6 @@ function MediaThumbImage({ item, className = 'mediaThumb', label = '', priority 
           loading={priority ? 'eager' : 'lazy'}
           decoding="async"
           fetchPriority={priority ? 'high' : 'auto'}
-          onLoad={event => {
-            const img = event.currentTarget;
-            if (img.naturalWidth && img.naturalHeight) {
-              setAspect(Math.max(0.38, Math.min(3.2, img.naturalWidth / img.naturalHeight)));
-            }
-          }}
           onError={() => setFailed(true)}
         />
       ) : <div className="thumbFallback">{badge}</div>}
@@ -1499,7 +1531,7 @@ function MediaThumbImage({ item, className = 'mediaThumb', label = '', priority 
       )}
     </div>
   );
-}
+});
 
 function LoginScreen({ login, error, theme, setTheme, t, version }) {
   const [password, setPassword] = useState('');
@@ -1543,7 +1575,9 @@ function ResultsTable({ rows, t }) {
 function App() {
   const [summary, setSummary] = useState(null);
   const [jobs, setJobs] = useState([]);
-  const [active, setActive] = useState('quickFind');
+  const [active, setActiveState] = useState(pageFromLocation);
+  const [navOpen, setNavOpen] = useState(false);
+  const [isCompactNav, setIsCompactNav] = useState(() => window.matchMedia('(max-width: 760px)').matches);
   const [busy, setBusy] = useState(false);
   const [selectedJob, setSelectedJob] = useState(null);
   const [jobLog, setJobLog] = useState(null);
@@ -1585,6 +1619,16 @@ function App() {
     return Number.isFinite(value) ? Math.max(180, Math.min(420, value)) : 280;
   });
   const t = i18n[language] || i18n['zh-CN'];
+
+  function setActive(page, { replace = false } = {}) {
+    const next = navPages.has(page) ? page : 'quickFind';
+    setActiveState(next);
+    setNavOpen(false);
+    const hash = pageHash(next);
+    if (window.location.hash === hash) return;
+    const url = `${window.location.pathname}${window.location.search}${hash}`;
+    window.history[replace ? 'replaceState' : 'pushState']({ page: next }, '', url);
+  }
 
   async function runLatestRequest(key, request, commit) {
     requestControllersRef.current.get(key)?.abort();
@@ -1695,10 +1739,10 @@ function App() {
     const tasks = [];
     if (active === 'dashboard') tasks.push(loadSummary(), loadJobs(), loadTagGraph(), loadMedia({ limit: 12, offset: 0 }));
     else if (active === 'jobs' || active === 'logs') tasks.push(loadJobs());
-    else if (active === 'quickFind') tasks.push(loadSavedSearches(), loadMedia({ limit: 80, offset: 0 }));
-    else if (active === 'library') tasks.push(loadMedia({ ...mediaFilters, limit: 80, offset: 0 }), loadSimilarity());
+    else if (active === 'quickFind') tasks.push(loadSavedSearches(), loadMedia({ limit: MEDIA_PAGE_SIZE, offset: 0 }));
+    else if (active === 'library') tasks.push(loadMedia({ ...mediaFilters, limit: MEDIA_PAGE_SIZE, offset: 0 }), loadSimilarity());
     else if (active === 'tagGraph') tasks.push(loadTagGraph());
-    else if (active === 'randomFlow') tasks.push(loadRandomMedia({ limit: 80, offset: 0, seed: Date.now() }));
+    else if (active === 'randomFlow') tasks.push(loadRandomMedia({ limit: MEDIA_PAGE_SIZE, offset: 0, seed: 0 }));
     else if (active === 'models') tasks.push(loadModels());
     else if (active === 'diagnostics') tasks.push(loadDiagnostics(), loadModels());
     else if (active === 'authors') tasks.push(loadAuthors());
@@ -1714,11 +1758,47 @@ function App() {
 
   useEffect(() => {
     localStorage.setItem('language', language);
+    document.documentElement.lang = language;
   }, [language]);
+
+  useEffect(() => {
+    const syncLocation = () => setActiveState(pageFromLocation());
+    window.addEventListener('popstate', syncLocation);
+    window.addEventListener('hashchange', syncLocation);
+    if (!window.location.hash) setActive('quickFind', { replace: true });
+    return () => {
+      window.removeEventListener('popstate', syncLocation);
+      window.removeEventListener('hashchange', syncLocation);
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('mediaZoom', String(mediaZoom));
   }, [mediaZoom]);
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 760px)');
+    const sync = event => {
+      setIsCompactNav(event.matches);
+      if (!event.matches) setNavOpen(false);
+    };
+    query.addEventListener('change', sync);
+    return () => query.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    if (!navOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') setNavOpen(false);
+    };
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [navOpen]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1904,7 +1984,7 @@ function App() {
       semantic: filters.semantic ? 'true' : '',
       randomize: params.randomize ? 'true' : '',
       seed: String(params.seed || 0),
-      limit: String(params.limit || 80),
+      limit: String(params.limit || MEDIA_PAGE_SIZE),
       offset: String(params.offset || 0),
     });
     if (!params.append) setMediaFilters(filters);
@@ -1912,18 +1992,16 @@ function App() {
     const data = await runLatestRequest(requestKey, signal => api(`/api/media?${search.toString()}`, { signal }));
     if (!data) return null;
     if (params.append) {
-      let addedCount = 0;
+      const preview = appendUniqueMediaItems(mediaResults.items, data.items);
       setMediaResults(current => {
-        const existing = current.items || [];
-        const seen = new Set(existing.map(item => item.id));
-        const added = (data.items || []).filter(item => !seen.has(item.id));
-        addedCount = added.length;
-        return { ...data, items: [...existing, ...added] };
+        const merged = appendUniqueMediaItems(current.items, data.items);
+        return { ...data, items: merged.items };
       });
-      return { ...data, added_count: addedCount };
+      return { ...data, added_count: preview.addedCount };
     }
-    setMediaResults(data);
-    return data;
+    const page = { ...data, offset: Number(params.offset || 0) };
+    setMediaResults(page);
+    return page;
   }
 
   async function loadRandomMedia(params = {}) {
@@ -1940,26 +2018,23 @@ function App() {
       resolution: params.resolution || '',
       randomize: 'true',
       seed: String(params.seed || 0),
-      limit: String(params.limit || 80),
+      limit: String(params.limit || MEDIA_PAGE_SIZE),
       offset: String(params.offset || 0),
     });
     const requestKey = params.append ? 'random-media-append' : 'random-media';
     const data = await runLatestRequest(requestKey, signal => api(`/api/media?${search.toString()}`, { signal }));
     if (!data) return null;
     if (params.append) {
-      let addedCount = 0;
+      const preview = appendUniqueMediaItems(randomResults.items, data.items);
       setRandomResults(current => {
-        const currentExisting = current.items || [];
-        const currentSeen = new Set(currentExisting.map(item => item.id));
-        const currentAdded = (data.items || []).filter(item => !currentSeen.has(item.id));
-        addedCount = currentAdded.length;
-        return { ...data, items: [...currentExisting, ...currentAdded] };
+        const merged = appendUniqueMediaItems(current.items, data.items);
+        return { ...data, items: merged.items };
       });
-      return { ...data, added_count: addedCount };
+      return { ...data, added_count: preview.addedCount };
     } else {
-      setRandomResults(data);
+      setRandomResults({ ...data, offset: Number(params.offset || 0) });
     }
-    return data;
+    return { ...data, offset: Number(params.offset || 0) };
   }
 
   function removeMediaFromLists(mediaId) {
@@ -2196,6 +2271,20 @@ function App() {
   const vision = summary?.vision || {};
   const analysis = summary?.analysis || {};
   const hasRunning = useMemo(() => jobs.some(job => job.status === 'running' || job.status === 'queued'), [jobs]);
+  const pageDescription = {
+    dashboard: t.workbenchHint,
+    quickFind: t.quickFindHint,
+    library: t.libraryHelp,
+    randomFlow: t.randomMedia,
+    authors: t.authorHint,
+    faces: t.faceMergeSuggestions,
+    tagGraph: t.tagGraphHelp,
+    models: t.modelHint,
+    diagnostics: t.diagnosticsHint,
+    jobs: t.jobHistoryHint,
+    logs: t.latestFirst,
+    settings: t.privacyCopy,
+  }[active] || '';
 
   if (auth.checking) return <main className="loginShell"><section className="loginPanel"><Brand version={version} t={t} /><p>{t.loading}</p></section></main>;
   if (auth.enabled && !auth.authenticated) {
@@ -2203,22 +2292,41 @@ function App() {
   }
 
   return (
-    <main>
-      <aside>
+    <main className={navOpen ? 'navOpen' : ''}>
+      <div className="mobileTopBar">
+        <button className="mobileMenuButton" type="button" aria-label={navOpen ? t.closeMenu : t.openMenu} aria-controls="app-navigation" aria-expanded={navOpen} onClick={() => setNavOpen(current => !current)}>
+          {navOpen ? <X size={22} /> : <Menu size={22} />}
+        </button>
+        <AppLogo size={34} />
+        <div><strong>TG Media Manager</strong><span>{t[active] || t.title}</span></div>
+      </div>
+      <button className="navScrim" type="button" aria-label={t.closeMenu} tabIndex={navOpen ? 0 : -1} onClick={() => setNavOpen(false)} />
+      <aside id="app-navigation" className="appSidebar" aria-hidden={isCompactNav && !navOpen} inert={isCompactNav && !navOpen}>
         <Brand version={version} t={t} />
-        <nav>{nav.map(([id, labelKey, Icon]) => <button className={active === id ? 'active' : ''} key={id} onClick={() => setActive(id)}><Icon size={16} /> {t[labelKey]}</button>)}</nav>
+        <nav aria-label={t.title}>
+          {navGroups.map(([groupKey, items]) => (
+            <div className="navGroup" key={groupKey}>
+              <span className="navGroupLabel">{t[groupKey]}</span>
+              {items.map(([id, labelKey, Icon]) => <button className={active === id ? 'active' : ''} aria-current={active === id ? 'page' : undefined} key={id} onClick={() => setActive(id)}><Icon size={16} /> {t[labelKey]}</button>)}
+            </div>
+          ))}
+        </nav>
       </aside>
 
       <section className="content">
         <header>
-          <div className="pageTitle"><h1>{t.title}</h1><p>{summary?.root || '/media'} {summary?.output_root && summary.output_root !== summary.root ? `-> ${summary.output_root}` : ''}</p></div>
+          <div className="pageTitle">
+            <span>{summary?.root || '/media'} {summary?.output_root && summary.output_root !== summary.root ? `→ ${summary.output_root}` : ''}</span>
+            <h1>{t[active] || t.title}</h1>
+            {pageDescription && <p>{pageDescription}</p>}
+          </div>
           <div className="headerActions">
             <form className="searchForm" onSubmit={runSearch}>
-              <select value={source} onChange={event => setSource(event.target.value)} title="Search source">
+              <select value={source} onChange={event => setSource(event.target.value)} title="Search source" aria-label="Search source">
                 {['all', 'manifest', 'move_plan', 'applied', 'filename_words', 'filename_analysis', 'face_groups', 'face_merge_suggestions', 'vision_labels', 'vision_move_plan', 'organized_duplicates'].map(item => <option value={item} key={item}>{t[item] || item}</option>)}
               </select>
-              <input value={query} onChange={event => setQuery(event.target.value)} placeholder={t.searchPlaceholder} />
-              <button type="submit" title="Search"><Search size={16} /></button>
+              <input value={query} onChange={event => setQuery(event.target.value)} placeholder={t.searchPlaceholder} aria-label={t.searchPlaceholder} />
+              <button type="submit" title="Search" aria-label="Search" disabled={searchLoading}><Search size={16} /></button>
             </form>
             <button className="iconButton" title={t.recentLogs} onClick={() => setActive('logs')}><Bell size={18} /></button>
             <button className="iconButton" title={t.lockAction} onClick={lockPrivacy}><LockKeyhole size={18} /></button>
@@ -2265,7 +2373,7 @@ function App() {
         {active === 'authors' && <AuthorsPanel authors={authors} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} syncAuthors={syncAuthors} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} t={t} />}
         {active === 'faces' && <FaceGroupsPanel faces={faces} suggestions={faceSuggestions} nameFace={nameFace} mergeFace={mergeFace} mergeNamedFaces={mergeNamedFaces} onDeleted={removeMediaFromLists} onPatched={patchMediaInLists} mediaZoom={mediaZoom} t={t} />}
         {active === 'logs' && <LogsPanel jobs={jobs} applied={applied} openJob={openJob} setActive={setActive} t={t} />}
-        {active === 'settings' && <SettingsPanel settings={settings} setSettings={updateSettings} saveSettings={saveSettings} changePassword={changePassword} browse={browse} directories={directories} browsePath={browsePath} monitor={monitor} checkMonitorNow={checkMonitorNow} t={t} />}
+        {active === 'settings' && <SettingsPanel settings={settings} setSettings={updateSettings} saveSettings={saveSettings} changePassword={changePassword} browse={browse} directories={directories} browsePath={browsePath} setBrowsePath={setBrowsePath} monitor={monitor} checkMonitorNow={checkMonitorNow} t={t} />}
       </section>
     </main>
   );
@@ -2542,14 +2650,22 @@ function jobPercent(job) {
 }
 
 function JobsPanel({ jobs, selectedJobId, openJob, t }) {
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useState('attention');
   const sorted = sortJobsNewest(jobs);
-  const filters = ['all', 'running', 'warning', 'error', 'completed'];
+  const filters = ['attention', 'all', 'running', 'warning', 'error', 'completed'];
   const counts = filters.reduce((acc, key) => {
-    acc[key] = key === 'all' ? sorted.length : sorted.filter(job => jobKind(job) === key).length;
+    acc[key] = key === 'all'
+      ? sorted.length
+      : key === 'attention'
+        ? sorted.filter(jobNeedsAttention).length
+        : sorted.filter(job => jobKind(job) === key).length;
     return acc;
   }, {});
-  const filtered = filter === 'all' ? sorted : sorted.filter(job => jobKind(job) === filter);
+  const filtered = filter === 'all'
+    ? sorted
+    : filter === 'attention'
+      ? sorted.filter(jobNeedsAttention)
+      : sorted.filter(job => jobKind(job) === filter);
   const groups = [
     ['running', filtered.filter(job => jobKind(job) === 'running')],
     ['warning', filtered.filter(job => jobKind(job) === 'warning')],
@@ -2805,12 +2921,16 @@ function TagGraphPanel({ graph, loadTagGraph, openFilteredMedia, t }) {
 
 function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch, deleteSavedSearch, loadMedia, onDeleted, onPatched, mediaZoom, setMediaZoom, t }) {
   const [filters, setFilters] = useState({ ...DEFAULT_MEDIA_FILTERS, semantic: 'true', ...(mediaFilters || {}) });
+  const filtersRef = useRef(filters);
+  const appliedFiltersRef = useRef(filters);
   const [saveName, setSaveName] = useState('');
   const [loading, setLoading] = useState(false);
   const [panelError, setPanelError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [pageOffset, setPageOffset] = useState(0);
   const [parsed, setParsed] = useState(null);
   const [understanding, setUnderstanding] = useState(null);
+  const pageTopRef = useRef(null);
   const [recentSearches, setRecentSearches] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('recentSmartSearches') || '[]');
@@ -2847,9 +2967,15 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
   function rememberSearch(text) {
     const trimmed = String(text || '').trim();
     if (!trimmed) return;
-    const next = [trimmed, ...recentSearches.filter(item => item !== trimmed)].slice(0, 8);
-    setRecentSearches(next);
-    localStorage.setItem('recentSmartSearches', JSON.stringify(next));
+    setRecentSearches(current => {
+      const next = addRecentSearch(current, trimmed);
+      localStorage.setItem('recentSmartSearches', JSON.stringify(next));
+      return next;
+    });
+  }
+  function replaceFilters(next) {
+    filtersRef.current = next;
+    setFilters(next);
   }
   function effectiveFilters(base = filters) {
     const p = parsed || {};
@@ -2873,9 +2999,11 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
     setLoading(true);
     try {
       const next = effectiveFilters();
-      setFilters(next);
+      replaceFilters(next);
+      appliedFiltersRef.current = next;
       rememberSearch(next.q);
-      await loadMedia({ ...next, limit: 96, offset: 0 });
+      setPageOffset(0);
+      await loadMedia({ ...next, limit: MEDIA_PAGE_SIZE, offset: 0 });
     } catch (exc) {
       setPanelError(exc.message);
     } finally {
@@ -2883,18 +3011,32 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
     }
   }
   function update(key, value) {
-    setFilters(current => ({ ...current, [key]: value }));
+    setFilters(current => {
+      const next = { ...current, [key]: value };
+      filtersRef.current = next;
+      return next;
+    });
   }
-  function applySemanticPreset(value) {
-    const text = String(value || '').trim();
-    const next = { ...filters, q: text, semantic: filters.semantic || 'true' };
-    const durationMatch = text.match(/(\d+)\s*(?:分钟|min).*?(以上|大于|超过|\+)/);
-    if (durationMatch) next.min_duration = String(Number(durationMatch[1]) * 60);
-    if (/4k|2160/i.test(text)) next.resolution = '4K';
-    if (/1080/.test(text)) next.resolution = '1080';
-    const tagTerms = ['室内', '户外', '制服', '水手服', '露脸', '自拍', 'COS', 'JK', '黑丝', '白丝'].filter(term => text.includes(term));
-    if (tagTerms.length) next.tag = tagTerms.join(',');
-    setFilters(next);
+  function applySemanticPreset(value, base = filtersRef.current) {
+    const next = buildQuickFindPreset(value, base);
+    replaceFilters(next);
+    return next;
+  }
+  async function runPreset(value) {
+    const next = buildFreshQuickFindPreset(value);
+    replaceFilters(next);
+    appliedFiltersRef.current = next;
+    setPanelError('');
+    setLoading(true);
+    try {
+      rememberSearch(next.q);
+      setPageOffset(0);
+      await loadMedia({ ...next, limit: MEDIA_PAGE_SIZE, offset: 0 });
+    } catch (exc) {
+      setPanelError(exc.message);
+    } finally {
+      setLoading(false);
+    }
   }
   async function saveCurrentSearch() {
     const name = saveName.trim() || [filters.q, filters.tag, filters.author, filters.face_group].filter(Boolean).join(' / ') || t.savedSearch;
@@ -2907,6 +3049,21 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
       setPanelError(exc.message);
     } finally {
       setSaving(false);
+    }
+  }
+  async function loadPage(nextOffset) {
+    setPanelError('');
+    setLoading(true);
+    try {
+      const next = appliedFiltersRef.current;
+      const data = await loadMedia({ ...next, limit: MEDIA_PAGE_SIZE, offset: nextOffset });
+      if (!data) return;
+      setPageOffset(nextOffset);
+      requestAnimationFrame(() => pageTopRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    } catch (exc) {
+      setPanelError(exc.message);
+    } finally {
+      setLoading(false);
     }
   }
   const shortcuts = [
@@ -2925,7 +3082,7 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
     [t.intentExclude, intent.exclude_terms || [], 'exclude'],
   ].filter(([, values]) => values.length);
   return (
-    <section className="panel quickFindPanel smartSearchPanel">
+    <section className="panel quickFindPanel smartSearchPanel" ref={pageTopRef}>
       <div className="panelHead smartHero">
         <div><h2>{t.quickFindTitle}</h2><p>{t.quickFindHint}</p></div>
         <MediaZoomControl value={mediaZoom} setValue={setMediaZoom} t={t} />
@@ -2953,7 +3110,7 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
         ))}
       </div>}
       <div className="quickChips suggestionChips">
-        {shortcuts.map(value => <button key={value} type="button" onClick={() => { applySemanticPreset(value); }}>{value}</button>)}
+        {shortcuts.map(value => <button key={value} type="button" disabled={loading} onClick={() => runPreset(value)}>{value}</button>)}
       </div>
       <details className="quickAdvanced">
         <summary>{t.advancedFilters}</summary>
@@ -2987,20 +3144,21 @@ function QuickFindPanel({ mediaResults, mediaFilters, savedSearches, saveSearch,
           <button className="panelButton" type="button" disabled={saving} onClick={saveCurrentSearch}><Save size={16} />{t.saveSearch}</button>
         </div>
         {!!recentSearches.length && <div className="savedSearchList recentSearchList"><strong>{t.recentSearches}</strong>
-          {recentSearches.map(item => <button type="button" className="recentSearchChip" key={item} onClick={() => { applySemanticPreset(item); loadMedia({ ...filters, q: item, semantic: 'true', limit: 96, offset: 0 }).catch(exc => setPanelError(exc.message)); }}>{item}</button>)}
+          {recentSearches.map(item => <button type="button" className="recentSearchChip" key={item} disabled={loading} onClick={() => runPreset(item)}>{item}</button>)}
         </div>}
         {!!savedSearches?.length && <div className="savedSearchList">
           {savedSearches.map(item => (
             <span className="savedSearchChip" key={item.id}>
-              <button type="button" onClick={() => { const next = { ...DEFAULT_MEDIA_FILTERS, ...(item.filters || {}) }; setFilters(next); loadMedia({ ...next, limit: 96, offset: 0 }).catch(exc => setPanelError(exc.message)); }}>{item.name}</button>
-              <button type="button" title={t.deleteModel} onClick={() => deleteSavedSearch(item.id).catch(exc => setPanelError(exc.message))}><XCircle size={13} /></button>
+              <button type="button" onClick={() => { const next = { ...DEFAULT_MEDIA_FILTERS, ...(item.filters || {}) }; replaceFilters(next); appliedFiltersRef.current = next; setPageOffset(0); loadMedia({ ...next, limit: MEDIA_PAGE_SIZE, offset: 0 }).catch(exc => setPanelError(exc.message)); }}>{item.name}</button>
+              <button type="button" title={t.deleteSavedSearch} aria-label={t.deleteSavedSearch} onClick={() => deleteSavedSearch(item.id).catch(exc => setPanelError(exc.message))}><XCircle size={13} /></button>
             </span>
           ))}
         </div>}
       </div>
-      {panelError && <div className="alert compact">{panelError}</div>}
+      {panelError && <div className="alert compact" role="alert">{panelError}</div>}
       <div className="panelHead compactHead"><h2>{t.searchResults}</h2><span>{prettyNumber(mediaResults.total || 0)}</span></div>
       <MediaGrid items={mediaResults.items || []} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} t={t} />
+      <PaginationControls offset={Number(mediaResults.offset ?? pageOffset)} total={mediaResults.total || 0} pageSize={MEDIA_PAGE_SIZE} busy={loading} onPage={loadPage} t={t} />
     </section>
   );
 }
@@ -3113,69 +3271,75 @@ function MediaZoomControl({ value, setValue, t }) {
   );
 }
 
+function PaginationControls({ offset, total, pageSize, busy = false, onPage, t }) {
+  const windowState = pageWindow(offset, total, pageSize);
+  if (Number(total || 0) <= pageSize && !windowState.hasPrevious) return null;
+  return (
+    <div className="paginationControls" role="navigation" aria-label={`${t.pageLabel} ${windowState.page}`}>
+      <button
+        type="button"
+        disabled={busy || !windowState.hasPrevious}
+        onClick={() => onPage(windowState.previousOffset)}
+      >
+        {t.previousPage}
+      </button>
+      <span aria-live="polite">
+        <strong>{t.pageLabel} {windowState.page} / {windowState.pageCount}</strong>
+        <small>{t.showingRange} {windowState.start}–{windowState.end} / {prettyNumber(total)}</small>
+      </span>
+      <button
+        type="button"
+        disabled={busy || !windowState.hasNext}
+        onClick={() => onPage(windowState.nextOffset)}
+      >
+        {t.nextPage}
+      </button>
+    </div>
+  );
+}
+
 function RandomFlowPanel({ mediaResults, loadRandomMedia, onDeleted, onPatched, mediaZoom, setMediaZoom, t }) {
   const [filters, setFilters] = useState({ media_type: 'all', tag: '', author: '', q: '' });
-  const [loadingMore, setLoadingMore] = useState(false);
+  const appliedFiltersRef = useRef(filters);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [panelError, setPanelError] = useState('');
-  const [exhausted, setExhausted] = useState(false);
-  const [seed, setSeed] = useState(() => Math.floor(Math.random() * 2147483646) + 1);
-  const sentinelRef = useRef(null);
+  const [seed, setSeed] = useState(0);
+  const [pageOffset, setPageOffset] = useState(0);
+  const pageTopRef = useRef(null);
   const activeFilters = [filters.media_type !== 'all' ? filters.media_type : '', filters.q, filters.tag, filters.author].filter(Boolean);
   const items = mediaResults.items || [];
-  const hasMore = !exhausted && Number(mediaResults.total || 0) > items.length;
   async function run(event) {
     event?.preventDefault();
     const nextSeed = Math.floor(Math.random() * 2147483646) + 1;
     setSeed(nextSeed);
-    setExhausted(false);
+    appliedFiltersRef.current = filters;
+    setPageOffset(0);
     setPanelError('');
     setLoadingSearch(true);
     try {
-      await loadRandomMedia({ ...filters, seed: nextSeed });
+      await loadRandomMedia({ ...filters, seed: nextSeed, limit: MEDIA_PAGE_SIZE, offset: 0 });
     } catch (exc) {
       setPanelError(exc.message);
     } finally {
       setLoadingSearch(false);
     }
   }
-  async function loadMore() {
-    if (loadingMore || !hasMore) return;
-    setLoadingMore(true);
+  async function loadPage(nextOffset) {
+    setPanelError('');
+    setLoadingSearch(true);
     try {
-      const data = await loadRandomMedia({ ...filters, append: true, limit: 80, offset: items.length, seed });
+      const data = await loadRandomMedia({ ...appliedFiltersRef.current, limit: MEDIA_PAGE_SIZE, offset: nextOffset, seed });
       if (!data) return;
-      if (!data.items?.length || Number(data.added_count || 0) === 0) setExhausted(true);
+      setPageOffset(nextOffset);
+      requestAnimationFrame(() => pageTopRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
     } catch (exc) {
       setPanelError(exc.message);
     } finally {
-      setLoadingMore(false);
+      setLoadingSearch(false);
     }
   }
-  useEffect(() => {
-    const node = sentinelRef.current;
-    if (!node) return undefined;
-    const observer = new IntersectionObserver(entries => {
-      if (entries.some(entry => entry.isIntersecting)) loadMore();
-    }, { rootMargin: '800px 0px' });
-    const checkNearBottom = () => {
-      const remaining = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
-      if (remaining < 1200) loadMore();
-    };
-    observer.observe(node);
-    window.addEventListener('scroll', checkNearBottom, { passive: true });
-    window.addEventListener('resize', checkNearBottom);
-    window.setTimeout(checkNearBottom, 250);
-    const interval = window.setInterval(checkNearBottom, 1000);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('scroll', checkNearBottom);
-      window.removeEventListener('resize', checkNearBottom);
-      window.clearInterval(interval);
-    };
-  }, [items.length, hasMore, loadingMore, filters.media_type, filters.q, filters.tag, filters.author, seed]);
   return (
-    <section className="panel">
+    <section className="panel" ref={pageTopRef}>
       <div className="panelHead"><h2>{t.randomFlow}</h2><div className="panelActions"><MediaZoomControl value={mediaZoom} setValue={setMediaZoom} t={t} /><button className="panelButton" onClick={run}><Shuffle size={16} />{t.randomize}</button></div><span>{mediaResults.total || 0}</span></div>
       <form className="mediaSearchBar randomBar" onSubmit={run}>
         <select value={filters.media_type} onChange={event => setFilters({ ...filters, media_type: event.target.value })}>
@@ -3189,9 +3353,9 @@ function RandomFlowPanel({ mediaResults, loadRandomMedia, onDeleted, onPatched, 
         <button type="submit" disabled={loadingSearch}><Shuffle size={16} />{loadingSearch ? t.loadingMore : t.randomize}</button>
       </form>
       {activeFilters.length > 0 && <div className="hintBox smallHint"><span>{t.searchResults}: {activeFilters.join(' / ')}</span></div>}
-      {panelError && <div className="alert compact">{panelError}</div>}
+      {panelError && <div className="alert compact" role="alert">{panelError}</div>}
       <MediaGrid items={items} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} t={t} />
-      <div className="infiniteSentinel" ref={sentinelRef}>{loadingMore ? t.loadingMore : hasMore ? t.scrollForMore : t.noMoreMedia}</div>
+      <PaginationControls offset={Number(mediaResults.offset ?? pageOffset)} total={mediaResults.total || 0} pageSize={MEDIA_PAGE_SIZE} busy={loadingSearch} onPage={loadPage} t={t} />
     </section>
   );
 }
@@ -3201,13 +3365,17 @@ function LibraryPanel({ results, mediaResults, mediaFilters, similarityResults, 
   const [mediaType, setMediaType] = useState(mediaFilters.media_type || 'all');
   const [mediaTag, setMediaTag] = useState(mediaFilters.tag || '');
   const [mediaAuthor, setMediaAuthor] = useState(mediaFilters.author || '');
-  const [loadingMore, setLoadingMore] = useState(false);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [panelError, setPanelError] = useState('');
-  const [exhausted, setExhausted] = useState(false);
-  const sentinelRef = useRef(null);
+  const [pageOffset, setPageOffset] = useState(0);
+  const pageTopRef = useRef(null);
+  const appliedFiltersRef = useRef({
+    q: mediaFilters.q || '',
+    media_type: mediaFilters.media_type || 'all',
+    tag: mediaFilters.tag || '',
+    author: mediaFilters.author || '',
+  });
   const items = mediaResults.items || [];
-  const hasMore = !exhausted && Number(mediaResults.total || 0) > items.length;
   const quick = [
     ['filename_words', 'JK'],
     ['face_merge_suggestions', 'FaceGroup'],
@@ -3224,64 +3392,57 @@ function LibraryPanel({ results, mediaResults, mediaFilters, similarityResults, 
     setMediaType(mediaFilters.media_type || 'all');
     setMediaTag(mediaFilters.tag || '');
     setMediaAuthor(mediaFilters.author || '');
-    setExhausted(false);
+    appliedFiltersRef.current = {
+      q: mediaFilters.q || '',
+      media_type: mediaFilters.media_type || 'all',
+      tag: mediaFilters.tag || '',
+      author: mediaFilters.author || '',
+    };
+    setPageOffset(0);
   }, [mediaFilters.q, mediaFilters.media_type, mediaFilters.tag, mediaFilters.author]);
   const activeFilters = [mediaType !== 'all' ? mediaType : '', mediaQuery, mediaTag, mediaAuthor].filter(Boolean);
   async function runMediaSearch(event) {
     event?.preventDefault();
-    setExhausted(false);
+    setPageOffset(0);
     setPanelError('');
     setLoadingSearch(true);
     try {
-      await loadMedia({ q: mediaQuery, media_type: mediaType, tag: mediaTag, author: mediaAuthor, limit: 64, offset: 0 });
+      const nextFilters = { q: mediaQuery, media_type: mediaType, tag: mediaTag, author: mediaAuthor };
+      appliedFiltersRef.current = nextFilters;
+      await loadMedia({ ...nextFilters, limit: MEDIA_PAGE_SIZE, offset: 0 });
     } catch (exc) {
       setPanelError(exc.message);
     } finally {
       setLoadingSearch(false);
     }
   }
-  async function loadMore() {
-    if (loadingMore || !hasMore) return;
-    setLoadingMore(true);
+  async function loadPage(nextOffset) {
+    setPanelError('');
+    setLoadingSearch(true);
     try {
-      const data = await loadMedia({ q: mediaQuery, media_type: mediaType, tag: mediaTag, author: mediaAuthor, append: true, limit: 64, offset: items.length });
+      const data = await loadMedia({ ...appliedFiltersRef.current, limit: MEDIA_PAGE_SIZE, offset: nextOffset });
       if (!data) return;
-      if (!data.items?.length || Number(data.added_count || 0) === 0) setExhausted(true);
+      setPageOffset(nextOffset);
+      requestAnimationFrame(() => pageTopRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
     } catch (exc) {
       setPanelError(exc.message);
     } finally {
-      setLoadingMore(false);
+      setLoadingSearch(false);
     }
   }
-  useEffect(() => {
-    const node = sentinelRef.current;
-    if (!node) return undefined;
-    const observer = new IntersectionObserver(entries => {
-      if (entries.some(entry => entry.isIntersecting)) loadMore();
-    }, { rootMargin: '900px 0px' });
-    const checkNearBottom = () => {
-      const remaining = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
-      if (remaining < 1200) loadMore();
-    };
-    observer.observe(node);
-    window.addEventListener('scroll', checkNearBottom, { passive: true });
-    window.addEventListener('resize', checkNearBottom);
-    window.setTimeout(checkNearBottom, 250);
-    const interval = window.setInterval(checkNearBottom, 1000);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('scroll', checkNearBottom);
-      window.removeEventListener('resize', checkNearBottom);
-      window.clearInterval(interval);
-    };
-  }, [items.length, hasMore, loadingMore, mediaQuery, mediaType, mediaTag, mediaAuthor]);
   return (
     <>
-      <section className="panel">
+      <section className="panel" ref={pageTopRef}>
         <div className="panelHead"><h2>{t.virtualLibrary}</h2><div className="panelActions"><MediaZoomControl value={mediaZoom} setValue={setMediaZoom} t={t} /><button className="panelButton" onClick={() => start('index-metadata')}><Database size={16} />{t.rebuildIndex}</button></div><span>{mediaResults.total || 0}</span></div>
         {Number(mediaResults.total || 0) === 0 && <div className="hintBox"><span>{t.noIndexHint}</span></div>}
         <form className="mediaSearchBar" onSubmit={runMediaSearch}>
-          <select value={mediaType} onChange={event => { setMediaType(event.target.value); setExhausted(false); loadMedia({ q: mediaQuery, media_type: event.target.value, tag: mediaTag, author: mediaAuthor, limit: 64, offset: 0 }).catch(exc => setPanelError(exc.message)); }}>
+          <select value={mediaType} onChange={event => {
+            const nextFilters = { q: mediaQuery, media_type: event.target.value, tag: mediaTag, author: mediaAuthor };
+            setMediaType(event.target.value);
+            setPageOffset(0);
+            appliedFiltersRef.current = nextFilters;
+            loadMedia({ ...nextFilters, limit: MEDIA_PAGE_SIZE, offset: 0 }).catch(exc => setPanelError(exc.message));
+          }}>
             <option value="all">{t.allMedia}</option>
             <option value="photo">{t.photosOnly}</option>
             <option value="video">{t.videosOnly}</option>
@@ -3292,9 +3453,9 @@ function LibraryPanel({ results, mediaResults, mediaFilters, similarityResults, 
           <button type="submit" disabled={loadingSearch}><Search size={16} />{loadingSearch ? t.loadingMore : t.searchResults}</button>
         </form>
         {activeFilters.length > 0 && <div className="hintBox smallHint"><span>{t.activeFilters}: {activeFilters.join(' / ')}</span></div>}
-        {panelError && <div className="alert compact">{panelError}</div>}
+        {panelError && <div className="alert compact" role="alert">{panelError}</div>}
         <MediaGrid items={items} loadMedia={loadMedia} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} t={t} />
-        <div className="infiniteSentinel" ref={sentinelRef}>{loadingMore ? t.loadingMore : hasMore ? t.scrollForMore : t.noMoreMedia}</div>
+        <PaginationControls offset={Number(mediaResults.offset ?? pageOffset)} total={mediaResults.total || 0} pageSize={MEDIA_PAGE_SIZE} busy={loadingSearch} onPage={loadPage} t={t} />
       </section>
       <SimilarityPanel groups={similarityResults.groups || []} start={start} refresh={loadSimilarity} t={t} />
       <section className="panel">
@@ -3419,6 +3580,8 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
     const end = Number(segment?.end ?? segment?.end_seconds ?? 0);
     return text && Number.isFinite(start) && Number.isFinite(end) && end > start && !(start === 0 && end <= 4 && text.length > 240);
   });
+  const transcriptQuality = data.transcript?.quality || {};
+  const transcriptQualityWarnings = Array.isArray(transcriptQuality.warnings) ? transcriptQuality.warnings : [];
   const hasPlayableSubtitles = data.media_type === 'video' && timedTranscriptSegments.length > 0;
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [manualTag, setManualTag] = useState('');
@@ -3678,7 +3841,7 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
           </div>
         </div>
         {loading && <div className="hintBox compact"><span>{t.loadingDetail}</span></div>}
-        {error && <div className="alert compact">{t.loadFailed}: {error}</div>}
+        {error && <div className="alert compact" role="alert">{t.loadFailed}: {error}</div>}
         <div className="viewerBody">
           <div className="viewerMedia">
             {data.media_type === 'video' ? (
@@ -3783,6 +3946,16 @@ function MediaViewer({ item, detail, loading, error, reload, onDeleted, onPatche
             )}
             <h3>{t.transcript}</h3>
             {hasPlayableSubtitles && <div className="hintBox smallHint"><span>{t.subtitles}</span><a href={`/api/media/${data.id}/subtitles.vtt?mode=original`} target="_blank" rel="noreferrer">WebVTT</a></div>}
+            {Number(transcriptQuality.cue_count || 0) > 0 && (
+              <div className={`hintBox smallHint ${transcriptQualityWarnings.length ? 'warning' : ''}`}>
+                <strong>{t.subtitleQuality}: {transcriptQualityWarnings.length ? t.subtitleQualityReview : t.subtitleQualityGood}</strong>
+                <span>
+                  {t.lowConfidenceWords} {Math.round(Number(transcriptQuality.low_confidence_word_ratio || 0) * 100)}%
+                  {' · '}{t.peakReadingSpeed} {Number(transcriptQuality.max_chars_per_second || 0).toFixed(1)}
+                  {' · '}{t.cueIssues} {Number(transcriptQuality.overlap_count || 0) + Number(transcriptQuality.repeated_cue_count || 0)}
+                </span>
+              </div>
+            )}
             {data.media_type === 'video' && data.transcript?.text && !hasPlayableSubtitles && <div className="hintBox smallHint"><span>{t.textTranscriptOnly}</span></div>}
             {timedTranscriptSegments.length > 0 ? (
               <div className="transcriptSegments">
@@ -3832,6 +4005,7 @@ function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, onDel
   const [sort, setSort] = useState('files');
   const [scope, setScope] = useState('all');
   const [view, setView] = useState('cards');
+  const [pageOffset, setPageOffset] = useState(0);
   const [selected, setSelected] = useState(null);
   const [media, setMedia] = useState({ items: [], total: 0 });
   const [collectionLoading, setCollectionLoading] = useState(false);
@@ -3867,21 +4041,23 @@ function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, onDel
         return Number(b[key] || 0) - Number(a[key] || 0) || a.name.localeCompare(b.name, 'zh-Hans-CN');
       });
   }, [authors, filter, sort, scope]);
+  const authorPage = pageWindow(pageOffset, filtered.length, AUTHOR_PAGE_SIZE);
+  const visibleAuthors = filtered.slice(authorPage.offset, authorPage.offset + AUTHOR_PAGE_SIZE);
   return (
     <>
       <section className="panel">
         <div className="panelHead"><h2>{t.authors}</h2><button className="panelButton" onClick={syncAuthors}><RefreshCw size={16} />{t.syncAuthors}</button><span>{filtered.length}/{authors.length}</span></div>
         <div className="hintBox"><span>{t.authorHint}</span></div>
         <div className="authorToolbar">
-          <input value={filter} onChange={event => setFilter(event.target.value)} placeholder={t.authorSearch} />
-          <select value={sort} onChange={event => setSort(event.target.value)} title={t.sortAuthors}>
+          <input value={filter} onChange={event => { setFilter(event.target.value); setPageOffset(0); }} placeholder={t.authorSearch} />
+          <select value={sort} onChange={event => { setSort(event.target.value); setPageOffset(0); }} title={t.sortAuthors}>
             <option value="files">{t.byFiles}</option>
             <option value="photos">{t.byPhotos}</option>
             <option value="videos">{t.byVideos}</option>
             <option value="faces">{t.byFaceGroups}</option>
             <option value="name">{t.byName}</option>
           </select>
-          <select value={scope} onChange={event => setScope(event.target.value)} title={t.filterAuthors}>
+          <select value={scope} onChange={event => { setScope(event.target.value); setPageOffset(0); }} title={t.filterAuthors}>
             <option value="all">{t.allAuthors}</option>
             <option value="with-thumb">{t.withThumb}</option>
             <option value="without-thumb">{t.withoutThumb}</option>
@@ -3892,16 +4068,17 @@ function AuthorsPanel({ authors, renameAuthor, excludeAuthor, syncAuthors, onDel
             <button className={view === 'cards' ? 'active' : ''} onClick={() => setView('cards')}>{t.cardView}</button>
             <button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}>{t.tableView}</button>
           </div>
-          <button onClick={() => { setFilter(''); setScope('all'); setSort('files'); }}><RotateCcw size={16} /></button>
+          <button onClick={() => { setFilter(''); setScope('all'); setSort('files'); setPageOffset(0); }}><RotateCcw size={16} /></button>
         </div>
       </section>
       {view === 'cards' ? (
         <section className="authorGrid">
-          {filtered.map(author => <AuthorCard author={author} key={author.name} openAuthor={openAuthor} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />)}
+          {!visibleAuthors.length ? <Empty label={t.noRows} /> : visibleAuthors.map(author => <AuthorCard author={author} key={author.name} openAuthor={openAuthor} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />)}
         </section>
       ) : (
-        <AuthorTable authors={filtered} openAuthor={openAuthor} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />
+        <AuthorTable authors={visibleAuthors} openAuthor={openAuthor} renameAuthor={renameAuthor} excludeAuthor={excludeAuthor} t={t} />
       )}
+      <PaginationControls offset={authorPage.offset} total={filtered.length} pageSize={AUTHOR_PAGE_SIZE} onPage={setPageOffset} t={t} />
       {selected && <CollectionViewer title={selected.name} subtitle={`${selected.files} ${t.media}`} loading={collectionLoading} error={collectionError} items={media.items || []} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} close={() => setSelected(null)} t={t} />}
     </>
   );
@@ -3911,19 +4088,11 @@ function AuthorCard({ author, openAuthor, renameAuthor, excludeAuthor, t }) {
   const [target, setTarget] = useState(author.name);
   useEffect(() => setTarget(author.name), [author.name]);
   return (
-    <article
-      className="authorCard clickableCard"
-      role="button"
-      tabIndex={0}
-      aria-label={`${t.showMedia}: ${author.name}`}
-      onClick={() => openAuthor(author)}
-      onKeyDown={event => {
-        if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
-        event.preventDefault();
-        openAuthor(author);
-      }}
-    >
-      <div className="authorThumb"><span>{author.name.slice(0, 2)}</span><img src={`${author.thumbnail_url}?v=${encodeURIComponent(author.files)}`} alt={author.name} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} /></div>
+    <article className="authorCard">
+      <button type="button" className="authorThumb cardOpenButton" aria-label={`${t.showMedia}: ${author.name}`} onClick={() => openAuthor(author)}>
+        <span>{author.name.slice(0, 2)}</span>
+        <img src={`${author.thumbnail_url}?v=${encodeURIComponent(author.files)}`} alt={author.name} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} />
+      </button>
       <div className="authorMeta">
         <strong>{author.name}</strong>
         <div className="faceStats"><span>{author.files} {t.media}</span><span>{author.photos} {t.photos}</span><span>{author.videos} {t.videos}</span><span>{author.face_groups || 0} FaceGroups</span></div>
@@ -3974,6 +4143,10 @@ function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFa
   const [media, setMedia] = useState({ items: [], total: 0 });
   const [collectionLoading, setCollectionLoading] = useState(false);
   const [collectionError, setCollectionError] = useState('');
+  const [suggestionLimit, setSuggestionLimit] = useState(12);
+  const [faceLimit, setFaceLimit] = useState(60);
+  const visibleSuggestions = suggestions.slice(0, suggestionLimit);
+  const visibleFaces = faces.slice(0, faceLimit);
   async function openFace(face) {
     setSelected(face);
     setMedia({ items: [], total: 0 });
@@ -3991,13 +4164,23 @@ function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFa
   return (
     <>
       <section className="panel">
-        <div className="panelHead"><h2>{t.faceMergeSuggestions}</h2><span>{suggestions.length}</span></div>
+        <div className="panelHead"><h2>{t.faceMergeSuggestions}</h2><span>{t.shown} {visibleSuggestions.length} / {suggestions.length}</span></div>
         <div className="hintBox"><span>{t.faceMergeHelp}</span></div>
-        {!suggestions.length ? <Empty label={t.noRows} /> : <div className="mergeGrid">{suggestions.slice(0, 40).map(item => <MergeCard item={item} key={`${item.left_group}-${item.right_group}`} mergeFace={mergeFace} t={t} />)}</div>}
+        {!suggestions.length ? <Empty label={t.noRows} /> : (
+          <>
+            <div className="mergeGrid">{visibleSuggestions.map(item => <MergeCard item={item} key={`${item.left_group}-${item.right_group}`} mergeFace={mergeFace} t={t} />)}</div>
+            {visibleSuggestions.length < suggestions.length && <button type="button" className="reviewLoadMore" onClick={() => setSuggestionLimit(current => current + 12)}>{t.showMoreSuggestions}<span>{suggestions.length - visibleSuggestions.length}</span></button>}
+          </>
+        )}
       </section>
       <section className="panel">
-        <div className="panelHead"><h2>{t.faces}</h2><button className="panelButton" onClick={() => mergeNamedFaces('')}><Users size={16} />{t.mergeSameName}</button><span>{faces.length}</span></div>
-        {!faces.length ? <Empty label={t.noRows} /> : <div className="faceGrid">{faces.map(face => <FaceCard face={face} key={face.face_group} openFace={openFace} nameFace={nameFace} t={t} />)}</div>}
+        <div className="panelHead"><h2>{t.faces}</h2><button className="panelButton" onClick={() => mergeNamedFaces('')}><Users size={16} />{t.mergeSameName}</button><span>{t.shown} {visibleFaces.length} / {faces.length}</span></div>
+        {!faces.length ? <Empty label={t.noRows} /> : (
+          <>
+            <div className="faceGrid">{visibleFaces.map(face => <FaceCard face={face} key={face.face_group} openFace={openFace} nameFace={nameFace} t={t} />)}</div>
+            {visibleFaces.length < faces.length && <button type="button" className="reviewLoadMore" onClick={() => setFaceLimit(current => current + 60)}>{t.showMoreFaces}<span>{faces.length - visibleFaces.length}</span></button>}
+          </>
+        )}
       </section>
       {selected && <CollectionViewer title={selected.actor_name || selected.face_group} subtitle={selected.face_group} loading={collectionLoading} error={collectionError} items={media.items || []} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} close={() => setSelected(null)} t={t} />}
     </>
@@ -4007,6 +4190,7 @@ function FaceGroupsPanel({ faces, suggestions, nameFace, mergeFace, mergeNamedFa
 function MergeCard({ item, mergeFace, t }) {
   const left = item.left_group;
   const right = item.right_group;
+  const distance = formatFaceDistance(item.distance);
   return (
     <article className="mergeCard">
       <div className="mergeThumbs">
@@ -4014,9 +4198,12 @@ function MergeCard({ item, mergeFace, t }) {
         <div><img src={`/api/face-groups/${right}/thumbnail`} alt={right} loading="lazy" /><span>{right}</span></div>
       </div>
       <div className="mergeMeta">
-        <strong>{Number(item.distance || 0).toFixed(6)}</strong>
-        <button onClick={() => mergeFace(right, left)}>{t.mergeIntoLeft}</button>
-        <button onClick={() => mergeFace(left, right)}>{t.mergeIntoRight}</button>
+        <div className="mergeScore" title={t.faceDistanceHelp}>
+          <strong>{t.faceDistance} {distance}</strong>
+          <span>{t.faceDistanceHelp}</span>
+        </div>
+        <button title={`${right} → ${left}`} onClick={() => mergeFace(right, left)}><strong>{t.keepLeftGroup}</strong><small>{right} → {left}</small></button>
+        <button title={`${left} → ${right}`} onClick={() => mergeFace(left, right)}><strong>{t.keepRightGroup}</strong><small>{left} → {right}</small></button>
       </div>
     </article>
   );
@@ -4026,19 +4213,10 @@ function FaceCard({ face, openFace, nameFace, t }) {
   const [actor, setActor] = useState(face.actor_name || '');
   useEffect(() => setActor(face.actor_name || ''), [face.actor_name]);
   return (
-    <article
-      className="faceCard clickableCard"
-      role="button"
-      tabIndex={0}
-      aria-label={`${t.showMedia}: ${face.actor_name || face.face_group}`}
-      onClick={() => openFace(face)}
-      onKeyDown={event => {
-        if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
-        event.preventDefault();
-        openFace(face);
-      }}
-    >
-      <div className="thumb"><img src={`${face.thumbnail_url}?v=${encodeURIComponent(face.representative_frame || '')}`} alt={face.face_group} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} /></div>
+    <article className="faceCard">
+      <button type="button" className="thumb cardOpenButton" aria-label={`${t.showMedia}: ${face.actor_name || face.face_group}`} onClick={() => openFace(face)}>
+        <img src={`${face.thumbnail_url}?v=${encodeURIComponent(face.representative_frame || '')}`} alt={face.face_group} loading="lazy" onError={event => { event.currentTarget.style.display = 'none'; }} />
+      </button>
       <div className="faceMeta">
         <strong>{face.face_group}</strong>
         <span>{face.actor_name ? `${t.namedAs}: ${face.actor_name}` : t.unnamed}</span>
@@ -4053,14 +4231,39 @@ function FaceCard({ face, openFace, nameFace, t }) {
 }
 
 function CollectionViewer({ title, subtitle, items, loading, error, onDeleted, onPatched, mediaZoom, close, t }) {
+  const panelRef = useRef(null);
+  const closeButtonRef = useRef(null);
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    closeButtonRef.current?.focus();
+    const onKeyDown = event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [...(panelRef.current?.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus?.();
+    };
+  }, []);
   return (
     <ModalPortal>
-    <div className="viewerBackdrop" role="dialog" aria-modal="true">
-      <div className="viewerPanel collectionPanel">
-        <div className="viewerHead"><div><h2>{title}</h2><p>{subtitle}</p></div><button className="iconButton" onClick={close}><XCircle size={18} /></button></div>
+    <div className="viewerBackdrop" role="dialog" aria-modal="true" aria-label={title} onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
+      <div className="viewerPanel collectionPanel" ref={panelRef}>
+        <div className="viewerHead"><div><h2>{title}</h2><p>{subtitle}</p></div><button className="iconButton" ref={closeButtonRef} aria-label={t.close || 'Close'} title={t.close || 'Close'} onClick={close}><XCircle size={18} /></button></div>
         <div className="collectionBody">
           {loading && <div className="hintBox compact"><span>{t.loadingMore}</span></div>}
-          {error && <div className="alert compact">{t.loadFailed}: {error}</div>}
+          {error && <div className="alert compact" role="alert">{t.loadFailed}: {error}</div>}
           {!loading && <MediaGrid items={items} onDeleted={onDeleted} onPatched={onPatched} mediaZoom={mediaZoom} t={t} />}
         </div>
       </div>
@@ -4225,10 +4428,11 @@ function ModelsPanel({ catalog, drafts, setDrafts, manifestDraft, setManifestDra
   );
 }
 
-function SettingsPanel({ settings, setSettings, saveSettings, changePassword, browse, directories, browsePath, monitor, checkMonitorNow, t }) {
+function SettingsPanel({ settings, setSettings, saveSettings, changePassword, browse, directories, browsePath, setBrowsePath, monitor, checkMonitorNow, t }) {
   const [passwords, setPasswords] = useState({ current: '', next: '', confirm: '' });
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordError, setPasswordError] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const cfg = settings || {
     media_root: '/media',
     output_root: '/media',
@@ -4254,6 +4458,7 @@ function SettingsPanel({ settings, setSettings, saveSettings, changePassword, br
     transcript_engine: 'auto',
     subtitle_max_chars: 24,
     subtitle_max_seconds: 7,
+    subtitle_min_seconds: 0.8,
     subtitle_max_gap: 0.8,
     audio_tag_mode: 'sensevoice-sample',
     audio_tag_sample_seconds: 30,
@@ -4280,6 +4485,8 @@ function SettingsPanel({ settings, setSettings, saveSettings, changePassword, br
           <label>{t.mediaRoot}<input value={cfg.media_root || ''} onChange={event => update('media_root', event.target.value)} /></label>
           <label>{t.outputRoot}<input value={cfg.output_root || ''} onChange={event => update('output_root', event.target.value)} /></label>
           <label>{t.sourceDirs}<input value={cfg.source_dirs || ''} onChange={event => update('source_dirs', event.target.value)} placeholder="photos,photos2,videos,videos2" /><small>{t.sourceDirsHint}</small></label>
+          <button type="button" className="settingsModeButton" aria-expanded={showAdvanced} onClick={() => setShowAdvanced(value => !value)}>{showAdvanced ? t.hideAdvancedSettings : t.advancedSettings}</button>
+          <div className={`advancedSettingsFields ${showAdvanced ? 'open' : ''}`} hidden={!showAdvanced}>
           <div className="formSectionTitle">{t.hardware}</div>
           <label><FieldLabel label={t.computeDevice} help={t.settingHelp?.computeDevice} /><select value={cfg.compute_device || 'auto'} onChange={event => update('compute_device', event.target.value)}><option value="auto">{t.auto}</option><option value="gpu">{t.gpuPreferred}</option><option value="cpu">{t.cpuOnly}</option></select><small>{t.gpuHint}</small></label>
           <label><FieldLabel label={t.ffmpegHwaccel} help={t.settingHelp?.ffmpegHwaccel} /><select value={cfg.ffmpeg_hwaccel || 'auto'} onChange={event => update('ffmpeg_hwaccel', event.target.value)}><option value="auto">{t.auto}</option><option value="vaapi">VAAPI</option><option value="qsv">Intel QSV</option><option value="none">{t.ffmpegNone}</option></select></label>
@@ -4309,8 +4516,10 @@ function SettingsPanel({ settings, setSettings, saveSettings, changePassword, br
           <label>{t.whisperPrompt}<input value={cfg.whisper_initial_prompt || ''} onChange={event => update('whisper_initial_prompt', event.target.value)} placeholder="人名、频道名、常见专有词" /></label>
           <label>{t.subtitleMaxChars}<input type="number" min="8" max="80" value={cfg.subtitle_max_chars ?? 24} onChange={event => update('subtitle_max_chars', event.target.value)} /></label>
           <label>{t.subtitleMaxSeconds}<input type="number" min="1" max="20" step="0.5" value={cfg.subtitle_max_seconds ?? 7} onChange={event => update('subtitle_max_seconds', event.target.value)} /></label>
+          <label>{t.subtitleMinSeconds}<input type="number" min="0.4" max="4" step="0.1" value={cfg.subtitle_min_seconds ?? 0.8} onChange={event => update('subtitle_min_seconds', event.target.value)} /></label>
           <label>{t.subtitleMaxGap}<input type="number" min="0.1" max="5" step="0.1" value={cfg.subtitle_max_gap ?? 0.8} onChange={event => update('subtitle_max_gap', event.target.value)} /></label>
           <label><FieldLabel label={t.transcribeMaxSeconds} help={t.settingHelp?.transcribeMaxSeconds} /><input type="number" min="0" max="86400" value={cfg.transcribe_max_seconds ?? 0} onChange={event => update('transcribe_max_seconds', event.target.value)} /><small>{t.transcribeFullHint}</small></label>
+          </div>
           <div className="formSectionTitle">{t.monitor}</div>
           <label className="checkLine"><input type="checkbox" checked={!!cfg.monitor_enabled} onChange={event => update('monitor_enabled', event.target.checked)} />{t.monitorEnabled}</label>
           <label>{t.monitorDirs}<input value={cfg.monitor_dirs || ''} onChange={event => update('monitor_dirs', event.target.value)} placeholder={cfg.source_dirs || 'photos,photos2,videos,videos2'} /><small>{t.monitorDirsHint}</small></label>
@@ -4321,7 +4530,10 @@ function SettingsPanel({ settings, setSettings, saveSettings, changePassword, br
       </div>
       <div className="panel">
         <div className="panelHead"><h2>{t.directories}</h2><span>{browsePath}</span></div>
-        <div className="browseBar"><input value={browsePath} onChange={event => browse(event.target.value)} /><button onClick={() => browse(browsePath)}><FolderOpen size={16} />{t.browse}</button></div>
+        <form className="browseBar" onSubmit={event => { event.preventDefault(); browse(browsePath); }}>
+          <input value={browsePath} onChange={event => setBrowsePath(event.target.value)} aria-label={t.currentPath} />
+          <button type="submit"><FolderOpen size={16} />{t.browse}</button>
+        </form>
         <div className="dirList">{(cfg.browse_roots || []).map(path => <button key={path} onClick={() => browse(path)}>{path}</button>)}{directories.map(dir => <button key={dir.path} onClick={() => browse(dir.path)}><Folder size={15} />{dir.name}</button>)}</div>
       </div>
       <div className="panel">

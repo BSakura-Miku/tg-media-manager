@@ -17,11 +17,11 @@ import time
 from collections import defaultdict
 from io import StringIO
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Callable
 
 from .db import connect, get_settings, init_db
-from .subtitles import contains_translation, normalize_language_code, regroup_word_segments
+from .subtitles import contains_translation, normalize_language_code, regroup_word_segments, subtitle_quality_report
 
 try:
     from PIL import Image
@@ -806,10 +806,34 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
             """,
             (str(root),),
         ).fetchone()
-        tagged = conn.execute("SELECT COUNT(DISTINCT media_id) AS count FROM media_tags").fetchone()["count"]
-        transcripts = conn.execute("SELECT COUNT(DISTINCT media_id) AS count FROM media_transcripts").fetchone()["count"]
+        tagged = conn.execute(
+            """
+            SELECT COUNT(DISTINCT t.media_id) AS count
+            FROM media_tags t
+            JOIN media_items m ON m.id=t.media_id
+            WHERE m.root=?
+            """,
+            (str(root),),
+        ).fetchone()["count"]
+        transcripts = conn.execute(
+            """
+            SELECT COUNT(DISTINCT tr.media_id) AS count
+            FROM media_transcripts tr
+            JOIN media_items m ON m.id=tr.media_id
+            WHERE m.root=?
+            """,
+            (str(root),),
+        ).fetchone()["count"]
         timed_transcripts = 0
-        for row in conn.execute("SELECT segments_json FROM media_transcripts"):
+        for row in conn.execute(
+            """
+            SELECT tr.segments_json
+            FROM media_transcripts tr
+            JOIN media_items m ON m.id=tr.media_id
+            WHERE m.root=?
+            """,
+            (str(root),),
+        ):
             try:
                 segments = json.loads(row["segments_json"] or "[]")
             except Exception:
@@ -825,8 +849,38 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
             """,
             (str(root),),
         ).fetchone()["count"]
-        vision_labels = conn.execute("SELECT COUNT(DISTINCT media_id) AS count FROM media_tags WHERE source IN ('vision', 'openclip', 'calibrated-vision') OR category IN ('scene_environment', 'clothing_style', 'shooting_method', 'content_type', 'vision')").fetchone()["count"]
-        embeddings = conn.execute("SELECT kind, COUNT(DISTINCT media_id) AS count FROM media_embeddings GROUP BY kind").fetchall()
+        vision_labels = conn.execute(
+            """
+            SELECT COUNT(DISTINCT t.media_id) AS count
+            FROM media_tags t
+            JOIN media_items m ON m.id=t.media_id
+            WHERE m.root=? AND (
+                t.source IN ('vision', 'openclip', 'calibrated-vision')
+                OR t.category IN ('scene_environment', 'clothing_style', 'shooting_method', 'content_type', 'vision')
+            )
+            """,
+            (str(root),),
+        ).fetchone()["count"]
+        embeddings = conn.execute(
+            """
+            SELECT e.kind, COUNT(DISTINCT e.media_id) AS count
+            FROM media_embeddings e
+            JOIN media_items m ON m.id=e.media_id
+            WHERE m.root=?
+            GROUP BY e.kind
+            """,
+            (str(root),),
+        ).fetchall()
+        transcription_states = conn.execute(
+            """
+            SELECT ts.status, COUNT(*) AS count
+            FROM media_transcription_state ts
+            JOIN media_items m ON m.id=ts.media_id
+            WHERE m.root=?
+            GROUP BY ts.status
+            """,
+            (str(root),),
+        ).fetchall()
         failed_jobs = conn.execute(
             """
             SELECT id, command, status, message, stage, failed_count, finished_at, stderr
@@ -842,8 +896,11 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
                 COUNT(*) AS total,
                 SUM(CASE WHEN probe_status IN ('ok', 'partial') THEN 1 ELSE 0 END) AS ok,
                 SUM(CASE WHEN probe_status='failed' THEN 1 ELSE 0 END) AS failed
-            FROM media_metadata
-            """
+            FROM media_metadata mm
+            JOIN media_items m ON m.id=mm.media_id
+            WHERE m.root=?
+            """,
+            (str(root),),
         ).fetchone()
     total = int(totals["total"] or 0)
     videos = int(totals["videos"] or 0)
@@ -876,6 +933,9 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
     except Exception as exc:
         missing_models = [{"id": "model_catalog", "name": "Model catalog", "category": "system", "status": "error", "error": str(exc)}]
     embedding_counts = {str(row["kind"]): int(row["count"] or 0) for row in embeddings}
+    transcription_state_counts = {
+        str(row["status"]): int(row["count"] or 0) for row in transcription_states
+    }
     coverage = [
         {
             "id": "dimensions",
@@ -999,6 +1059,22 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
                 "detail": f"{item['ready']}/{item['total']} indexed. Run {item['action']} to fill missing data.",
                 "command": item["action"],
             })
+    transcription_failures = (
+        transcription_state_counts.get("retry", 0)
+        + transcription_state_counts.get("permanent_failure", 0)
+    )
+    if transcription_failures:
+        recommendations.append(
+            {
+                "level": "warning",
+                "title": f"{transcription_failures} transcription item(s) need attention",
+                "detail": (
+                    f"{transcription_state_counts.get('retry', 0)} deferred for retry; "
+                    f"{transcription_state_counts.get('permanent_failure', 0)} marked permanent."
+                ),
+                "command": "transcribe",
+            }
+        )
     return {
         "root": str(root),
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1015,6 +1091,7 @@ def media_index_diagnostics(root: Path | None = None) -> dict:
             "timed_transcripts": int(timed_transcripts or 0),
             "subtitle_files": int(subtitle_count),
             "vision_labels": int(vision_labels or 0),
+            "transcription_states": transcription_state_counts,
         },
         "models": {
             "missing": missing_models,
@@ -2631,10 +2708,29 @@ def rebuild_semantic_index(
                             (row["id"], row_text_kind, row_text_model, len(vector), pack_vector(vector), stored_text),
                         )
                         text_kind, text_model = row_text_kind, row_text_model
+                    else:
+                        conn.execute(
+                            """
+                            DELETE FROM media_embeddings
+                            WHERE media_id=?
+                              AND kind IN ('text', 'bge_text')
+                              AND NOT (kind=? AND model=?)
+                            """,
+                            (row["id"], text_kind, text_model),
+                        )
                     text_count += 1
+                else:
+                    conn.execute(
+                        "DELETE FROM media_embeddings WHERE media_id=? AND kind IN ('text', 'bge_text')",
+                        (row["id"],),
+                    )
                 if tags:
                     tag_text = " ".join(tags)
                     vector = hashed_text_vector(tag_text)
+                    conn.execute(
+                        "DELETE FROM media_embeddings WHERE media_id=? AND kind='tag'",
+                        (row["id"],),
+                    )
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
@@ -2642,8 +2738,17 @@ def rebuild_semantic_index(
                         """,
                         (row["id"], len(vector), pack_vector(vector), tag_text[:4000]),
                     )
+                else:
+                    conn.execute(
+                        "DELETE FROM media_embeddings WHERE media_id=? AND kind='tag'",
+                        (row["id"],),
+                    )
                 if transcript.strip():
                     vector = hashed_text_vector(transcript)
+                    conn.execute(
+                        "DELETE FROM media_embeddings WHERE media_id=? AND kind='subtitle'",
+                        (row["id"],),
+                    )
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
@@ -2651,10 +2756,19 @@ def rebuild_semantic_index(
                         """,
                         (row["id"], len(vector), pack_vector(vector), transcript[:4000]),
                     )
+                else:
+                    conn.execute(
+                        "DELETE FROM media_embeddings WHERE media_id=? AND kind='subtitle'",
+                        (row["id"],),
+                    )
             if mode in {"all", "vision"}:
                 visual_sig = visual_signature_for_media(root, row, conn)
                 visual_vector = hash_bits_vector(visual_sig)
                 if visual_vector:
+                    conn.execute(
+                        "DELETE FROM media_embeddings WHERE media_id=? AND kind='image'",
+                        (row["id"],),
+                    )
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO media_embeddings (media_id, kind, model, dim, vector, text, updated_at)
@@ -2663,6 +2777,11 @@ def rebuild_semantic_index(
                         (row["id"], len(visual_vector), pack_vector(visual_vector), visual_sig[:256]),
                     )
                     visual_count += 1
+                else:
+                    conn.execute(
+                        "DELETE FROM media_embeddings WHERE media_id=? AND kind='image'",
+                        (row["id"],),
+                    )
             processed += 1
             if processed % 100 == 0:
                 conn.commit()
@@ -2913,7 +3032,23 @@ def media_detail(media_id: int) -> dict | None:
             (media_id,),
         ).fetchall()
         ops = conn.execute("SELECT operation, detail, created_at FROM media_operations WHERE media_id=? OR media_id IS NULL ORDER BY id DESC LIMIT 30", (media_id,)).fetchall()
-        transcript = conn.execute("SELECT language, text, segments_json, model, source, updated_at FROM media_transcripts WHERE media_id=?", (media_id,)).fetchone()
+        transcript = conn.execute(
+            """
+            SELECT language, text, segments_json, model, source, quality_json, updated_at
+            FROM media_transcripts
+            WHERE media_id=?
+            """,
+            (media_id,),
+        ).fetchone()
+        transcription_state = conn.execute(
+            """
+            SELECT status, attempt_count, engine, model, last_error, next_retry_at,
+                   started_at, finished_at, updated_at
+            FROM media_transcription_state
+            WHERE media_id=?
+            """,
+            (media_id,),
+        ).fetchone()
     data = dict(row)
     data.update(original_source_for_media(data))
     if data.get("display_original_name"):
@@ -2928,7 +3063,13 @@ def media_detail(media_id: int) -> dict | None:
             transcript_data["segments"] = json.loads(transcript_data.pop("segments_json") or "[]")
         except Exception:
             transcript_data["segments"] = []
+        try:
+            transcript_data["quality"] = json.loads(transcript_data.pop("quality_json") or "{}")
+        except Exception:
+            transcript_data["quality"] = {}
         data["transcript"] = transcript_data
+    if transcription_state is not None:
+        data["transcription_state"] = dict(transcription_state)
     data["contact_sheet"] = contact_sheet_for_media(data)
     return data
 
@@ -3446,6 +3587,16 @@ def transcribe_with_faster_whisper(
     offset_seconds: float = 0.0,
 ) -> dict:
     beam_size = configured_int("WHISPER_BEAM_SIZE", 5, 1, 10)
+    vad_threshold = configured_float("WHISPER_VAD_THRESHOLD", 0.5, 0.1, 0.95)
+    min_silence_ms = configured_int("WHISPER_MIN_SILENCE_MS", 500, 100, 5000)
+    no_speech_threshold = configured_float("WHISPER_NO_SPEECH_THRESHOLD", 0.6, 0.1, 0.95)
+    log_prob_threshold = configured_float("WHISPER_LOG_PROB_THRESHOLD", -1.0, -5.0, 0.0)
+    compression_ratio_threshold = configured_float(
+        "WHISPER_COMPRESSION_RATIO_THRESHOLD",
+        2.4,
+        1.0,
+        10.0,
+    )
     language = (os.environ.get("WHISPER_LANGUAGE", "") or "").strip() or None
     initial_prompt = (os.environ.get("WHISPER_INITIAL_PROMPT", "") or "").strip()
     options: dict = {
@@ -3453,6 +3604,13 @@ def transcribe_with_faster_whisper(
         "word_timestamps": True,
         "vad_filter": True,
         "condition_on_previous_text": configured_bool("WHISPER_CONDITION_ON_PREVIOUS_TEXT", True),
+        "vad_parameters": {
+            "threshold": vad_threshold,
+            "min_silence_duration_ms": min_silence_ms,
+        },
+        "no_speech_threshold": no_speech_threshold,
+        "log_prob_threshold": log_prob_threshold,
+        "compression_ratio_threshold": compression_ratio_threshold,
     }
     if language:
         options["language"] = language
@@ -3485,9 +3643,11 @@ def transcribe_with_faster_whisper(
         max_chars=configured_int("SUBTITLE_MAX_CHARS", 24, 8, 80),
         max_seconds=configured_float("SUBTITLE_MAX_SECONDS", 7.0, 1.0, 20.0),
         max_gap=configured_float("SUBTITLE_MAX_GAP", 0.8, 0.1, 5.0),
+        min_seconds=configured_float("SUBTITLE_MIN_SECONDS", 0.8, 0.4, 4.0),
         offset_seconds=offset_seconds,
     )
     text = "\n".join(item["text"] for item in segments)
+    quality = subtitle_quality_report(segments, detected_language)
     return {
         "ok": True,
         "text": text,
@@ -3496,11 +3656,18 @@ def transcribe_with_faster_whisper(
         "segments": segments,
         "engine": engine,
         "model": model_name,
+        "quality": quality,
         "parameters": {
             "beam_size": beam_size,
             "word_timestamps": True,
             "stable_timestamps": stable_timestamps,
             "offset_seconds": round(offset_seconds, 3),
+            "vad_threshold": vad_threshold,
+            "min_silence_ms": min_silence_ms,
+            "no_speech_threshold": no_speech_threshold,
+            "log_prob_threshold": log_prob_threshold,
+            "compression_ratio_threshold": compression_ratio_threshold,
+            "quality": quality,
         },
     }
 
@@ -3557,6 +3724,29 @@ def timed_transcript_segments(segments: list[dict]) -> list[dict]:
     return out
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def write_subtitle_files(conn, media_id: int, segments: list[dict], text: str) -> bool:
     timed = timed_transcript_segments(segments)
     if not timed:
@@ -3565,12 +3755,13 @@ def write_subtitle_files(conn, media_id: int, segments: list[dict], text: str) -
     root = Path(row["root"]) if row and row["root"] else output_root()
     out_dir = subtitle_dir(root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{media_id}.vtt").write_text(transcript_to_vtt(timed, text, "original"), encoding="utf-8")
+    original_path = out_dir / f"{media_id}.vtt"
     bilingual_path = out_dir / f"{media_id}.bilingual.vtt"
     if contains_translation(timed):
-        bilingual_path.write_text(transcript_to_vtt(timed, text, "bilingual"), encoding="utf-8")
+        atomic_write_text(bilingual_path, transcript_to_vtt(timed, text, "bilingual"))
     else:
         bilingual_path.unlink(missing_ok=True)
+    atomic_write_text(original_path, transcript_to_vtt(timed, text, "original"))
     return True
 
 
@@ -3625,38 +3816,53 @@ def save_transcript(conn, media_id: int, result: dict, model_name: str, include_
     language = str(result.get("language") or "")
     segments = result.get("segments") or []
     engine = str(result.get("engine") or "unknown")
-    conn.execute(
-        """
-        INSERT INTO media_transcripts (media_id, language, text, segments_json, model, source, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(media_id) DO UPDATE SET
-            language=excluded.language,
-            text=excluded.text,
-            segments_json=excluded.segments_json,
-            model=excluded.model,
-            source=excluded.source,
-            updated_at=CURRENT_TIMESTAMP
-        """,
-        (media_id, language, text, json.dumps(segments, ensure_ascii=False), model_name, engine),
-    )
-    conn.execute("DELETE FROM media_tags WHERE media_id=? AND source IN ('audio', 'sensevoice-gguf', 'faster-whisper', 'stable-faster-whisper', 'transcript', 'sensevoice-audio', 'funasr-nano-onnx')", (media_id,))
-    if include_text_tags:
-        tag_text = str(result.get("tag_text") or text)
-        tag_source = "sensevoice-audio" if engine == "sensevoice-gguf" else "transcript"
-        save_audio_tags(conn, media_id, tag_text, language, tag_source, replace=False)
-    conn.execute(
-        "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'transcribe', ?)",
-        (
-            media_id,
-            f"segments={len(segments)} model={model_name} engine={engine} "
-            f"parameters={json.dumps(result.get('parameters') or {}, ensure_ascii=False, separators=(',', ':'))}",
-        ),
-    )
+    conn.execute("SAVEPOINT save_transcript")
     try:
+        conn.execute(
+            """
+            INSERT INTO media_transcripts (
+                media_id, language, text, segments_json, model, source, quality_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(media_id) DO UPDATE SET
+                language=excluded.language,
+                text=excluded.text,
+                segments_json=excluded.segments_json,
+                model=excluded.model,
+                source=excluded.source,
+                quality_json=excluded.quality_json,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                media_id,
+                language,
+                text,
+                json.dumps(segments, ensure_ascii=False),
+                model_name,
+                engine,
+                json.dumps(result.get("quality") or {}, ensure_ascii=False, separators=(",", ":")),
+            ),
+        )
+        conn.execute("DELETE FROM media_tags WHERE media_id=? AND source IN ('audio', 'sensevoice-gguf', 'faster-whisper', 'stable-faster-whisper', 'transcript', 'sensevoice-audio', 'funasr-nano-onnx')", (media_id,))
+        if include_text_tags:
+            tag_text = str(result.get("tag_text") or text)
+            tag_source = "sensevoice-audio" if engine == "sensevoice-gguf" else "transcript"
+            save_audio_tags(conn, media_id, tag_text, language, tag_source, replace=False)
+        conn.execute(
+            "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'transcribe', ?)",
+            (
+                media_id,
+                f"segments={len(segments)} model={model_name} engine={engine} "
+                f"parameters={json.dumps(result.get('parameters') or {}, ensure_ascii=False, separators=(',', ':'))}",
+            ),
+        )
         if not write_subtitle_files(conn, media_id, segments, text):
             remove_subtitle_files(conn, media_id)
-    except OSError:
-        pass
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT save_transcript")
+        conn.execute("RELEASE SAVEPOINT save_transcript")
+        raise
+    conn.execute("RELEASE SAVEPOINT save_transcript")
 
 
 def transcript_needs_timed_rerun(segments_json: str | None, text: str | None = "", source: str | None = "") -> bool:
@@ -3669,22 +3875,177 @@ def transcript_needs_timed_rerun(segments_json: str | None, text: str | None = "
     return not bool(timed_transcript_segments(segments if isinstance(segments, list) else []))
 
 
+def transcription_fingerprint(row: object) -> str:
+    def value(name: str, default: object = "") -> object:
+        try:
+            return row[name]  # type: ignore[index]
+        except (KeyError, TypeError, IndexError):
+            return default
+
+    media_identity = str(value("sha256") or "").strip() or (
+        f"{value('path')}:{value('size_bytes', 0)}:{value('mtime', 0)}"
+    )
+    engine = (os.environ.get("TRANSCRIPT_ENGINE") or os.environ.get("ASR_ENGINE", "auto")).strip().lower()
+    engine = {
+        "whisper": "faster-whisper",
+        "stable-whisper": "stable-faster-whisper",
+        "stable-ts": "stable-faster-whisper",
+        "sensevoice": "sensevoice-gguf",
+        "funasr-nano": "funasr-nano-onnx",
+    }.get(engine, engine)
+    configuration = {
+        "pipeline_version": 2,
+        "media": media_identity,
+        "engine": engine,
+        "model": os.environ.get("WHISPER_MODEL", "medium").strip(),
+        "compute_type": os.environ.get("WHISPER_COMPUTE_TYPE", "int8").strip().lower(),
+        "beam_size": configured_int("WHISPER_BEAM_SIZE", 5, 1, 10),
+        "language": os.environ.get("WHISPER_LANGUAGE", "").strip().lower(),
+        "prompt": os.environ.get("WHISPER_INITIAL_PROMPT", ""),
+        "stable": configured_bool("WHISPER_STABLE_TIMESTAMPS", True),
+        "condition_on_previous_text": configured_bool("WHISPER_CONDITION_ON_PREVIOUS_TEXT", True),
+        "vad_threshold": configured_float("WHISPER_VAD_THRESHOLD", 0.5, 0.1, 0.95),
+        "min_silence_ms": configured_int("WHISPER_MIN_SILENCE_MS", 500, 100, 5000),
+        "no_speech_threshold": configured_float("WHISPER_NO_SPEECH_THRESHOLD", 0.6, 0.1, 0.95),
+        "log_prob_threshold": configured_float("WHISPER_LOG_PROB_THRESHOLD", -1.0, -5.0, 0.0),
+        "compression_ratio_threshold": configured_float(
+            "WHISPER_COMPRESSION_RATIO_THRESHOLD", 2.4, 1.0, 10.0
+        ),
+        "transcribe_max_seconds": configured_seconds("TRANSCRIBE_MAX_SECONDS", 0),
+        "generate_timed_subtitles": configured_bool("GENERATE_TIMED_SUBTITLES", True),
+        "max_chars": configured_int("SUBTITLE_MAX_CHARS", 24, 8, 80),
+        "max_seconds": configured_float("SUBTITLE_MAX_SECONDS", 7.0, 1.0, 20.0),
+        "min_seconds": configured_float("SUBTITLE_MIN_SECONDS", 0.8, 0.4, 4.0),
+        "max_gap": configured_float("SUBTITLE_MAX_GAP", 0.8, 0.1, 5.0),
+        "funasr_model": os.environ.get("FUNASR_NANO_MODEL_DIR", "").strip(),
+        "funasr_command": os.environ.get("FUNASR_NANO_COMMAND", "").strip(),
+        "sensevoice_model": os.environ.get("SENSEVOICE_GGUF_MODEL", "").strip(),
+        "sensevoice_command": os.environ.get("SENSEVOICE_GGUF_COMMAND", "").strip(),
+    }
+    payload = json.dumps(configuration, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def record_transcription_started(conn, media_id: int, fingerprint: str, engine: str, model: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO media_transcription_state (
+            media_id, fingerprint, status, attempt_count, engine, model,
+            last_error, next_retry_at, started_at, finished_at, updated_at
+        )
+        VALUES (?, ?, 'running', 1, ?, ?, '', 0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP)
+        ON CONFLICT(media_id) DO UPDATE SET
+            fingerprint=excluded.fingerprint,
+            status='running',
+            attempt_count=CASE
+                WHEN media_transcription_state.fingerprint=excluded.fingerprint
+                THEN media_transcription_state.attempt_count + 1
+                ELSE 1
+            END,
+            engine=excluded.engine,
+            model=excluded.model,
+            last_error='',
+            next_retry_at=0,
+            started_at=CURRENT_TIMESTAMP,
+            finished_at=NULL,
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        (media_id, fingerprint, engine, model),
+    )
+
+
+def record_transcription_failure(
+    conn,
+    media_id: int,
+    fingerprint: str,
+    error: object,
+    *,
+    permanent: bool = False,
+) -> None:
+    row = conn.execute(
+        "SELECT attempt_count FROM media_transcription_state WHERE media_id=? AND fingerprint=?",
+        (media_id, fingerprint),
+    ).fetchone()
+    attempt = max(1, int(row["attempt_count"] if row else 1))
+    retry_at = 0 if permanent else int(time.time()) + min(86_400, 300 * (2 ** min(attempt - 1, 8)))
+    conn.execute(
+        """
+        UPDATE media_transcription_state
+        SET status=?, last_error=?, next_retry_at=?, finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+        WHERE media_id=? AND fingerprint=?
+        """,
+        (
+            "permanent_failure" if permanent else "retry",
+            str(error or "unknown transcription error")[:2000],
+            retry_at,
+            media_id,
+            fingerprint,
+        ),
+    )
+
+
+def record_transcription_succeeded(
+    conn,
+    media_id: int,
+    fingerprint: str,
+    *,
+    engine: str | None = None,
+    model: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        UPDATE media_transcription_state
+        SET status='done',
+            engine=COALESCE(?, engine),
+            model=COALESCE(?, model),
+            last_error='', next_retry_at=0,
+            finished_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+        WHERE media_id=? AND fingerprint=?
+        """,
+        (engine, model, media_id, fingerprint),
+    )
+
+
 def transcription_candidates(root: Path, limit: int | None = None) -> list:
     query = """
-        SELECT m.id, m.path, m.filename, tr.text AS transcript_text, tr.segments_json, tr.source AS transcript_source
+        SELECT
+            m.id, m.path, m.filename, m.size_bytes, m.mtime, m.sha256,
+            tr.text AS transcript_text, tr.segments_json, tr.source AS transcript_source,
+            ts.fingerprint AS state_fingerprint, ts.status AS transcription_status,
+            ts.next_retry_at
         FROM media_items m
         LEFT JOIN media_transcripts tr ON tr.media_id=m.id
+        LEFT JOIN media_transcription_state ts ON ts.media_id=m.id
         WHERE m.media_type='video' AND m.root=?
         ORDER BY m.mtime DESC
     """
     with connect() as conn:
         candidates = conn.execute(query, (str(root),)).fetchall()
-    rows = [
-        row
-        for row in candidates
-        if row["segments_json"] is None
-        or transcript_needs_timed_rerun(row["segments_json"], row["transcript_text"], row["transcript_source"])
-    ]
+    now = int(time.time())
+    rows = []
+    for candidate in candidates:
+        row = dict(candidate)
+        fingerprint = transcription_fingerprint(row)
+        same_attempt = str(row.get("state_fingerprint") or "") == fingerprint
+        status = str(row.get("transcription_status") or "")
+        has_usable_transcript = candidate["segments_json"] is not None and not transcript_needs_timed_rerun(
+            candidate["segments_json"],
+            candidate["transcript_text"],
+            candidate["transcript_source"],
+        )
+        # Preserve valid pre-v1.5 transcripts that have no state row. Once a
+        # transcript is managed by v1.5, media/config changes invalidate the
+        # successful fingerprint and make it eligible for regeneration.
+        if has_usable_transcript and not row.get("state_fingerprint"):
+            continue
+        if has_usable_transcript and same_attempt and status == "done":
+            continue
+        if same_attempt and status == "permanent_failure":
+            continue
+        if same_attempt and status == "retry" and int(row.get("next_retry_at") or 0) > now:
+            continue
+        row["transcription_fingerprint"] = fingerprint
+        rows.append(row)
     if limit is not None:
         rows = rows[:max(0, int(limit))]
     return rows
@@ -3743,10 +4104,36 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "med
         load_error = ensure_whisper_model(prefer_stable)
         if load_error is not None:
             if transcript_engine != "auto":
+                error_text = (
+                    "The selected Whisper subtitle engine is unavailable in this image: "
+                    f"{load_error!r}"
+                )
+                failure_rows = []
+                with connect() as conn:
+                    for row in rows:
+                        media_id = int(row["id"])
+                        fingerprint = str(row["transcription_fingerprint"])
+                        record_transcription_started(
+                            conn,
+                            media_id,
+                            fingerprint,
+                            transcript_engine,
+                            model_name,
+                        )
+                        record_transcription_failure(
+                            conn,
+                            media_id,
+                            fingerprint,
+                            error_text,
+                        )
+                        failure_rows.append({"id": media_id, "error": error_text})
                 return {
                     "ok": False,
                     "error": "The selected Whisper subtitle engine is unavailable in this image.",
                     "detail": repr(load_error),
+                    "processed": 0,
+                    "failed": len(failure_rows),
+                    "errors": failure_rows[:20],
                 }
     processed = 0
     segment_count = 0
@@ -3755,18 +4142,38 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "med
     with TemporaryDirectory(prefix="tgmm_audio_") as tmpdir:
         tmp_root = Path(tmpdir)
         with connect() as conn:
+            def fail_row(row: object, error: object, *, permanent: bool = False) -> None:
+                media_id = int(row["id"])  # type: ignore[index]
+                fingerprint = str(row["transcription_fingerprint"])  # type: ignore[index]
+                record_transcription_failure(conn, media_id, fingerprint, error, permanent=permanent)
+                conn.commit()
+                errors.append({"id": media_id, "error": str(error)})
+
             for index, row in enumerate(rows, start=1):
                 cancel_file = os.environ.get("TGMM_CANCEL_FILE", "")
                 if cancel_file and Path(cancel_file).exists():
                     return {"ok": False, "processed": processed, "segments": segment_count, "cancelled": True, "errors": errors[:20]}
                 path = Path(row["path"])
+                media_id = int(row["id"])
+                fingerprint = str(row["transcription_fingerprint"])
+                record_transcription_started(conn, media_id, fingerprint, transcript_engine, model_name)
+                conn.commit()
                 if not path.exists():
-                    errors.append({"id": row["id"], "error": "media file missing"})
+                    fail_row(row, "media file missing", permanent=True)
                     continue
                 wav = tmp_root / f"{row['id']}.wav"
-                ok, audio_error = extract_audio_wav(path, wav)
+                try:
+                    ok, audio_error = extract_audio_wav(path, wav)
+                except Exception as exc:
+                    fail_row(row, repr(exc))
+                    continue
                 if not ok:
-                    errors.append({"id": row["id"], "error": audio_error})
+                    normalized_audio_error = str(audio_error or "").lower()
+                    permanent_audio_error = any(
+                        marker in normalized_audio_error
+                        for marker in ("does not contain any stream", "stream map", "invalid data found", "no audio")
+                    )
+                    fail_row(row, audio_error, permanent=permanent_audio_error)
                     continue
                 audio_offset = audio_stream_start_offset(path)
                 try:
@@ -3775,7 +4182,7 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "med
                         result = transcribe_with_funasr_nano_onnx(wav)
                         if result and not result.get("ok"):
                             if transcript_engine != "auto":
-                                errors.append({"id": row["id"], "error": result.get("error", "funasr-nano failed")})
+                                fail_row(row, result.get("error", "funasr-nano failed"))
                                 continue
                             warnings.append({"id": row["id"], "warning": "funasr-nano fallback", "detail": result.get("error", "funasr-nano failed")})
                             result = None
@@ -3783,7 +4190,7 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "med
                         result = transcribe_with_sensevoice_gguf(wav)
                         if result and not result.get("ok"):
                             if transcript_engine != "auto":
-                                errors.append({"id": row["id"], "error": result.get("error", "sensevoice failed")})
+                                fail_row(row, result.get("error", "sensevoice failed"))
                                 continue
                             warnings.append({"id": row["id"], "warning": "sensevoice fallback", "detail": result.get("error", "sensevoice failed")})
                             result = None
@@ -3791,9 +4198,9 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "med
                         if transcript_engine == "auto" and model is None:
                             load_error = ensure_whisper_model(configured_bool("WHISPER_STABLE_TIMESTAMPS", True))
                             if load_error is not None:
-                                errors.append({"id": row["id"], "error": f"fallback faster-whisper unavailable: {load_error!r}"})
+                                warnings.append({"id": row["id"], "warning": "fallback faster-whisper unavailable", "detail": repr(load_error)})
                         if model is None:
-                            errors.append({"id": row["id"], "error": "no ASR engine available"})
+                            fail_row(row, "no ASR engine available")
                             continue
                         result = transcribe_with_faster_whisper(
                             wav,
@@ -3819,32 +4226,78 @@ def transcribe_videos(root: Path, limit: int | None = 12, model_size: str = "med
                                 result = timed_result
                             else:
                                 warnings.append({"id": row["id"], "warning": "ASR returned transcript without usable timestamps"})
-                    save_transcript(conn, int(row["id"]), result, result.get("model") or os.environ.get("SENSEVOICE_GGUF_MODEL", "SenseVoiceSmall.gguf"), include_text_tags=audio_tag_mode != "off")
-                    if result.get("engine") != "sensevoice-gguf" and audio_tag_mode in {"sensevoice-sample", "sensevoice-full"} and sensevoice_available:
-                        tag_wav = wav
-                        if audio_tag_mode == "sensevoice-sample" and audio_tag_sample_seconds > 0:
-                            tag_wav = tmp_root / f"{row['id']}.tags.wav"
-                            tag_ok, tag_audio_error = extract_audio_wav(path, tag_wav, audio_tag_sample_seconds)
-                            if not tag_ok:
-                                warnings.append({"id": row["id"], "warning": "audio tag sample failed", "detail": tag_audio_error})
-                                tag_wav = None
-                        if tag_wav is not None:
-                            tag_result = transcribe_with_sensevoice_gguf(tag_wav)
-                            if tag_result and tag_result.get("ok"):
-                                tags_inserted = save_audio_tags(conn, int(row["id"]), str(tag_result.get("tag_text") or tag_result.get("text") or ""), str(tag_result.get("language") or result.get("language") or ""), "sensevoice-audio", replace=True)
-                                conn.execute(
-                                    "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'audio_tag', ?)",
-                                    (int(row["id"]), f"engine=sensevoice-gguf mode={audio_tag_mode} tags={tags_inserted}"),
-                                )
-                            elif tag_result:
-                                warnings.append({"id": row["id"], "warning": "sensevoice audio tag failed", "detail": tag_result.get("error", "")})
+                    actual_engine = str(result.get("engine") or transcript_engine)
+                    actual_model = str(
+                        result.get("model")
+                        or os.environ.get("SENSEVOICE_GGUF_MODEL", "SenseVoiceSmall.gguf")
+                    )
+                    save_transcript(
+                        conn,
+                        int(row["id"]),
+                        result,
+                        actual_model,
+                        include_text_tags=audio_tag_mode != "off",
+                    )
+                    has_text_without_timing = bool(
+                        str(result.get("text") or "").strip()
+                        and not timed_transcript_segments(result.get("segments") or [])
+                        and generate_timed_subtitles
+                    )
+                    if has_text_without_timing:
+                        timing_error = "transcript has text but no usable timestamps"
+                        conn.execute(
+                            """
+                            UPDATE media_transcription_state
+                            SET engine=?, model=?
+                            WHERE media_id=? AND fingerprint=?
+                            """,
+                            (actual_engine, actual_model, media_id, fingerprint),
+                        )
+                        record_transcription_failure(
+                            conn,
+                            media_id,
+                            fingerprint,
+                            timing_error,
+                        )
+                        errors.append({"id": media_id, "error": timing_error})
+                    else:
+                        record_transcription_succeeded(
+                            conn,
+                            media_id,
+                            fingerprint,
+                            engine=actual_engine,
+                            model=actual_model,
+                        )
                     conn.commit()
+                    if result.get("engine") != "sensevoice-gguf" and audio_tag_mode in {"sensevoice-sample", "sensevoice-full"} and sensevoice_available:
+                        try:
+                            tag_wav = wav
+                            if audio_tag_mode == "sensevoice-sample" and audio_tag_sample_seconds > 0:
+                                tag_wav = tmp_root / f"{row['id']}.tags.wav"
+                                tag_ok, tag_audio_error = extract_audio_wav(path, tag_wav, audio_tag_sample_seconds)
+                                if not tag_ok:
+                                    warnings.append({"id": row["id"], "warning": "audio tag sample failed", "detail": tag_audio_error})
+                                    tag_wav = None
+                            if tag_wav is not None:
+                                tag_result = transcribe_with_sensevoice_gguf(tag_wav)
+                                if tag_result and tag_result.get("ok"):
+                                    tags_inserted = save_audio_tags(conn, int(row["id"]), str(tag_result.get("tag_text") or tag_result.get("text") or ""), str(tag_result.get("language") or result.get("language") or ""), "sensevoice-audio", replace=True)
+                                    conn.execute(
+                                        "INSERT INTO media_operations (media_id, operation, detail) VALUES (?, 'audio_tag', ?)",
+                                        (int(row["id"]), f"engine=sensevoice-gguf mode={audio_tag_mode} tags={tags_inserted}"),
+                                    )
+                                    conn.commit()
+                                elif tag_result:
+                                    warnings.append({"id": row["id"], "warning": "sensevoice audio tag failed", "detail": tag_result.get("error", "")})
+                        except Exception as tag_exc:
+                            conn.rollback()
+                            warnings.append({"id": row["id"], "warning": "audio tag post-processing failed", "detail": repr(tag_exc)})
                     processed += 1
                     segment_count += len(result.get("segments") or [])
                     if timed_transcript_segments(result.get("segments") or []):
                         timed_count += 1
                 except Exception as exc:
-                    errors.append({"id": row["id"], "error": repr(exc)})
+                    fail_row(row, repr(exc))
                 print(
                     "TGMM_PROGRESS "
                     + json.dumps(

@@ -12,10 +12,17 @@ ARG APP_VERSION=dev
 ARG APP_SEMVER=1.0.0
 ARG APP_IMAGE=tg-media-manager
 ARG APP_BUILT_AT=
+ARG APP_SOURCE=https://github.com/BSakura-Miku/tg-media-manager
 ENV APP_VERSION=$APP_VERSION
 ENV APP_SEMVER=$APP_SEMVER
 ENV APP_IMAGE=$APP_IMAGE
 ENV APP_BUILT_AT=$APP_BUILT_AT
+LABEL org.opencontainers.image.title="TG Media Manager" \
+      org.opencontainers.image.source=$APP_SOURCE \
+      org.opencontainers.image.version=$APP_SEMVER \
+      org.opencontainers.image.revision=$APP_VERSION \
+      org.opencontainers.image.created=$APP_BUILT_AT \
+      org.opencontainers.image.ref.name=$APP_IMAGE
 WORKDIR /app
 
 RUN apt-get update \
